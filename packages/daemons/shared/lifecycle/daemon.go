@@ -141,6 +141,7 @@ func (d *DaemonBase) Run(ctx context.Context) error {
 		}
 		if restart, ok := err.(*RestartRequestedError); ok {
 			d.logger.Info(restart.Message, "action", "restarting")
+			exitingForUpdate.Store(true)
 			d.PrepareShutdown()
 			return restart
 		}
@@ -441,6 +442,16 @@ func (d *DaemonBase) saveCertificates(caCert, clientCert, clientKey []byte) erro
 func (d *DaemonBase) GetState() *state.State {
 	return d.state
 }
+
+// exitingForUpdate is set once the daemon exits to hand over to its staged
+// update: the launcher starts the next process at once.
+var exitingForUpdate atomic.Bool
+
+// ExitingForUpdate reports a daemon that exits to hand over to its staged
+// update, as opposed to a stop or a restart of its unit: only then does the
+// launcher start the next process at once, so a plugin may hand its live
+// connections over (shared/handover).
+func ExitingForUpdate() bool { return exitingForUpdate.Load() }
 
 // PrepareShutdown lets the plugin announce the restart to its peers while
 // the daemon still reaches them (RestartAnnouncerPlugin). Call it before

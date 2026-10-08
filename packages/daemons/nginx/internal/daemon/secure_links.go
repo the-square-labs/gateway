@@ -1384,6 +1384,7 @@ func (p *NginxPlugin) openProxySecureLinkOnTunnel(ownerKind, linkID string, conn
 	if p.relayStreams != nil {
 		defer p.relayStreams.TrackLegacy(tunnel.targetID)()
 	}
+	defer p.liveCuts.track(rawStreamClass(ownerKind))()
 	_ = relaybridge.BridgeWithChunk(ctx, connection, stream, maxFrame, readChunk, cancel)
 	return secureLinkOpened, nil
 }

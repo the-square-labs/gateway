@@ -42,6 +42,17 @@ func (c *linkConnectionCounts) acquire(link linkKey, limit int) bool {
 	return true
 }
 
+// force takes one of the link's connections whatever its limit: a connection a
+// handover brought along was admitted already.
+func (c *linkConnectionCounts) force(link linkKey) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.active == nil {
+		c.active = map[linkKey]int{}
+	}
+	c.active[link]++
+}
+
 func (c *linkConnectionCounts) release(link linkKey) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

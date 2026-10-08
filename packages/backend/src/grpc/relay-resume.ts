@@ -859,6 +859,8 @@ export class ResumeSession {
     this.sendStopped = false;
     this.retransmit(path);
     this.processRecords(path, rest);
+    // The source's window counts from what reached this side's socket (as relayresume does): tell it at once.
+    this.maybeAck(true, true);
   }
 
   /** Target: asks the source to move (its relay is draining or got GOAWAY). */
@@ -972,7 +974,8 @@ export class ResumeSession {
     this.sendCloseIfDue();
     pending.settle('resumed');
     this.processRecords(path, rest);
-    this.maybeAck(true);
+    // The target's window counts from what reached this side's socket (as relayresume does): tell it at once.
+    this.maybeAck(true, true);
   }
 
   // -- Local side ------------------------------------------------------------------------------------------------
@@ -1359,12 +1362,13 @@ export class ResumeSession {
     return EMPTY;
   }
 
-  private maybeAck(immediate = false): void {
+  /** announce: send the ack even when nothing was delivered since the last one (after a resume). */
+  private maybeAck(immediate = false, announce = false): void {
     const path = this.current;
     if (!path?.alive || this.sendStopped || path.blocked) return;
     if (this.state !== 'open' && this.state !== 'closing') return;
     const unacked = this.delivered - this.lastAckSent;
-    if (unacked <= 0) return;
+    if (unacked <= 0 && !announce) return;
     if (immediate || unacked >= Math.max(1, Math.floor(this.peerWindow / 4))) {
       this.sendAck(path);
       return;

@@ -97,6 +97,11 @@ type trackedConn struct {
 	pending []byte
 	// established releases the connection's setup slot (secureLinkEstablished).
 	established func()
+	// resumable: the connection runs over a resumable stream, which an update
+	// hands to the next process; handedOver: the next process carries it, so
+	// nothing here ends it (live_handover.go).
+	resumable  atomic.Bool
+	handedOver atomic.Bool
 }
 
 func newTrackedConn(connection net.Conn) net.Conn {
@@ -133,8 +138,12 @@ func (c *trackedConn) CloseWrite() error {
 }
 
 // end ends the connection for its peer at once, without waiting for the
-// goroutines serving it: they see it end and close it.
+// goroutines serving it: they see it end and close it. A connection the next
+// process carries is not this one's to end.
 func (c *trackedConn) end() {
+	if c.handedOver.Load() {
+		return
+	}
 	if connection, ok := c.Conn.(interface {
 		CloseRead() error
 		CloseWrite() error
@@ -230,8 +239,9 @@ const (
 
 // drainForHandover waits, up to limit, for the requests this process is
 // serving, and ends the connections that answered and carried no byte for
-// quiet as ends tells.
-func (m *sourceLinkManager) drainForHandover(limit, quiet time.Duration, ends drainEnds) {
+// quiet as ends tells. The connections skip selects are neither waited for
+// nor ended (an update hands them over).
+func (m *sourceLinkManager) drainForHandover(limit, quiet time.Duration, ends drainEnds, skip func(*trackedConn) bool) {
 	if m == nil {
 		return
 	}
@@ -254,7 +264,7 @@ func (m *sourceLinkManager) drainForHandover(limit, quiet time.Duration, ends dr
 					waiting++
 					continue
 				}
-				if tracked.ended.Load() {
+				if tracked.ended.Load() || (skip != nil && skip(tracked)) {
 					continue
 				}
 				if !tracked.idle(now, quiet) {
@@ -325,16 +335,20 @@ func (p *NginxPlugin) HandOverSecureLinks() {
 			return
 		}
 		started := time.Now()
-		drain := func(limit, quiet time.Duration, ends drainEnds) {
+		// An update hands the resumable streams to the next process (live_handover.go): the drain neither waits
+		// for them nor ends them.
+		handingOver := exitingForUpdate() && handoverKeeper.HandsOver()
+		resumable := func(connection *trackedConn) bool { return handingOver && connection.resumable.Load() }
+		drain := func(limit, quiet time.Duration, ends drainEnds, skip func(*trackedConn) bool) {
 			done := make(chan struct{})
 			go func() {
-				p.registryLinks.drainForHandover(limit, quiet, ends)
+				p.registryLinks.drainForHandover(limit, quiet, ends, skip)
 				close(done)
 			}()
-			p.secureLinks.drainForHandover(limit, quiet, ends)
+			p.secureLinks.drainForHandover(limit, quiet, ends, skip)
 			<-done
 		}
-		drain(secureLinkHandoverDrain, secureLinkIdleQuiet, endNone)
+		drain(secureLinkHandoverDrain, secureLinkIdleQuiet, endNone, resumable)
 		// The connections that have not reached their target yet get it once
 		// it is back (its daemon registers again within a few seconds of a
 		// restart) or the relay answered, and are answered by this process;
@@ -346,12 +360,14 @@ func (p *NginxPlugin) HandOverSecureLinks() {
 		if p.logger != nil {
 			p.logger.Info("handing Secure Link sockets over to the next daemon process", "sockets", handed)
 		}
-		drain(secureLinkHandoverFinish, secureLinkFinishQuiet, endOldest)
+		result := p.handOverConnections()
+		drain(secureLinkHandoverFinish, secureLinkFinishQuiet, endOldest, nil)
 		// The exit cuts what is still open. The connections that answered are
 		// closed a tick before it, so nginx drops them from its keep-alive pool
 		// and the retries of the requests the exit cuts open new connections,
 		// which wait for the next process.
-		drain(secureLinkDrainTick, 0, endAll)
+		drain(secureLinkDrainTick, 0, endAll, nil)
+		p.recordUpdateConnections(started, result)
 	})
 }
 

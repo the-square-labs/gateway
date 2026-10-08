@@ -35,6 +35,10 @@ type TargetTable struct {
 	lastSweep time.Time
 
 	refused atomic.Uint64
+	// handedOver: this process handed its streams to the next one (live
+	// handover); a RESUME that reaches it is dropped without an answer, so
+	// the source tries again and finds the next process.
+	handedOver atomic.Bool
 
 	// OnEnd observes target sessions that ended (optional, no locks held).
 	OnEnd func(key TargetKey, s *Session, err error)
@@ -152,6 +156,14 @@ func (t *TargetTable) Accept(op OpenedPath, req AcceptRequest) *Accepted {
 		if len(rest) != 0 {
 			return legacy
 		}
+		if t.handedOver.Load() {
+			// Neither unknown nor refused: the stream lives on in the next
+			// process. A dropped tunnel is a failed attempt for the source.
+			if op.Cancel != nil {
+				op.Cancel()
+			}
+			return &Accepted{Kind: AcceptRefused, PathDone: closedChan()}
+		}
 		return t.resume(op, req, &record)
 	}
 	return legacy
@@ -213,14 +225,8 @@ func (a *Accepted) EstablishTagged(tag any) (*Session, error) {
 		path, &a.hello, a.hello.KeyID, a.req.Keys(a.hello.KeyID), a.rest, time.Now())
 	s := newSession(core, a.req.RouteID, a.op.MaxFrame)
 	s.tag = tag
-	t.sessions[key] = s
+	t.registerLocked(key, s)
 	t.mu.Unlock()
-	s.onChange = func(s *Session) {
-		if s.core.State().Terminal() && s.onChange != nil {
-			s.onChange = nil
-			go t.ended(key, s)
-		}
-	}
 	s.mu.Lock()
 	run := s.attach(path, a.op)
 	s.afterLocked(false)
@@ -228,6 +234,137 @@ func (a *Accepted) EstablishTagged(tag any) (*Session, error) {
 	a.Session = s
 	a.PathDone = run.done
 	return s, nil
+}
+
+// registerLocked adds s under key (t.mu held) and watches it end.
+func (t *TargetTable) registerLocked(key TargetKey, s *Session) {
+	s.table, s.tableKey = t, key
+	t.sessions[key] = s
+	s.onChange = func(s *Session) {
+		if s.core.State().Terminal() && s.onChange != nil {
+			s.onChange = nil
+			go t.ended(key, s)
+		}
+	}
+}
+
+// Restore takes over a target stream another process handed over
+// (SessionState of RoleTarget): suspended, it waits for its source's RESUME
+// until TargetSuspendTimeout after its freeze, as after a path failure. Its
+// RESUME is checked with the keys and the authorization of the tunnel it
+// arrives on. tag is the caller's, as for EstablishTagged.
+func (t *TargetTable) Restore(st *SessionState, tag any) (*Session, error) {
+	if st.Role != RoleTarget {
+		return nil, errors.New("relayresume: not a target stream")
+	}
+	core, err := restoreCore(Config{Budget: t.budget}, st, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	key := TargetKey{RouteID: st.RouteID, SourceKind: st.SourceKind, SourceID: st.SourceID, SessionID: st.SessionID}
+	t.mu.Lock()
+	if _, exists := t.sessions[key]; exists {
+		t.mu.Unlock()
+		core.closeAll()
+		return nil, errors.New("relayresume: duplicate session")
+	}
+	s := newSession(core, st.RouteID, st.MaxFrame)
+	s.tag = tag
+	s.partial = append([]byte(nil), st.Unwritten...)
+	s.restoredFrozenAt = core.suspendDeadline.Add(-TargetSuspendTimeout)
+	t.registerLocked(key, s)
+	t.mu.Unlock()
+	s.mu.Lock()
+	s.afterLocked(false)
+	s.mu.Unlock()
+	return s, nil
+}
+
+// Refuse answers a later RESUME of a handed over stream this process does not
+// take over (its route was revoked meanwhile: RejectUnauthorized) as if the
+// stream had ended here, so its source stops at once instead of retrying.
+func (t *TargetTable) Refuse(st *SessionState, reject byte) {
+	if st.Role != RoleTarget {
+		return
+	}
+	key := TargetKey{RouteID: st.RouteID, SourceKind: st.SourceKind, SourceID: st.SourceID, SessionID: st.SessionID}
+	t.mu.Lock()
+	t.tombs[key] = tombstone{reject: reject, expires: time.Now().Add(TombstoneTTL)}
+	t.mu.Unlock()
+}
+
+// Tombstone is how a stream that ended answers a later RESUME, for the next
+// process: a source whose CLOSE echo was lost with the handover learns there
+// that its stream finished, not that it is unknown.
+type Tombstone struct {
+	Key     TargetKey
+	Reject  byte
+	Expires time.Time
+}
+
+// HandoverTombstones lists the table's tombstones, with the streams that
+// ended and are not buried yet.
+func (t *TargetTable) HandoverTombstones() []Tombstone {
+	t.mu.Lock()
+	now := time.Now()
+	var tombs []Tombstone
+	for key, tomb := range t.tombs {
+		if now.Before(tomb.expires) {
+			tombs = append(tombs, Tombstone{Key: key, Reject: tomb.reject, Expires: tomb.expires})
+		}
+	}
+	sessions := make(map[TargetKey]*Session, len(t.sessions))
+	for key, s := range t.sessions {
+		sessions[key] = s
+	}
+	t.mu.Unlock()
+	for key, s := range sessions {
+		s.mu.Lock()
+		state, err := s.core.State(), s.core.Err()
+		s.mu.Unlock()
+		if !state.Terminal() {
+			continue
+		}
+		reject := RejectReset
+		switch {
+		case state == StateFinished:
+			reject = RejectFinished
+		case errors.Is(err, ErrRevoked):
+			reject = RejectUnauthorized
+		}
+		tombs = append(tombs, Tombstone{Key: key, Reject: reject, Expires: now.Add(TombstoneTTL)})
+	}
+	return tombs
+}
+
+// RestoreTombstones takes over the tombstones the previous process handed over.
+func (t *TargetTable) RestoreTombstones(tombs []Tombstone) {
+	now := time.Now()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, tomb := range tombs {
+		if _, live := t.sessions[tomb.Key]; live || !now.Before(tomb.Expires) || tomb.Reject == 0 {
+			continue
+		}
+		expires := tomb.Expires
+		if limit := now.Add(TombstoneTTL); expires.After(limit) {
+			expires = limit
+		}
+		t.tombs[tomb.Key] = tombstone{reject: tomb.Reject, expires: expires}
+	}
+}
+
+// HandOver marks the table's streams as handed to the next process: from now
+// on a RESUME reaching this one is dropped without an answer.
+func (t *TargetTable) HandOver() { t.handedOver.Store(true) }
+
+// forget drops a stream another process took over, without a tombstone.
+func (t *TargetTable) forget(key TargetKey, s *Session) {
+	t.mu.Lock()
+	if t.sessions[key] == s {
+		delete(t.sessions, key)
+	}
+	t.mu.Unlock()
 }
 
 func (t *TargetTable) ended(key TargetKey, s *Session) {

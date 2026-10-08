@@ -126,7 +126,7 @@ func newListenerHarness(t *testing.T) *listenerHarness {
 			return mobyclient.ContainerInspectResult{Container: container.InspectResponse{ID: id, Name: h.peerName,
 				Config: &container.Config{Labels: h.peerLabels}}}, nil
 		},
-		openBinding: func(_ net.Conn, bindingID string, generation uint64) {
+		openBinding: func(_ net.Conn, bindingID string, generation uint64, _ listenerPeer, _ bool) {
 			h.mu.Lock()
 			h.opened = append(h.opened, openedBinding{bindingID: bindingID, generation: generation})
 			h.mu.Unlock()

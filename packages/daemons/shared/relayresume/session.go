@@ -73,7 +73,7 @@ type Session struct {
 	recvFrame                      *relayv1.TunnelFrame
 	recvData                       *relayv1.TunnelData
 	bgTimer                        *time.Timer
-	lastUna                        uint64
+	lastBase                       uint64
 	lastState                      State
 	lastPending                    *Path
 	lastCur                        *Path
@@ -84,8 +84,9 @@ type Session struct {
 
 	// The largest Data payload Recv hands out (the first path's frame size,
 	// which the bridges were given).
-	recvMax int
-	partial []byte
+	recvMax   int
+	frameSize int
+	partial   []byte
 
 	done     chan struct{}
 	doneOnce sync.Once
@@ -93,9 +94,21 @@ type Session struct {
 	// Source side.
 	source   *sourceState
 	onChange func(*Session) // the target table watches its sessions
+	// Target side: the table and key the session is registered under.
+	table    *TargetTable
+	tableKey TargetKey
 
 	routeID string
 	tag     any
+
+	// Live handover (state.go). frozen: the bridge stops at a safe point (Recv
+	// hands out nothing, Write takes everything). detached: another process
+	// took the stream over. restoredFrozenAt: this process took it over; its
+	// pause ended at resumedAt.
+	frozen           bool
+	detached         bool
+	restoredFrozenAt time.Time
+	resumedAt        time.Time
 }
 
 func newSession(core *Core, routeID string, recvMax int) *Session {
@@ -104,7 +117,7 @@ func newSession(core *Core, routeID string, recvMax int) *Session {
 	}
 	// The bridges read and receive at most MaxFrame bytes: one read is one
 	// DATA frame on a path with the first path's frame size.
-	s := &Session{core: core, paths: map[*Path]*pathRun{}, done: make(chan struct{}), routeID: routeID, recvMax: ReadChunk(recvMax)}
+	s := &Session{core: core, paths: map[*Path]*pathRun{}, done: make(chan struct{}), routeID: routeID, recvMax: ReadChunk(recvMax), frameSize: recvMax}
 	s.readCond, s.writeCond, s.stateCond, s.bgCond = sync.NewCond(&s.mu), sync.NewCond(&s.mu), sync.NewCond(&s.mu), sync.NewCond(&s.mu)
 	// Until a bridge calls Recv the background reader reads (the handshake
 	// answer must be read even if nobody receives yet).
@@ -167,7 +180,7 @@ func (s *Session) backgroundMayRead(run *pathRun) bool {
 
 // handleFrameLocked processes what a path read returned (mu held).
 func (s *Session) handleFrameLocked(run *pathRun, frame *relayv1.TunnelFrame, err error) {
-	if run.path.Closed() {
+	if run.path.Closed() || s.detached {
 		s.bgCond.Broadcast()
 		return
 	}
@@ -262,6 +275,18 @@ func terminalPathError(err error) bool {
 // waiters. async: the caller is a reader, which must not block on sends.
 // Called with mu held; it may release and retake mu.
 func (s *Session) afterLocked(async bool) {
+	if s.detached {
+		// Another process carries the stream: nothing leaves this one.
+		for _, out := range s.core.TakeOutputs() {
+			if out.Pooled {
+				ReleaseFrame(out.Frame)
+			}
+		}
+		return
+	}
+	if !s.restoredFrozenAt.IsZero() && s.resumedAt.IsZero() && s.core.State() == StateOpen {
+		s.resumedAt = time.Now()
+	}
 	var kick []*pathRun
 	for _, out := range s.core.TakeOutputs() {
 		run := s.paths[out.Path]
@@ -428,10 +453,10 @@ func (s *Session) wakeLocked() {
 	if s.readers > 0 && (terminal || s.core.Readable() || len(s.partial) > 0) {
 		s.readCond.Signal()
 	}
-	if una, _, _, _ := s.core.Offsets(); s.writers > 0 && (terminal || una != s.lastUna) {
+	if base := s.core.WindowBase(); s.writers > 0 && (terminal || base != s.lastBase) {
 		s.writeCond.Signal()
 	}
-	s.lastUna, _, _, _ = s.core.Offsets()
+	s.lastBase = s.core.WindowBase()
 	if cur := s.core.Current(); cur != s.lastCur {
 		s.lastCur = cur
 		if s.readers > 0 {
@@ -467,6 +492,10 @@ func (s *Session) armLocked() {
 
 func (s *Session) tick() {
 	s.mu.Lock()
+	if s.detached {
+		s.mu.Unlock()
+		return
+	}
 	s.armedAt = time.Time{}
 	s.core.Tick(time.Now())
 	s.afterLocked(false)
@@ -507,10 +536,20 @@ func (s *Session) Write(p []byte) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for !s.core.CanWrite(len(p)) {
+	for !s.frozen && !s.detached && !s.core.CanWrite(len(p)) {
 		s.writers++
 		s.writeCond.Wait()
 		s.writers--
+	}
+	if s.detached {
+		return ErrHandedOver
+	}
+	if s.frozen {
+		// The bridge is stopping for a handover: what it read goes into the
+		// stream at once, and the frames leave on their own.
+		err := s.core.writeFrozen(p, time.Now())
+		s.afterLocked(true)
+		return err
 	}
 	ok, err := s.core.Write(p, time.Now())
 	if err != nil {
@@ -527,8 +566,11 @@ func (s *Session) Write(p []byte) error {
 func (s *Session) CloseWrite() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.detached {
+		return ErrHandedOver
+	}
 	err := s.core.CloseWrite(time.Now())
-	s.afterLocked(false)
+	s.afterLocked(s.frozen)
 	return err
 }
 
@@ -547,6 +589,14 @@ func (s *Session) Recv() (*relayv1.TunnelFrame, error) {
 
 func (s *Session) recvLocked() (*relayv1.TunnelFrame, bool, error) {
 	for {
+		switch {
+		case s.detached:
+			return nil, true, ErrHandedOver
+		case s.frozen:
+			// Nothing more reaches the local socket until the stream thaws or
+			// another process takes it over.
+			return nil, false, ErrFrozen
+		}
 		if len(s.partial) > 0 {
 			return s.dataFrame(), false, nil
 		}
@@ -606,16 +656,16 @@ func (s *Session) WaitFinished() {
 
 // Abort resets the stream: the peer closes its socket hard.
 func (s *Session) Abort(code byte, reason string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.core.Abort(code, reason, nil)
-	s.afterLocked(false)
+	s.abortWith(code, reason, nil)
 }
 
 // abortWith resets the stream with a cause.
 func (s *Session) abortWith(code byte, reason string, cause error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.detached {
+		return
+	}
 	s.core.Abort(code, reason, cause)
 	s.afterLocked(false)
 }
@@ -724,4 +774,186 @@ func ReadChunk(chunk int) int {
 		return chunk
 	}
 	return chunk - MaxRecordHeader
+}
+
+// ErrFrozen is what Recv answers while the stream is frozen for a handover.
+var ErrFrozen = errors.New("relayresume: stream is frozen for a handover")
+
+// Freeze stops the stream at the local socket for a handover: Recv hands out
+// nothing more (ErrFrozen) and Write takes whatever the bridge read, whatever
+// the window. The paths keep running: acks and data from the peer still
+// arrive. Thaw undoes it; Detach ends it once another process took the
+// stream over.
+func (s *Session) Freeze() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.detached {
+		return
+	}
+	s.frozen = true
+	s.readCond.Broadcast()
+	s.writeCond.Broadcast()
+}
+
+// Thaw lets a frozen stream carry on in this process.
+func (s *Session) Thaw() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.detached || !s.frozen {
+		return
+	}
+	s.frozen = false
+	s.readCond.Broadcast()
+	s.writeCond.Broadcast()
+}
+
+// Unread gives back the bytes of the last Data frame Recv handed out that the
+// bridge did not write to the local socket: they go out first, here or in the
+// process the stream is handed to.
+func (s *Session) Unread(p []byte) {
+	if len(p) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.partial = append(append(make([]byte, 0, len(p)+len(s.partial)), p...), s.partial...)
+}
+
+// RecvBlocked reports a bridge waiting inside Recv for the stream's path: it
+// holds no byte, and a frozen stream hands it none.
+func (s *Session) RecvBlocked() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inRecv
+}
+
+// HandoverState reads a frozen stream out for another process. The bridge
+// must have stopped (no byte moves between the session and the local socket
+// any more). A stream still in its handshake, or one that ended, cannot be
+// handed over. frozenAt is when the stream stopped carrying data.
+func (s *Session) HandoverState(frozenAt time.Time) (*SessionState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state := s.core.State()
+	if s.detached || !s.frozen || state.Terminal() || state == StateHandshake {
+		return nil, ErrNotHandoverable
+	}
+	st := s.core.exportState()
+	st.MaxFrame = s.frameSize
+	st.Unwritten = append([]byte(nil), s.partial...)
+	st.SourceKind, st.SourceID = s.tableKey.SourceKind, s.tableKey.SourceID
+	st.FrozenAt = frozenAt
+	if !s.restoredFrozenAt.IsZero() && s.resumedAt.IsZero() {
+		// Taken over and not resumed yet: its pause started at the first freeze.
+		st.FrozenAt = s.restoredFrozenAt
+	}
+	return &st, nil
+}
+
+// Detach ends this process's part in a stream another process took over
+// (its HandoverState reached that process): the session lets its paths go
+// without a word to the peer, which sees them fail and resumes the stream
+// with the next process. From now on the session answers ErrHandedOver and
+// leaves its manager or table without a tombstone.
+func (s *Session) Detach() {
+	s.mu.Lock()
+	if s.detached {
+		s.mu.Unlock()
+		return
+	}
+	s.detached = true
+	if s.timer != nil {
+		s.timer.Stop()
+	}
+	if s.bgTimer != nil {
+		s.bgTimer.Stop()
+	}
+	for _, out := range s.core.TakeOutputs() {
+		if out.Pooled {
+			ReleaseFrame(out.Frame)
+		}
+	}
+	var cancels []func()
+	for path, run := range s.paths {
+		path.closed = true
+		for _, item := range run.queue {
+			if item.pooled {
+				ReleaseFrame(item.frame)
+			}
+		}
+		run.queue = nil
+		if run.closing {
+			continue // closeRun ends it
+		}
+		run.closing = true
+		if run.op.Cancel != nil {
+			cancels = append(cancels, run.op.Cancel)
+		}
+		go func(run *pathRun) {
+			<-run.reader
+			s.mu.Lock()
+			delete(s.paths, run.path)
+			s.mu.Unlock()
+			close(run.done)
+		}(run)
+	}
+	if s.core.reserved > 0 && s.core.cfg.Budget != nil {
+		s.core.cfg.Budget.release(s.core.reserved)
+		s.core.reserved = 0
+	}
+	s.readCond.Broadcast()
+	s.writeCond.Broadcast()
+	s.stateCond.Broadcast()
+	s.bgCond.Broadcast()
+	source, table, key := s.source, s.table, s.tableKey
+	s.mu.Unlock()
+	s.doneOnce.Do(func() { close(s.done) })
+	for _, cancel := range cancels {
+		cancel()
+	}
+	if source != nil {
+		source.mgr.forget(s)
+	}
+	if table != nil {
+		table.forget(key, s)
+	}
+}
+
+// Detached reports a stream another process took over.
+func (s *Session) Detached() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.detached
+}
+
+// HandoverPause reports, for a stream this process took over, how long it
+// stood still from its freeze in the previous process until it carried data
+// again (resumed), or that it ended first (ended). Both false: still waiting,
+// or not a stream taken over.
+func (s *Session) HandoverPause() (pause time.Duration, resumed, ended bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.restoredFrozenAt.IsZero() {
+		return 0, false, false
+	}
+	if !s.resumedAt.IsZero() {
+		return s.resumedAt.Sub(s.restoredFrozenAt), true, false
+	}
+	return 0, false, s.core.State().Terminal()
+}
+
+// FinQueued reports that the local socket's end of stream was passed on: the
+// bridge reads it no more.
+func (s *Session) FinQueued() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.core.finQueued
+}
+
+// FinDelivered reports that the peer's end of stream reached the bridge: it
+// writes the local socket no more.
+func (s *Session) FinDelivered() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.core.finDelivered
 }

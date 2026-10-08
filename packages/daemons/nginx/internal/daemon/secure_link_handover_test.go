@@ -320,7 +320,7 @@ func TestHandoverDrainClosesIdleConnectionsAndWaitsForRequests(t *testing.T) {
 	time.Sleep(2 * secureLinkIdleQuiet)
 
 	started := time.Now()
-	manager.drainForHandover(400*time.Millisecond, secureLinkIdleQuiet, endOldest)
+	manager.drainForHandover(400*time.Millisecond, secureLinkIdleQuiet, endOldest, nil)
 	if elapsed := time.Since(started); elapsed < 350*time.Millisecond {
 		t.Fatalf("drain returned after %s with a request unanswered", elapsed)
 	}
@@ -378,7 +378,7 @@ func TestHandoverFinishClosesAnsweredConnectionsBeforeTheExit(t *testing.T) {
 	keepalive := dial()
 	answered(keepalive)
 	started := time.Now()
-	manager.drainForHandover(secureLinkHandoverFinish, secureLinkFinishQuiet, endOldest)
+	manager.drainForHandover(secureLinkHandoverFinish, secureLinkFinishQuiet, endOldest, nil)
 	if elapsed := time.Since(started); elapsed >= secureLinkIdleQuiet {
 		t.Fatalf("the answered connection was closed after %s", elapsed)
 	}
@@ -391,7 +391,7 @@ func TestHandoverFinishClosesAnsweredConnectionsBeforeTheExit(t *testing.T) {
 	answered(waiting)
 	_, _ = waiting.Write([]byte("slow request"))
 	time.Sleep(10 * time.Millisecond)
-	manager.drainForHandover(secureLinkDrainTick, 0, endAll)
+	manager.drainForHandover(secureLinkDrainTick, 0, endAll, nil)
 	if !closed(justAnswered) {
 		t.Fatal("the last pass left an answered connection for the exit")
 	}
@@ -455,7 +455,7 @@ func TestHandoverDrainDoesNotWaitForConnectionsToClose(t *testing.T) {
 	drained := make(chan time.Duration, 1)
 	go func() {
 		started := time.Now()
-		manager.drainForHandover(secureLinkHandoverFinish, secureLinkFinishQuiet, endOldest)
+		manager.drainForHandover(secureLinkHandoverFinish, secureLinkFinishQuiet, endOldest, nil)
 		drained <- time.Since(started)
 	}()
 	select {
@@ -519,7 +519,7 @@ func TestHandoverFinishEndsOneAnsweredConnectionPerSocketAtATime(t *testing.T) {
 	}
 	for pass := range pooled {
 		// A limit of zero runs a single pass.
-		manager.drainForHandover(0, secureLinkFinishQuiet, endOldest)
+		manager.drainForHandover(0, secureLinkFinishQuiet, endOldest, nil)
 		for index, connection := range pooled[pass:] {
 			if got, want := ended(connection), index == 0; got != want {
 				t.Fatalf("pass %d: connection %d ended = %v, want %v", pass, pass+index, got, want)

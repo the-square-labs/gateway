@@ -9,6 +9,7 @@ import (
 	"time"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/handover"
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 	"github.com/wiolett-industries/gateway/daemon-shared/logepisode"
 	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
@@ -296,8 +297,20 @@ func (p *NginxPlugin) bridgeRelayStream(ownerKind, linkID string, connection net
 		p.logger.Debug("relay stream stays raw", "link_id", linkID, "error", err)
 		return false
 	}
-	// The stream outlives this lane: only the connection and the session end it.
-	_ = relaybridge.BridgeWithChunk(context.Background(), connection, session, session.MaxFrame(), relayresume.ReadChunk(readChunk), session.Cancel)
+	cutClass := ""
+	if ownerKind == registrySecureLinkOwnerKind {
+		// Its pull or push ends at a docker node's registry proxy, whose TLS
+		// session an update of that node cuts anyway: it stays here.
+		cutClass = cutRegistry
+	}
+	if tracked, ok := connection.(*trackedConn); ok && cutClass == "" {
+		tracked.resumable.Store(true)
+	}
+	// The stream outlives this lane: only the connection and the session end it, or an update hands both to the
+	// next process (live_handover.go).
+	_ = p.handover.Bridge(connection, session, handover.BridgeConfig{ReadChunk: relayresume.ReadChunk(readChunk),
+		Labels: handover.Labels{handoverOwnerKind: ownerKind, handoverLinkID: linkID}, CutClass: cutClass})
+	session.Cancel()
 	return true
 }
 

@@ -17,6 +17,7 @@ import (
 	sharedauth "github.com/wiolett-industries/gateway/daemon-shared/auth"
 	"github.com/wiolett-industries/gateway/daemon-shared/connector"
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/handover"
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 	"github.com/wiolett-industries/gateway/daemon-shared/listenerkeep"
 	"github.com/wiolett-industries/gateway/daemon-shared/logepisode"
@@ -76,6 +77,11 @@ type NginxPlugin struct {
 	relayStreamOutcomes logepisode.Tracker
 	// Ingress groups: the reserved health endpoint's responder (nil when it could not start).
 	ingressHealth *ingressHealthResponder
+	// handover carries the Secure Link connections an update hands to the next process (live_handover.go);
+	// handoverTracker settles what the last update did to them; liveCuts counts those an update cuts in any case.
+	handover        *handover.Registry
+	handoverTracker *handover.Tracker
+	liveCuts        liveCuts
 
 	// Session-scoped resources
 	sessionCancel              context.CancelFunc
@@ -142,7 +148,7 @@ func replaceFirstSecureLinkProxyPass(content []byte, linkID string, oldPort, new
 
 // NewNginxPlugin creates a new NginxPlugin with the given config.
 func NewNginxPlugin(cfg *config.Config) *NginxPlugin {
-	return &NginxPlugin{cfg: cfg}
+	return &NginxPlugin{cfg: cfg, handover: handover.NewRegistry()}
 }
 
 func (p *NginxPlugin) Type() string {
@@ -239,6 +245,9 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 	if released := listenerkeep.ReleaseUnclaimed(proxySecureLinkSocketDir + "/"); len(released) > 0 {
 		logger.Info("released kept Secure Link sockets without a binding", "sockets", len(released))
 	}
+	// The connections the previous process handed over go back under their bindings, before the relay lanes start
+	// (live_handover.go).
+	p.restoreHandover()
 	p.registryListenersRelease = time.AfterFunc(registryListenerAdoptionWindow, p.releaseUnclaimedRegistryListeners)
 	p.pagesRuntime, err = pages.New(p.cfg.Nginx.PagesRoot, p.cfg.Nginx.ConfigDir, p.cfg.Nginx.CertsDir, p.mgr)
 	if err != nil {
@@ -494,6 +503,9 @@ func (p *NginxPlugin) CollectHealth(base *pb.HealthReport) *pb.HealthReport {
 	if p.relayStreams != nil && report != nil {
 		report.RelayStreams = relayStreamStatsReport(p.relayStreams.Stats())
 	}
+	if report != nil {
+		report.UpdateConnections = p.updateConnections()
+	}
 	return report
 }
 
@@ -515,7 +527,7 @@ func (p *NginxPlugin) CollectStats() *pb.StatsReport {
 func (p *NginxPlugin) capabilities() []string {
 	capabilities := []string{"nginx_certificate_distribution_v2", "generic_relay_tunnel_v1", "relay_pool_v1", "proxy_secure_links_v1", "nginx_secure_link_socket_only_v1", "nginx_registry_ingress_v1"}
 	if p.relayStreams != nil {
-		capabilities = append(capabilities, relayresume.Capability)
+		capabilities = append(capabilities, relayresume.Capability, handover.Capability)
 	}
 	if p.maintenanceAccessSupported {
 		capabilities = append(capabilities, "proxy_maintenance_access_v1")

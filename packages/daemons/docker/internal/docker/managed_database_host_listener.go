@@ -93,7 +93,7 @@ type managedDatabaseHostListenerManager struct {
 	inspectNetwork   func(context.Context, string) (network.Inspect, error)
 	inspectContainer func(context.Context, string) (mobyclient.ContainerInspectResult, error)
 	events           func(context.Context, mobyclient.EventsListOptions) mobyclient.EventsResult
-	openBinding      func(net.Conn, string, uint64)
+	openBinding      func(net.Conn, string, uint64, listenerPeer, bool)
 	rejections       *linkRejectionLog
 	// peers names the container behind each address of the listeners' networks without asking dockerd for every
 	// connection (listenerPeers).
@@ -255,6 +255,7 @@ func (m *managedDatabaseHostListenerManager) reconcile(
 		m.listeners[bindingID] = listener
 		statuses[bindingID] = listenerStatus(config, "ready", nil)
 	}
+	m.adoptRestoredLocked()
 	m.persistBootSetLocked()
 	return statuses
 }
@@ -651,7 +652,7 @@ func (m *managedDatabaseHostListenerManager) handle(listener *managedDatabaseHos
 		return
 	}
 	if active {
-		m.openBinding(connection, current.bindingID, current.routeGeneration)
+		m.openBinding(connection, current.bindingID, current.routeGeneration, peer, true)
 	}
 }
 

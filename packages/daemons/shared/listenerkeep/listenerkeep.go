@@ -93,6 +93,9 @@ type client struct {
 	// own names the listeners this process kept or took over.
 	own  map[string]bool
 	send func(message string, file *os.File) error
+	// channel is the datagram channel to a launcher's keeper, which hands
+	// what this process keeps to the next process (nil: no such keeper).
+	channel *net.UnixConn
 	// mirror stores what the launcher keeps in systemd's store as well, when
 	// the launcher cannot (see newClientFromEnvironment).
 	mirror *notifySocket
@@ -162,6 +165,71 @@ func DropStale(name string) error { return current().dropStale(name) }
 // Take claimed, here and in the keeper, and returns their names.
 func ReleaseUnclaimed(prefix string) []string { return current().releaseUnclaimed(prefix) }
 
+// HandsOver reports a launcher keeper that hands what this process keeps to
+// the next daemon process it starts (an update's candidate, a restart after a
+// crash). A launcher without one (installed before it had a keeper, until the
+// unit's next start) or systemd's store alone keep listeners across a restart
+// of the whole unit only.
+func HandsOver() bool {
+	c := current()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.channel != nil
+}
+
+// Flush waits, at most timeout, until the launcher's keeper received every
+// message this process sent: the launcher then applies them before it starts
+// the next process (Store.Settle bounds that wait on its side).
+func Flush(timeout time.Duration) error {
+	c := current()
+	c.mu.Lock()
+	channel := c.channel
+	c.mu.Unlock()
+	if channel == nil {
+		return nil
+	}
+	return flushChannel(channel, timeout)
+}
+
+// MaxEnvBytes bounds the variable the launcher describes the kept descriptors
+// with (KeptEnv): a single environment string is at most 128 KiB
+// (MAX_ARG_STRLEN), and a launcher whose variable exceeded it could not start
+// the next process at all.
+const MaxEnvBytes = 120 * 1024
+
+// EnvBytes estimates the size of that variable once the keeper holds what it
+// holds for this process now plus names more descriptors.
+func EnvBytes(names []string) int {
+	c := current()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	size := len(KeptEnv) + 3
+	entry := func(name string) { size += EnvEntryBytes(name) }
+	for name := range c.own {
+		entry(name)
+	}
+	for name := range c.inherited {
+		if !c.own[name] {
+			entry(name)
+		}
+	}
+	for _, name := range names {
+		entry(name)
+	}
+	return size
+}
+
+// EnvEntryBytes is what one more kept descriptor adds to that variable.
+func EnvEntryBytes(name string) int { return len(name) + len(`{"name":"","fd":12345},`) }
+
+// transientName reports a name that is not a listener: a connection or state
+// handed to the next process (live handover). It lives in the launcher only,
+// never in systemd's store on this process's behalf: the next process takes it
+// at once, and a restart of the whole unit ends what it carries anyway.
+func transientName(name string) bool {
+	return strings.HasPrefix(name, "conn/") || strings.HasPrefix(name, "state/")
+}
+
 func (c *client) available() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -179,7 +247,7 @@ func (c *client) take(name string) (*os.File, bool) {
 			c.own = map[string]bool{}
 		}
 		c.own[name] = true
-		if c.mirror != nil {
+		if c.mirror != nil && !transientName(name) {
 			// The previous process kept it while nothing stored it in
 			// systemd's store; this process keeps it from now on.
 			_ = forwardToSystemd(c.mirror, messageKeep+"\n"+name, file)
@@ -316,11 +384,12 @@ func newClientFromEnvironment() *client {
 				current.mirror = dialNotifySocketFor(os.Getppid())
 			}
 			mirror := current.mirror
+			current.channel = unixConnection
 			current.send = func(message string, file *os.File) error {
 				if err := sendMessage(unixConnection, message, file); err != nil {
 					return err
 				}
-				if mirror != nil {
+				if _, name, _ := strings.Cut(message, "\n"); mirror != nil && !transientName(name) {
 					// The launcher keeps it either way; a store that refuses
 					// it only loses it across a restart of the whole unit.
 					_ = forwardToSystemd(mirror, message, file)

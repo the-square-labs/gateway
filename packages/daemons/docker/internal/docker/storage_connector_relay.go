@@ -172,6 +172,7 @@ func (p *DockerPlugin) handleStorageConnectorRelay(connection net.Conn) {
 	flow, done := p.linkFlows.track(connection)
 	defer done()
 	defer p.linkTraffic.completed(link)
+	tunnel.labels = sourceLabels(relaySourceTag{ownerKind: assignment.GetOwnerKind(), ownerID: assignment.GetOwnerId()}, entryStorageConnector, link)
 	tunnel.bridge(p.linkTraffic.carry(link, flow))
 }
 

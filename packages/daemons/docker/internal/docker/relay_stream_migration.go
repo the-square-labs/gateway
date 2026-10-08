@@ -2,11 +2,14 @@ package docker
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
+	"net"
 	"sort"
 	"time"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/handover"
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
 	"github.com/wiolett-industries/gateway/daemon-shared/relayresume"
@@ -124,8 +127,19 @@ func (p *DockerPlugin) makeResumable(tunnel *relaySourceTunnel, assignment *pb.R
 		return
 	}
 	tag := relaySourceTag{ownerKind: assignment.GetOwnerKind(), ownerID: assignment.GetOwnerId(), routeID: assignment.GetRouteId()}
-	session, err := sides.sources.NewSource(relayresume.SourceConfig{
-		RouteID: assignment.GetRouteId(),
+	session, err := sides.sources.NewSource(p.relaySourceConfig(tag, assignment), relayresume.OpenedPath{Stream: tunnel.stream,
+		Cancel: tunnel.cancel, CloseSend: tunnel.closeSend, RelayID: tunnel.router.targetID, MaxFrame: tunnel.maxFrame, Generation: tunnel.generation})
+	if err != nil {
+		p.logger.Warn("relay stream could not be made resumable", "owner_kind", tag.ownerKind, "owner_id", tag.ownerID, "error", err)
+		return
+	}
+	tunnel.session = session
+}
+
+// relaySourceConfig is the configuration of a resumable source stream of tag.
+func (p *DockerPlugin) relaySourceConfig(tag relaySourceTag, assignment *pb.RelayGrantAssignment) relayresume.SourceConfig {
+	return relayresume.SourceConfig{
+		RouteID: tag.routeID,
 		Key: func() (string, []byte, bool) {
 			current := p.relayGrants.lookup("connect", tag.ownerKind, tag.ownerID)
 			if current == nil || current.GetRouteId() != tag.routeID {
@@ -136,13 +150,7 @@ func (p *DockerPlugin) makeResumable(tunnel *relaySourceTunnel, assignment *pb.R
 		HalfCloseTimeout: time.Duration(assignment.GetStreamResume().GetHalfCloseTimeoutMs()) * time.Millisecond,
 		Dial:             p.relaySourceDialer(tag),
 		Tag:              tag,
-	}, relayresume.OpenedPath{Stream: tunnel.stream, Cancel: tunnel.cancel, CloseSend: tunnel.closeSend,
-		RelayID: tunnel.router.targetID, MaxFrame: tunnel.maxFrame, Generation: tunnel.generation})
-	if err != nil {
-		p.logger.Warn("relay stream could not be made resumable", "owner_kind", tag.ownerKind, "owner_id", tag.ownerID, "error", err)
-		return
 	}
-	tunnel.session = session
 }
 
 // relaySourceDialer opens a new tunnel for a resumable source stream on the
@@ -344,29 +352,38 @@ func (p *DockerPlugin) bridgeTargetSession(assignment *pb.RelayGrantAssignment, 
 		}
 		connection = linked
 	}
-	if dialed.ingress {
+	p.bridgeTargetConnection(assignment.GetOwnerKind(), assignment.GetOwnerId(), session, connection, dialed.ingress)
+}
+
+// bridgeTargetConnection carries the backend connection of a resumable target
+// stream of an endpoint of ownerKind until the stream ends or the daemon hands
+// it to its next process.
+func (p *DockerPlugin) bridgeTargetConnection(ownerKind, ownerID string, session *relayresume.Session, connection net.Conn, ingress bool) {
+	labels := handover.Labels{handoverRole: handoverRoleTarget, handoverOwnerKind: ownerKind, handoverOwnerID: ownerID,
+		handoverConnector: connectionConnector(connection)}
+	cutClass := ""
+	if _, terminated := connection.(*tls.Conn); terminated {
+		// A PostgreSQL link whose TLS this daemon terminates: its state lives
+		// in this process.
+		cutClass = cutPostgresTLS
+	}
+	if ingress {
 		// Tracked so a restart finishes the request in flight and closes the
 		// stream once it is idle (B-13).
 		tracked := newDrainConn(connection)
 		connection = tracked
-		if assignment.OwnerKind == containerLinkOwnerKind {
+		if ownerKind == containerLinkOwnerKind {
 			defer p.proxyTunnels.addHeld(tracked, session.Cancel)()
 		} else {
 			defer p.proxyTunnels.add(tracked, session.Cancel)()
 		}
+	} else {
+		keepLocalAlive(connection)
 	}
 	defer connection.Close()
-	if isConnectorIngressOwnerKind(assignment.OwnerKind) {
-		readChunk := int(p.relayGrants.readChunkBytes())
-		if readChunk == 0 {
-			readChunk = relaybridge.DefaultChunkBytes
-		}
-		_ = relaybridge.BridgeWithChunk(context.Background(), connection, session, session.MaxFrame(), relayresume.ReadChunk(min(readChunk, session.MaxFrame())), session.Cancel)
-		session.Cancel()
-		return
-	}
 	// No idle limit of its own, as acceptIncoming: the relay ends the idle tunnels of a route that has one.
-	_ = bridgeRelayConnection(connection, session, session.MaxFrame(), relayresume.ReadChunk(min(p.relayReadChunk(), session.MaxFrame())), 0, session.Cancel)
+	_ = p.handover.Bridge(connection, session, handover.BridgeConfig{ReadChunk: p.relayReadChunkFor(ownerKind, session), Labels: labels,
+		CutClass: cutClass})
 	session.Cancel()
 }
 

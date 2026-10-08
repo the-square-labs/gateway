@@ -157,7 +157,7 @@ func (move plannedMove) stale(current *Path) bool {
 // held). A move off a relay outranks a move to the best path.
 func (st *sourceState) requestLocked(s *Session, move plannedMove) {
 	c := s.core
-	if move.avoid == "" && move.from == nil {
+	if s.detached || (move.avoid == "" && move.from == nil) {
 		return
 	}
 	if st.migrating || !c.CanResume() || c.Current() == nil {
@@ -198,6 +198,46 @@ func (m *Manager) NewSource(cfg SourceConfig, first OpenedPath) (*Session, error
 	return s, nil
 }
 
+// RestoreSource takes over a source stream another process handed over
+// (SessionState of RoleSource): suspended, it looks for a path at once, within
+// UnplannedBudget of its freeze, and RESUMEs on it as after a path failure. cfg
+// is the stream's configuration in this process: its Key must answer for the
+// route (else the route was revoked meanwhile and the stream is not taken).
+func (m *Manager) RestoreSource(cfg SourceConfig, st *SessionState) (*Session, error) {
+	if st.Role != RoleSource || st.RouteID != cfg.RouteID {
+		return nil, errors.New("relayresume: not a source stream of this route")
+	}
+	keyID, key, ok := cfg.Key()
+	if !ok || !validKeyID(keyID) || len(key) == 0 {
+		return nil, ErrRevoked
+	}
+	now := time.Now()
+	core, err := restoreCore(Config{Budget: m.budget}, st, now)
+	if err != nil {
+		return nil, err
+	}
+	core.keyID, core.key = keyID, key
+	cfg.HalfCloseTimeout = st.HalfCloseTimeout
+	s := newSession(core, cfg.RouteID, st.MaxFrame)
+	s.partial = append([]byte(nil), st.Unwritten...)
+	s.restoredFrozenAt = core.suspendDeadline.Add(-UnplannedBudget)
+	s.source = &sourceState{mgr: m, cfg: cfg, stalled: s.restoredFrozenAt}
+	m.mu.Lock()
+	m.sessions[s] = struct{}{}
+	m.mu.Unlock()
+	s.mu.Lock()
+	s.afterLocked(false)
+	s.mu.Unlock()
+	return s, nil
+}
+
+// forget drops a stream another process took over, without counting it.
+func (m *Manager) forget(s *Session) {
+	m.mu.Lock()
+	delete(m.sessions, s)
+	m.mu.Unlock()
+}
+
 // Tag is the SourceConfig tag (source) or the Establish tag (target).
 func (s *Session) Tag() any {
 	if s.source == nil {
@@ -210,6 +250,9 @@ func (s *Session) Tag() any {
 func (s *Session) RequestMigrate(reason byte) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.detached {
+		return
+	}
 	s.core.RequestMigrate(reason)
 	s.afterLocked(false)
 }
@@ -218,6 +261,9 @@ func (s *Session) RequestMigrate(reason byte) {
 // unplanned migration loop, answers MIGRATE_REQ and ends the bookkeeping.
 func (st *sourceState) observeLocked(s *Session) {
 	c := s.core
+	if s.detached {
+		return
+	}
 	if c.State().Terminal() {
 		if !st.ended {
 			st.ended = true
@@ -365,7 +411,7 @@ func (m *Manager) attempts(s *Session, unplanned bool, move plannedMove) (bool, 
 	for time.Now().Before(deadline) {
 		s.mu.Lock()
 		state := s.core.State()
-		canResume := s.core.CanResume()
+		canResume := s.core.CanResume() && !s.detached
 		current := s.core.Current()
 		lost := s.core.LostRelay()
 		var currentGeneration uint64
@@ -445,7 +491,7 @@ func (m *Manager) attempt(s *Session, unplanned bool, request DialRequest) (bool
 		return false, "", err
 	}
 	s.mu.Lock()
-	if !s.core.CanResume() || (!unplanned && s.core.Current() == nil && s.core.State() == StateOpen) {
+	if s.detached || !s.core.CanResume() || (!unplanned && s.core.Current() == nil && s.core.State() == StateOpen) {
 		s.mu.Unlock()
 		if op.Cancel != nil {
 			op.Cancel()
@@ -470,7 +516,7 @@ func (m *Manager) attempt(s *Session, unplanned bool, request DialRequest) (bool
 	}
 	s.source.markStalled()
 	s.afterLocked(false)
-	for s.core.Pending() == path && !s.core.State().Terminal() {
+	for s.core.Pending() == path && !s.core.State().Terminal() && !s.detached {
 		s.stateCond.Wait()
 	}
 	ok := s.core.Current() == path

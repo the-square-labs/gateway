@@ -13,6 +13,7 @@ import (
 	"time"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/handover"
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 	"github.com/wiolett-industries/gateway/daemon-shared/listenerkeep"
 	"github.com/wiolett-industries/gateway/daemon-shared/logepisode"
@@ -118,6 +119,15 @@ type DockerPlugin struct {
 	// resumable holds the resumable relay streams (RSv1) of both sides.
 	resumableMu sync.Mutex
 	resumable   *relayStreamSides
+	// handover carries the connections an update hands to the next process (live_handover.go); handoverTracker
+	// settles what the last update did to them; liveCuts counts the connections an update cuts in any case.
+	handover        *handover.Registry
+	handoverTracker *handover.Tracker
+	liveCuts        liveCuts
+	// restoredHost are the database binding connections the previous process handed over, until their host
+	// listener adopted them (live_handover.go).
+	restoredHostMu sync.Mutex
+	restoredHost   map[*restoredHostConnection]struct{}
 	// endpointDialer replaces the backends of incoming relay tunnels in tests.
 	endpointDialer func(context.Context, *pb.RelayGrantAssignment) (dialedEndpoint, error)
 
@@ -161,6 +171,7 @@ func NewDockerPlugin(cfg *config.Config) *DockerPlugin {
 		registrationChanged: make(chan struct{}, 1),
 		healthRefresh:       make(chan struct{}, 1),
 		memberReadiness:     newMemberReadiness(),
+		handover:            handover.NewRegistry(),
 	}
 }
 
@@ -296,6 +307,9 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 	if err != nil {
 		return fmt.Errorf("initialize relay grant store: %w", err)
 	}
+	// The connections the previous process handed over, before anything here takes time: their peers resume
+	// within relayresume.UnplannedBudget of the update (live_handover.go).
+	p.restoreHandover()
 	// Units installed before the template carried it get a file descriptor store, so the link sockets also survive
 	// a restart of the whole unit (link_listener_handover.go).
 	if installed, storeErr := listenerkeep.EnsureSystemdStore(); storeErr != nil {
@@ -394,6 +408,12 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 	}
 	if p.lease == nil {
 		go alignInstalledWatchdogChannel(p.logger, p.cfg.Docker.LeaseWatchdogReleasesURL, p.cfg.Docker.LeaseWatchdogArtifactBaseURL)
+	}
+	if p.databaseListeners != nil {
+		// The host listeners the restore brought back adopt the database connections the previous process handed over.
+		p.databaseListeners.mu.Lock()
+		p.databaseListeners.adoptRestoredLocked()
+		p.databaseListeners.mu.Unlock()
 	}
 
 	return nil
@@ -516,13 +536,14 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 				"generic_relay_tunnel_v1",
 				"relay_pool_v1",
 				relayresume.Capability,
+				handover.Capability,
 			}
 			if p.backupHandler != nil {
 				values = append(values, "database_backups_v1", "database_backups_deadline_v1", "database_backups_tls_verification_v1", storageCopyCapability)
 			}
 			return values
 		}
-		values := []string{"docker_deployments_v1", "docker_gpu_v1", dockerMigrationCapability, "docker_archive_v1", "docker_port_bind_ip_v1", "generic_relay_tunnel_v1", "relay_pool_v1", relayresume.Capability, "proxy_secure_links_v1", "docker_registry_proxy_v1", "docker_runtime_management_v1", "docker_managed_volumes_v1", "docker_duplicate_label_filter_v1", "docker_duplicate_env_removal_v1"}
+		values := []string{"docker_deployments_v1", "docker_gpu_v1", dockerMigrationCapability, "docker_archive_v1", "docker_port_bind_ip_v1", "generic_relay_tunnel_v1", "relay_pool_v1", relayresume.Capability, handover.Capability, "proxy_secure_links_v1", "docker_registry_proxy_v1", "docker_runtime_management_v1", "docker_managed_volumes_v1", "docker_duplicate_label_filter_v1", "docker_duplicate_env_removal_v1"}
 		if p.cfg.Docker.Mode == "" && p.availability != nil {
 			values = append(values, dockerAvailabilityCapability)
 		}

@@ -223,6 +223,17 @@ type Core struct {
 	blocked        bool
 	ackedBlocked   uint64
 
+	// peerDelivered is the highest ack the peer sent: what reached its local
+	// socket. The window counts from it, not from sndUna: a resume frees the
+	// retained bytes up to the peer's rcv_nxt, which the peer still holds for
+	// its socket, and counting from there let every resume add a window to
+	// what a slow socket at the peer holds. After a resume this side sends an
+	// ACK at once, so the peer learns where it stands; a peer that predates
+	// that sends none until it delivers more, so without an ack within
+	// resumeAckFallback the window counts from sndUna again.
+	peerDelivered uint64
+	awaitPeerAck  time.Time
+
 	// Receive side: [delivered, rcvNxt) is queued for the local socket.
 	rcvNxt, delivered, ackSent uint64
 	rq                         []chunk
@@ -403,13 +414,19 @@ func (c *Core) CanWrite(n int) bool {
 	if c.state.Terminal() || c.finQueued {
 		return true // Write reports the error
 	}
-	inflight := c.sndNxt - c.sndUna
+	inflight := c.inflight()
 	if inflight == 0 || inflight+uint64(n) <= c.wnd {
 		return true
 	}
 	c.blocked = true
 	c.WindowBlocks++
 	return false
+}
+
+// inflight is what the window holds: sent and not delivered at the peer as
+// far as it said.
+func (c *Core) inflight() uint64 {
+	return c.sndNxt - min(c.peerDelivered, c.sndNxt)
 }
 
 // Write queues p (owned by the session from now on) for the peer. It
@@ -424,7 +441,7 @@ func (c *Core) Write(p []byte, now time.Time) (bool, error) {
 	if len(p) == 0 {
 		return true, nil
 	}
-	inflight := c.sndNxt - c.sndUna
+	inflight := c.inflight()
 	if inflight > 0 && inflight+uint64(len(p)) > c.wnd {
 		c.blocked = true
 		return false, nil
@@ -437,6 +454,25 @@ func (c *Core) Write(p []byte, now time.Time) (bool, error) {
 	c.lastActivity = now
 	c.pump()
 	return true, nil
+}
+
+// writeFrozen queues p whatever the window: a stream freezing for a handover
+// keeps every byte its bridge read from the local socket before it stopped.
+func (c *Core) writeFrozen(p []byte, now time.Time) error {
+	if c.state.Terminal() {
+		return c.terminalErr()
+	}
+	if c.finQueued {
+		return ErrWriteClosed
+	}
+	if len(p) == 0 {
+		return nil
+	}
+	c.segs = append(c.segs, segment{off: c.sndNxt, data: p})
+	c.sndNxt += uint64(len(p))
+	c.lastActivity = now
+	c.pump()
+	return nil
 }
 
 // CloseWrite ends the local -> peer direction (FIN).
@@ -680,8 +716,23 @@ func (c *Core) ack(ack uint64) bool {
 		c.reset(RstProtocol, "ack beyond sent data", ErrProtocol)
 		return false
 	}
+	c.peerDelivered = max(c.peerDelivered, ack)
+	c.awaitPeerAck = time.Time{}
 	c.advanceUna(ack)
 	return true
+}
+
+// resumeAckFallback bounds the wait for the peer's ack after a resume (see
+// peerDelivered).
+const resumeAckFallback = 500 * time.Millisecond
+
+// resumed starts the wait for the peer's ack after a resume and tells the
+// peer where this side stands (the path is current and established).
+func (c *Core) resumed(now time.Time) {
+	if c.peerDelivered < c.sndUna {
+		c.awaitPeerAck = now.Add(resumeAckFallback)
+	}
+	c.sendAck(true)
 }
 
 func (c *Core) advanceUna(ack uint64) {
@@ -1050,11 +1101,10 @@ func (c *Core) resumeAnswer(p *Path, record *Record, now time.Time) bool {
 	c.suspendDeadline = time.Time{}
 	c.lastActivity = now
 	// The target knows p.resumeFrom (RESUME.rcv_nxt); bytes and a FIN that
-	// arrived on the old path after RESUME left still need an ack.
+	// arrived on the old path after RESUME left still need an ack, and the
+	// target's window counts from this side's delivered offset.
 	c.ackSent, c.ackDue = min(c.delivered, p.resumeFrom), time.Time{}
-	if c.delivered > c.ackSent {
-		c.sendAck(false)
-	}
+	c.resumed(now)
 	return true
 }
 
@@ -1135,6 +1185,7 @@ func (c *Core) AcceptResume(p *Path, record *Record, now time.Time) ResumeVerdic
 	c.suspendDeadline = time.Time{}
 	c.advanceUna(record.RcvNxt)
 	c.ackSent = c.delivered
+	c.resumed(now)
 	c.pump()
 	c.afterDeliver(now)
 	return ResumeVerdict{Accepted: true}
@@ -1161,6 +1212,7 @@ func (c *Core) NextDeadline() time.Time {
 		return next
 	}
 	consider(c.ackDue)
+	consider(c.awaitPeerAck)
 	consider(c.suspendDeadline)
 	consider(c.lingerDeadline)
 	consider(c.handshakeDeadine)
@@ -1202,12 +1254,21 @@ func (c *Core) Tick(now time.Time) {
 		c.reset(RstHalfCloseIdle, "half-closed stream idle", ErrHalfCloseIdle)
 		return
 	}
+	if !c.awaitPeerAck.IsZero() && !now.Before(c.awaitPeerAck) {
+		// A peer that predates the ack after a resume: the window counts
+		// from what it received, as it did before.
+		c.awaitPeerAck = time.Time{}
+		c.peerDelivered = max(c.peerDelivered, c.sndUna)
+	}
 	if !c.ackDue.IsZero() && !now.Before(c.ackDue) {
 		c.ackDue = time.Time{}
 		c.AcksDelayed++
 		c.sendAck(false)
 	}
 }
+
+// WindowBase is where the send window counts from (see peerDelivered).
+func (c *Core) WindowBase() uint64 { return min(c.peerDelivered, c.sndNxt) }
 
 // halfCloseArmed: the relay's half-close reaping, which only runs while a
 // path is up (a suspended stream is not idle by choice).

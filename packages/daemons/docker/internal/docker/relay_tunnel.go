@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/handover"
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 	"github.com/wiolett-industries/gateway/daemon-shared/logepisode"
 	"github.com/wiolett-industries/gateway/daemon-shared/netaccept"
@@ -552,6 +554,12 @@ func (r *relayTunnelRouter) acceptIncoming(ctx context.Context, assignment *pb.R
 		return
 	}
 	connection := dialed.conn
+	// A raw stream (a source without RSv1, or a route Gateway did not make resumable) lives in this process.
+	rawClass := cutRawStream
+	if _, terminated := connection.(*tls.Conn); terminated {
+		rawClass = cutPostgresTLS
+	}
+	defer r.plugin.liveCuts.track(rawClass)()
 	if dialed.ingress {
 		// Tracked so a restart finishes the request in flight and closes
 		// the tunnel once it is idle (B-13).
@@ -685,7 +693,7 @@ func isBackupRelayOwnerKind(ownerKind string) bool {
 		ownerKind == "storage_backup_target" || ownerKind == "storage_backup_staging"
 }
 
-func (p *DockerPlugin) openManagedDatabaseBinding(connection net.Conn, bindingID string, routeGeneration uint64) {
+func (p *DockerPlugin) openManagedDatabaseBinding(connection net.Conn, bindingID string, routeGeneration uint64, peer listenerPeer, peerKnown bool) {
 	assignment := p.relayGrants.lookup("connect", "managed_database_binding", bindingID)
 	if assignment == nil {
 		p.linkRejections.rejected(p.logger, linkKindManagedDatabaseBinding, bindingID, linkRejectedGrantUnavailable)
@@ -709,6 +717,8 @@ func (p *DockerPlugin) openManagedDatabaseBinding(connection net.Conn, bindingID
 	defer done()
 	link := linkKey{kind: linkKindManagedDatabaseBinding, id: bindingID}
 	defer p.linkTraffic.completed(link)
+	tunnel.labels = hostListenerLabels(sourceLabels(relaySourceTag{ownerKind: assignment.GetOwnerKind(), ownerID: assignment.GetOwnerId()},
+		entryHostListener, link), bindingID, routeGeneration, peer, peerKnown)
 	tunnel.bridge(p.linkTraffic.carry(link, flow))
 }
 
@@ -799,6 +809,9 @@ func (r *relayTunnelRouter) openSourceTunnel(connection net.Conn, grant *pb.Rela
 	} else {
 		tunnel.idle = relaySourceIdleLimit(assignment.GetOwnerKind())
 		r.plugin.makeResumable(tunnel, assignment)
+		// A backup run's helper reaches this process on a loopback socket of
+		// the run: an update fails the run as before.
+		tunnel.cutClass = cutBackup
 	}
 	tunnel.bridge(connection)
 	return true
@@ -821,6 +834,10 @@ type relaySourceTunnel struct {
 	idle time.Duration
 	// generation is the assignment generation of the candidate grant the tunnel was opened with (0: legacy grant).
 	generation uint64
+	// labels name the stream's link for a handover; cutClass, when set, keeps it in this process (it is cut by an
+	// update) and names the class it is counted under (live_handover.go).
+	labels   handover.Labels
+	cutClass string
 }
 
 // openSource opens a source tunnel with grant and waits until the relay admits it, at most relaySourceOpenTimeout.
@@ -871,17 +888,42 @@ func (t *relaySourceTunnel) bridge(connection net.Conn) {
 	defer t.router.active.Add(-1)
 	readChunk := t.router.plugin.relayReadChunk()
 	if t.session != nil {
-		maxFrame := t.session.MaxFrame()
-		_ = bridgeRelayConnection(connection, t.session, maxFrame, relayresume.ReadChunk(min(readChunk, maxFrame)), t.idle, t.session.Cancel)
-		t.session.Cancel()
+		labels := t.labels
+		if labels == nil {
+			tag, _ := t.session.Tag().(relaySourceTag)
+			labels = sourceLabels(tag, "", linkKey{})
+		}
+		t.router.plugin.bridgeSourceSession(connection, t.session, t.idle, labels, t.cutClass)
 		return
 	}
-	if !t.localService {
+	switch {
+	case t.localService:
+		defer t.router.plugin.liveCuts.track(cutRegistry)()
+	case t.cutClass != "":
+		defer t.router.plugin.liveCuts.track(t.cutClass)()
+	default:
 		// Counted per relay: a relay that still carries raw streams needs the
 		// long drain grace.
 		defer t.router.plugin.relayStreams().sources.TrackLegacy(t.router.targetID)()
+		defer t.router.plugin.liveCuts.track(cutRawStream)()
 	}
 	_ = bridgeRelayConnection(connection, t.stream, t.maxFrame, readChunk, t.idle, t.cancel)
+}
+
+// bridgeSourceSession carries a workload's link connection over its resumable
+// source stream until either side ends it or the daemon hands it to its next
+// process. idle ends it once it carried no byte for that long (0: never, TCP
+// keepalive finds a peer that vanished).
+func (p *DockerPlugin) bridgeSourceSession(connection net.Conn, session *relayresume.Session, idle time.Duration, labels handover.Labels, cutClass string) {
+	if idle <= 0 {
+		keepLocalAlive(connection)
+	}
+	if tag, ok := session.Tag().(relaySourceTag); ok {
+		labels[handoverOwnerKind], labels[handoverOwnerID] = tag.ownerKind, tag.ownerID
+	}
+	readChunk := relayresume.ReadChunk(min(p.relayReadChunk(), session.MaxFrame()))
+	_ = p.handover.Bridge(connection, session, handover.BridgeConfig{ReadChunk: readChunk, Idle: idle, Labels: labels, CutClass: cutClass})
+	session.Cancel()
 }
 
 // close abandons a tunnel that was never bridged.

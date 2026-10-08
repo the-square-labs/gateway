@@ -1,0 +1,571 @@
+// Package handover hands a daemon's live connections to its next process when
+// it exits for an update (live handover, LH): the relay stream sessions
+// (relayresume) it carries for local sockets, and the node-local link
+// connections it copies between two local sockets.
+//
+// Before the process exits, every bridge stops at a point where each byte is
+// either in its session or in the local socket (the stream freezes: the
+// session hands the bridge nothing more and takes whatever it read). The local
+// sockets go to the launcher's keeper (listenerkeep, as "conn/<n>"), and the
+// sessions' state goes along in a sealed memory file ("state/handover"). The
+// next process takes the snapshot once, before it registers anything with the
+// relays, takes the sockets, drops the keeper's copies at once, and carries
+// the streams on: a source resumes on a new path, a target waits for its
+// source's RESUME, as after the loss of a path. For the peer and the local
+// socket, the update is a pause.
+//
+// The handover commits when the snapshot reached the keeper; until then every
+// bridge thaws and carries on in this process if anything fails, and the
+// daemon drains as before. Once committed the old process never touches a
+// handed over stream again, so a stream is carried by exactly one process: a
+// crash of the next one before it took the snapshot leaves it to the rolled
+// back binary; one after it cuts the streams, but never duplicates or loses a
+// byte.
+//
+// What is not handed over is cut as before: raw streams of peers without
+// RSv1, connections whose bytes the daemon itself transforms (TLS), a stream
+// still in its handshake, and what does not fit the keeper (MaxConnections).
+package handover
+
+import (
+	"errors"
+	"fmt"
+	"log/slog"
+	"net"
+	"sort"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/wiolett-industries/gateway/daemon-shared/listenerkeep"
+	"github.com/wiolett-industries/gateway/daemon-shared/relayresume"
+)
+
+// Capability is advertised by daemons whose update hands connections over.
+const Capability = "daemon_stream_handover_v1"
+
+const (
+	// connPrefix and stateName name what a handover keeps in the launcher.
+	connPrefix = "conn/"
+	stateName  = "state/handover"
+
+	// DefaultFreezeWait bounds how long the bridges get to stop at a safe
+	// point (a write to a slow local socket, a stream still in its handshake).
+	DefaultFreezeWait = time.Second
+	// flushWait bounds the wait for the launcher to take every message.
+	flushWait = 3 * time.Second
+	// MaxSnapshotAge is the oldest snapshot a process takes over: its streams'
+	// peers gave up after relayresume.TargetSuspendTimeout.
+	MaxSnapshotAge = relayresume.TargetSuspendTimeout + 10*time.Second
+	// maxSnapshotBytes bounds the snapshot: the window budget of the
+	// process's streams, with room for the bytes in flight.
+	maxSnapshotBytes = 2*relayresume.DefaultProcessBudget + 64<<20
+)
+
+// Cut classes of connections a handover leaves out.
+const (
+	CutBusy       = "busy"        // did not stop at a safe point in time
+	CutHandshake  = "handshake"   // its stream had no HELLO_ACK yet
+	CutOverLimit  = "over_limit"  // beyond what the keeper can pass on
+	CutNoSocket   = "no_socket"   // the daemon transforms its bytes (TLS)
+	CutKeepFailed = "keep_failed" // the keeper did not take its socket
+	CutNoHandover = "no_handover" // the update did not hand over at all
+	// CutResumeFailed: handed over, but its stream did not resume in the
+	// next process (no path within the budget, the peer refused it, or its
+	// socket did not come over).
+	CutResumeFailed = "resume_failed"
+	// CutRevoked: handed over, but its route was revoked meanwhile.
+	CutRevoked = "revoked"
+)
+
+// item is a bridge or a pipe.
+type item interface {
+	freeze()
+	thaw()
+	handedOver()
+	quiescent() (quiet, ok bool)
+	// pinned: never handed over (it stays, and is cut, with this process).
+	pinned() bool
+}
+
+type registryState int
+
+const (
+	stateRunning registryState = iota
+	stateFreezing
+	stateHandedOver
+)
+
+// Registry tracks the connections a daemon can hand over.
+type Registry struct {
+	mu    sync.Mutex
+	items map[item]struct{}
+	state registryState
+	// handed are the items the last handover passed on, until they returned.
+	handed map[item]bool
+}
+
+// NewRegistry creates an empty registry.
+func NewRegistry() *Registry {
+	return &Registry{items: map[item]struct{}{}}
+}
+
+// add registers an item and returns its removal. An item that starts while a
+// handover collects starts frozen: it moved no byte yet, and goes along.
+func (r *Registry) add(it item) func() {
+	r.mu.Lock()
+	r.items[it] = struct{}{}
+	freezing := r.state == stateFreezing
+	r.mu.Unlock()
+	if freezing && !it.pinned() {
+		it.freeze()
+	}
+	return func() {
+		r.mu.Lock()
+		delete(r.items, it)
+		r.mu.Unlock()
+	}
+}
+
+func (r *Registry) snapshotItems() []item {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	items := make([]item, 0, len(r.items))
+	for it := range r.items {
+		items = append(items, it)
+	}
+	return items
+}
+
+// Options configure a handover.
+type Options struct {
+	DaemonType string
+	Version    string
+	// Tables are the process's target tables: once committed, a RESUME that
+	// reaches this process is dropped without an answer (the next one
+	// answers it).
+	Tables []*relayresume.TargetTable
+	// FreezeWait: DefaultFreezeWait when 0.
+	FreezeWait time.Duration
+	Logger     *slog.Logger
+	// Keeper: LauncherKeeper when nil.
+	Keeper Keeper
+}
+
+// Result is what a handover did.
+type Result struct {
+	// Committed: the snapshot reached the keeper; the next process carries
+	// the HandedOver connections.
+	Committed  bool
+	HandedOver int
+	// Cut counts the connections left out, by class: the daemon's drain ends
+	// them as before.
+	Cut map[string]int
+	// StartedAt is when the bridges began to stop.
+	StartedAt time.Time
+	Err       error
+}
+
+// errNoKeeper: the running launcher has no keeper (it started before it had
+// one and was not restarted since): the update cuts as before.
+var errNoKeeper = errors.New("handover: the launcher keeps no connections")
+
+// Available reports whether an update now hands connections over.
+func Available() bool { return LauncherKeeper.HandsOver() }
+
+type candidate struct {
+	it       item
+	snapshot SnapshotItem
+	files    int
+}
+
+// HandOver stops every connection of the registry and hands the ones that
+// stopped at a safe point to the next process. On success the handed over
+// bridges and pipes return ErrHandedOver; the others thawed and carry on, for
+// the daemon's drain. On failure (no keeper, the snapshot could not be kept)
+// everything thawed and Result.Err says why.
+func (r *Registry) HandOver(opts Options) Result {
+	result := Result{Cut: map[string]int{}, StartedAt: time.Now()}
+	if r == nil {
+		result.Err = errNoKeeper
+		return result
+	}
+	logger := opts.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	keeper := opts.Keeper
+	if keeper == nil {
+		keeper = LauncherKeeper
+	}
+	if !keeper.HandsOver() {
+		result.Err = errNoKeeper
+		return result
+	}
+	r.mu.Lock()
+	if r.state != stateRunning {
+		r.mu.Unlock()
+		result.Err = errors.New("handover: already handed over")
+		return result
+	}
+	r.state = stateFreezing
+	r.mu.Unlock()
+	for _, it := range r.snapshotItems() {
+		if !it.pinned() {
+			it.freeze()
+		}
+	}
+	wait := opts.FreezeWait
+	if wait <= 0 {
+		wait = DefaultFreezeWait
+	}
+	deadline := time.Now().Add(wait)
+	for {
+		stopped := true
+		for _, it := range r.snapshotItems() {
+			if it.pinned() {
+				continue
+			}
+			quiet, ok := it.quiescent()
+			if ok && (!quiet || inHandshake(it)) {
+				stopped = false
+				break
+			}
+		}
+		if stopped || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	// The streams stopped carrying local bytes when the freeze began.
+	frozenAt := result.StartedAt
+	candidates, excluded := r.collect(frozenAt, result.Cut)
+	kept, snapshot := keepSockets(keeper, candidates, result.Cut, opts, frozenAt)
+	for _, table := range opts.Tables {
+		if table != nil {
+			snapshot.Tombstones = append(snapshot.Tombstones, table.HandoverTombstones()...)
+		}
+	}
+	commit := len(kept) > 0
+	if commit {
+		data := snapshot.Encode()
+		file, err := sealedFile(data)
+		if err == nil {
+			err = keeper.Keep(stateName, file)
+			_ = file.Close()
+		}
+		if err != nil {
+			commit = false
+			result.Err = fmt.Errorf("keep the handover snapshot: %w", err)
+			for _, c := range kept {
+				for _, name := range c.snapshot.Conns {
+					_ = keeper.Drop(name)
+				}
+				setExcluded(c.it, CutKeepFailed)
+				result.Cut[CutKeepFailed]++
+			}
+		}
+	}
+	if commit {
+		// Committed: the next process carries these connections.
+		if err := keeper.Flush(flushWait); err != nil {
+			logger.Warn("the launcher did not take the handed over connections in time; the next process may cut some", "error", err)
+		}
+		for _, table := range opts.Tables {
+			if table != nil {
+				table.HandOver()
+			}
+		}
+		r.mu.Lock()
+		r.handed = map[item]bool{}
+		for _, c := range kept {
+			r.handed[c.it] = true
+		}
+		r.mu.Unlock()
+		for _, c := range kept {
+			c.it.handedOver()
+		}
+		result.Committed, result.HandedOver = true, len(kept)
+	} else {
+		excluded = append(excluded, itemsOf(kept)...)
+	}
+	r.mu.Lock()
+	r.state = stateHandedOver
+	r.mu.Unlock()
+	// Everything not handed over carries on here for the daemon's drain,
+	// including what started meanwhile.
+	handed := map[item]bool{}
+	if commit {
+		for _, c := range kept {
+			handed[c.it] = true
+		}
+	}
+	for _, it := range r.snapshotItems() {
+		if !handed[it] {
+			it.thaw()
+		}
+	}
+	for _, it := range excluded {
+		if !handed[it] {
+			it.thaw()
+		}
+	}
+	return result
+}
+
+// WaitHandedOver waits, at most timeout, until every bridge and pipe the last
+// handover passed on returned: what the daemon drains afterwards is only what
+// it still carries.
+func (r *Registry) WaitHandedOver(timeout time.Duration) {
+	if r == nil {
+		return
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		r.mu.Lock()
+		waiting := 0
+		for it := range r.handed {
+			if _, live := r.items[it]; live {
+				waiting++
+			}
+		}
+		r.mu.Unlock()
+		if waiting == 0 || time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func itemsOf(candidates []candidate) []item {
+	items := make([]item, 0, len(candidates))
+	for _, c := range candidates {
+		items = append(items, c.it)
+	}
+	return items
+}
+
+// inHandshake reports a bridge whose stream has no HELLO_ACK yet: it cannot be
+// handed over until it has.
+func inHandshake(it item) bool {
+	bridge, ok := it.(*Bridge)
+	return ok && bridge.session.State() == relayresume.StateHandshake
+}
+
+// collect reads out every item that stopped at a safe point, and counts the
+// others by why they are left out.
+func (r *Registry) collect(frozenAt time.Time, cut map[string]int) ([]candidate, []item) {
+	var candidates []candidate
+	var excluded []item
+	for _, it := range r.snapshotItems() {
+		leave := func(class string) {
+			excluded = append(excluded, it)
+			setExcluded(it, class)
+			cut[class]++
+		}
+		if bridge, ok := it.(*Bridge); ok && bridge.pinned() {
+			leave(bridge.cutClass())
+			continue
+		}
+		if pipe, ok := it.(*Pipe); ok && pipe.pinned() {
+			leave(CutNoSocket)
+			continue
+		}
+		quiet, ok := it.quiescent()
+		if !ok {
+			continue // ending on its own
+		}
+		if !quiet {
+			leave(CutBusy)
+			continue
+		}
+		switch current := it.(type) {
+		case *Bridge:
+			state, err := current.session.HandoverState(frozenAt)
+			if err != nil {
+				switch current.session.State() {
+				case relayresume.StateHandshake:
+					leave(CutHandshake)
+				default:
+					excluded = append(excluded, it) // ended meanwhile
+				}
+				continue
+			}
+			candidates = append(candidates, candidate{it: it, files: 1, snapshot: SnapshotItem{Kind: KindSession,
+				Labels: current.cfg.Labels, Session: relayresume.AppendSessionState(nil, state)}})
+		case *Pipe:
+			done := current.stop.ended()
+			snapshot := SnapshotItem{Kind: KindPipe, Labels: current.cfg.Labels, Done: done}
+			for d := range current.pending {
+				snapshot.Pending[d] = append([]byte(nil), current.pending[d]...)
+			}
+			candidates = append(candidates, candidate{it: it, files: 2, snapshot: snapshot})
+		}
+	}
+	// A stable order: the keeper names follow it.
+	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].files < candidates[j].files })
+	return candidates, excluded
+}
+
+// keepSockets hands each candidate's sockets to the keeper, as far as the
+// keeper can pass them on, and builds the snapshot of the ones it took.
+func keepSockets(keeper Keeper, candidates []candidate, cut map[string]int, opts Options, frozenAt time.Time) ([]candidate, *Snapshot) {
+	snapshot := &Snapshot{DaemonType: opts.DaemonType, FromVersion: opts.Version, CreatedAt: frozenAt}
+	budget := listenerkeep.MaxEnvBytes - keeper.EnvBytes([]string{stateName})
+	var kept []candidate
+	next := 1
+	for index, c := range candidates {
+		names := make([]string, c.files)
+		cost := 0
+		for i := range names {
+			names[i] = connPrefix + strconv.Itoa(next+i)
+			cost += listenerkeep.EnvEntryBytes(names[i])
+		}
+		if cost > budget {
+			cut[CutOverLimit] += len(candidates) - index
+			for _, rest := range candidates[index:] {
+				setExcluded(rest.it, CutOverLimit)
+				rest.it.thaw()
+			}
+			break
+		}
+		sockets := socketsOf(c.it)
+		ok := true
+		var inodes []uint64
+		var keptNames []string
+		for i, socket := range sockets {
+			file, inode, err := duplicate(socket)
+			if err == nil {
+				err = keeper.Keep(names[i], file)
+				_ = file.Close()
+			}
+			if err != nil {
+				ok = false
+				break
+			}
+			keptNames = append(keptNames, names[i])
+			inodes = append(inodes, inode)
+		}
+		if !ok {
+			for _, name := range keptNames {
+				_ = keeper.Drop(name)
+			}
+			cut[CutKeepFailed]++
+			setExcluded(c.it, CutKeepFailed)
+			c.it.thaw()
+			continue
+		}
+		budget -= cost
+		next += c.files
+		c.snapshot.Conns, c.snapshot.Inodes = names, inodes
+		snapshot.Items = append(snapshot.Items, c.snapshot)
+		kept = append(kept, c)
+	}
+	return kept, snapshot
+}
+
+func socketsOf(it item) []net.Conn {
+	var connections []net.Conn
+	switch current := it.(type) {
+	case *Bridge:
+		connections = []net.Conn{current.conn}
+	case *Pipe:
+		connections = current.conns[:]
+	}
+	sockets := make([]net.Conn, 0, len(connections))
+	for _, connection := range connections {
+		if socket, err := socketOf(connection); err == nil {
+			sockets = append(sockets, socket)
+		}
+	}
+	return sockets
+}
+
+// Live counts what an update now would keep and cut among the registry's
+// connections (the daemon adds what it carries outside it).
+func (r *Registry) Live(available bool) (kept int, cut map[string]int) {
+	cut = map[string]int{}
+	if r == nil {
+		return 0, cut
+	}
+	for _, it := range r.snapshotItems() {
+		class := ""
+		switch current := it.(type) {
+		case *Bridge:
+			if class = current.cutClass(); class == "" && current.session.State().Terminal() {
+				continue
+			}
+		case *Pipe:
+			if current.pinned() {
+				class = CutNoSocket
+			}
+		}
+		switch {
+		case class != "":
+			cut[class]++
+		case !available:
+			cut[CutNoHandover]++
+		default:
+			kept++
+		}
+	}
+	return kept, cut
+}
+
+// Remaining counts the registry's connections that are still carried by this
+// process, by the class an exit now cuts them under: why the handover left
+// them out, or no_handover without one.
+func (r *Registry) Remaining() map[string]int {
+	cut := map[string]int{}
+	if r == nil {
+		return cut
+	}
+	for _, it := range r.snapshotItems() {
+		switch current := it.(type) {
+		case *Bridge:
+			if current.session.Detached() {
+				continue
+			}
+			if class := current.cutClass(); class != "" {
+				cut[class]++
+				continue
+			}
+			current.stop.mu.Lock()
+			excluded := current.excluded
+			current.stop.mu.Unlock()
+			cut[firstNonEmpty(excluded, CutNoHandover)]++
+		case *Pipe:
+			if handed, _ := current.stop.verdictIs(verdictHanded); handed {
+				continue
+			}
+			current.stop.mu.Lock()
+			excluded := current.excluded
+			current.stop.mu.Unlock()
+			cut[firstNonEmpty(excluded, CutNoHandover)]++
+		}
+	}
+	return cut
+}
+
+// setExcluded records why a handover left it out.
+func setExcluded(it item, class string) {
+	switch current := it.(type) {
+	case *Bridge:
+		current.stop.mu.Lock()
+		current.excluded = class
+		current.stop.mu.Unlock()
+	case *Pipe:
+		current.stop.mu.Lock()
+		current.excluded = class
+		current.stop.mu.Unlock()
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}

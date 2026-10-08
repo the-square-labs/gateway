@@ -39,6 +39,7 @@ const (
 // the connections workloads open from here on wait in their backlog instead of reaching a process that stops
 // (link_listener_handover.go); the link connections in the middle of a request finish with the Secure Link tunnels.
 func (p *DockerPlugin) AnnounceRestart() {
+	started := time.Now()
 	if handed := p.suspendLinkListeners(); handed > 0 {
 		p.logger.Info("handing link sockets over to the next daemon process", "sockets", handed)
 	}
@@ -60,12 +61,16 @@ drain:
 			p.logger.Warn("could not record the restart announcement; the next process waits for Gateway before it registers", "error", err)
 		}
 	}
+	// An update hands the streams and node-local links to the next process: the relays answer new tunnels
+	// "restarting" from here on (live_handover.go). What it does not hand over drains as before.
+	result := p.handOverConnections()
 	links := make(chan int, 1)
 	go func() { links <- p.linkFlows.drain(restartDrainLimit) }()
 	p.proxyTunnels.drain(restartDrainLimit)
 	if busy := <-links; busy > 0 {
 		p.logger.Info("link connections still busy when the restart drain ended are cut", "connections", busy)
 	}
+	p.recordUpdateConnections(started, result)
 }
 
 // announceRestartToRelays renews every serving registration RESTARTING on

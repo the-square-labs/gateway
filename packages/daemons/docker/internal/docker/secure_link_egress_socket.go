@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/wiolett-industries/gateway/daemon-shared/handover"
 	"github.com/wiolett-industries/gateway/daemon-shared/netaccept"
 	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
 )
@@ -152,6 +152,7 @@ func (p *DockerPlugin) handleSecureLinkEgress(connection net.Conn) {
 	flow, done := p.linkFlows.track(connection)
 	defer done()
 	defer p.linkTraffic.completed(link)
+	tunnel.labels = sourceLabels(relaySourceTag{ownerKind: assignment.GetOwnerKind(), ownerID: assignment.GetOwnerId()}, entryEgress, link)
 	tunnel.bridge(p.linkTraffic.carry(link, flow))
 }
 
@@ -181,24 +182,6 @@ func (p *DockerPlugin) carryLocalEgress(connection net.Conn, link linkKey, refus
 	// Held: a replacement of the connector lets the session run until it ends or the retire limit (R3).
 	defer p.proxyTunnels.addHeld(tracked, func() { _ = target.Close() })()
 	defer p.linkTraffic.completed(link)
-	pipeConnections(p.linkTraffic.carry(link, flow), tracked)
-}
-
-// pipeConnections copies both ways until both directions ended, passing a half-close on.
-func pipeConnections(left, right net.Conn) {
-	done := make(chan struct{}, 2)
-	copyOne := func(destination, source net.Conn) {
-		_, err := io.Copy(destination, source)
-		if closer, ok := destination.(interface{ CloseWrite() error }); ok && err == nil {
-			_ = closer.CloseWrite()
-		} else {
-			_ = destination.Close()
-			_ = source.Close()
-		}
-		done <- struct{}{}
-	}
-	go copyOne(left, right)
-	go copyOne(right, left)
-	<-done
-	<-done
+	// An update hands both sockets to the next process (live_handover.go).
+	_ = p.handover.Pipe(p.linkTraffic.carry(link, flow), tracked, handover.PipeConfig{Labels: pipeLabels(link, target)})
 }

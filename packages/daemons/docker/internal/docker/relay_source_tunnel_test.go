@@ -107,7 +107,7 @@ func TestManagedDatabaseBindingLogsTheRelayRefusal(t *testing.T) {
 	plugin, output := newRelayTestPlugin(t, broker, connectAssignment("managed_database_binding", testListenerBindingA))
 	for range 3 {
 		client, daemonSide := net.Pipe()
-		plugin.openManagedDatabaseBinding(daemonSide, testListenerBindingA, 0)
+		plugin.openManagedDatabaseBinding(daemonSide, testListenerBindingA, 0, listenerPeer{}, false)
 		_ = daemonSide.Close()
 		_ = client.Close()
 	}
@@ -289,7 +289,7 @@ func TestManagedLinkTrafficIsCountedOnTheNode(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		plugin.openManagedDatabaseBinding(daemonSide, testListenerBindingA, 0)
+		plugin.openManagedDatabaseBinding(daemonSide, testListenerBindingA, 0, listenerPeer{}, false)
 	}()
 	if _, err := client.Write([]byte("ping")); err != nil {
 		t.Fatal(err)
