@@ -63,6 +63,8 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 const MEMORY_PROBE_RETRY_MS = 60_000;
 const MEMORY_PROBE_SAMPLE_LIMIT = 1_000;
 const GATEWAY_SAMPLING_MS = 60_000;
+/** A held state is observed again this long after a rule's window can be covered by it. */
+const HELD_STATE_SLACK_MS = 1_000;
 /** Resource keys of Gateway's own alerts (category gateway). */
 export const GATEWAY_RESOURCE_ID = 'gateway';
 export const GATEWAY_POSTGRES_RESOURCE_ID = 'gateway-postgres';
@@ -130,6 +132,9 @@ export class NotificationEvaluatorService {
   };
   private unsubscribers: Array<() => void> = [];
   private readonly activeHandlers = new Set<Promise<void>>();
+  /** States of sources that publish only on change, observed again when rule windows can be covered. */
+  private readonly heldStates = new Map<string, { timers: Array<ReturnType<typeof setTimeout>> }>();
+  private stopped = false;
   private readonly activeDeliveries = new Set<Promise<void>>();
   private maintenanceInterval: ReturnType<typeof setInterval> | null = null;
   private maintenanceDebounce: ReturnType<typeof setTimeout> | null = null;
@@ -182,6 +187,7 @@ export class NotificationEvaluatorService {
   }
 
   start(): void {
+    this.stopped = false;
     if (!this.eventBus) {
       logger.warn('EventBus not set, evaluator will not process events');
       return;
@@ -226,8 +232,11 @@ export class NotificationEvaluatorService {
   }
 
   async stop(): Promise<void> {
+    this.stopped = true;
     for (const unsub of this.unsubscribers) unsub();
     this.unsubscribers = [];
+    for (const { timers } of this.heldStates.values()) for (const timer of timers) clearTimeout(timer);
+    this.heldStates.clear();
     if (this.maintenanceInterval) clearInterval(this.maintenanceInterval);
     if (this.maintenanceDebounce) clearTimeout(this.maintenanceDebounce);
     this.maintenanceInterval = null;
@@ -1298,13 +1307,23 @@ export class NotificationEvaluatorService {
       const extraData = mapping.extractData?.(payload) ?? {};
 
       if (mapping.stateful) {
+        const currentState = mapping.stateful.currentState(payload);
         await this.observeStatefulEvent(
           mapping.category,
-          mapping.stateful.currentState(payload),
+          currentState,
           resource,
           extraData,
           mapping.stateful.observedPatterns
         );
+        if (mapping.stateful.holdsUntilNextEvent) {
+          await this.holdStatefulState(
+            mapping.category,
+            currentState,
+            resource,
+            extraData,
+            mapping.stateful.observedPatterns
+          );
+        }
         continue;
       }
 
@@ -1340,6 +1359,54 @@ export class NotificationEvaluatorService {
     if (channel === 'ssl.cert.changed') {
       await this.evaluateCertificateExpiry();
     }
+  }
+
+  /**
+   * A source that publishes only when its state changes (the relay supervisor) sends no samples while the state
+   * holds, so a rule's window stayed uncovered until the next change: a relay healthy again left its alert firing
+   * until the next outage began. The state is observed again when each rule's window can be covered (fire after
+   * its duration, resolve after its resolve window), unless a newer event of the source replaced it by then.
+   */
+  private async holdStatefulState(
+    category: string,
+    currentState: string,
+    resource: { type: string; id: string; name?: string },
+    context: Record<string, unknown>,
+    observedPatterns: string[]
+  ): Promise<void> {
+    const key = `${category}:${resource.type}:${resource.id}`;
+    const previous = this.heldStates.get(key);
+    for (const timer of previous?.timers ?? []) clearTimeout(timer);
+    this.heldStates.delete(key);
+    const patterns = new Set(observedPatterns);
+    const windows = new Set<number>();
+    for (const rule of await this.getEventRules()) {
+      if (rule.category !== category || !patterns.has(rule.eventPattern)) continue;
+      if (!eventSupportsThreshold(rule.category, rule.eventPattern)) continue;
+      if (rule.resourceIds?.length > 0 && !rule.resourceIds.includes(resource.id)) continue;
+      const seconds =
+        rule.eventPattern === currentState ? (rule.durationSeconds ?? 0) : (rule.resolveAfterSeconds ?? 60);
+      if (seconds > 0) windows.add(seconds * 1000);
+    }
+    if (windows.size === 0 || this.stopped) return;
+    const held = { timers: [] as Array<ReturnType<typeof setTimeout>> };
+    for (const windowMs of windows) {
+      const timer = setTimeout(() => {
+        if (this.heldStates.get(key) !== held) return;
+        const active = this.observeStatefulEvent(category, currentState, resource, context, observedPatterns)
+          .catch((error) => {
+            logger.error('Error observing a held state', {
+              key,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          })
+          .finally(() => this.activeHandlers.delete(active));
+        this.activeHandlers.add(active);
+      }, windowMs + HELD_STATE_SLACK_MS);
+      timer.unref?.();
+      held.timers.push(timer);
+    }
+    this.heldStates.set(key, held);
   }
 
   async observeStatefulEvent(

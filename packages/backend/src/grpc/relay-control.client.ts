@@ -258,20 +258,20 @@ class RelayResumePath implements AttachablePath {
     this.laneWatched = true;
     const watch = (state: grpc.connectivityState) => {
       if (this.ended) return;
-      channel.watchConnectivityState(state, Date.now() + 10 * 60_000, (error) => {
-        if (this.ended) return;
-        const next = channel.getConnectivityState(false);
-        if (!error && next !== grpc.connectivityState.READY && state === grpc.connectivityState.READY) {
-          this.emit((sink) => sink.laneLost());
-        }
-        watch(next);
-      });
+      try {
+        channel.watchConnectivityState(state, Date.now() + 10 * 60_000, (error) => {
+          if (this.ended) return;
+          const next = channel.getConnectivityState(false);
+          if (!error && next !== grpc.connectivityState.READY && state === grpc.connectivityState.READY) {
+            this.emit((sink) => sink.laneLost());
+          }
+          watch(next);
+        });
+      } catch {
+        // A closed channel (replaced by reconnectIfDown, or a candidate broker disposed of) has no state to watch.
+      }
     };
-    try {
-      watch(channel.getConnectivityState(false));
-    } catch {
-      // A closed channel has no state to watch.
-    }
+    watch(channel.getConnectivityState(false));
   }
 }
 
@@ -413,6 +413,8 @@ export class RelayControlClient {
   private identityActivationListener?: (activation: RelayIdentityActivation) => void;
   private identityReloadConvergence?: Promise<boolean>;
   private pendingIdentityCommit?: string;
+  /** Clients whose channel never left IDLE: their first call resolves the relay's address, so none is replaced. */
+  private readonly unusedClients = new WeakSet<object>();
 
   constructor(private readonly options: RelayControlClientOptions) {
     const previous = this.readPreviousIdentity();
@@ -436,17 +438,25 @@ export class RelayControlClient {
     broker: any;
     identity: ClientIdentity;
   } {
-    const relayV1 = loadRelayV1Proto();
     const material = {
       privateKey: readFileSync(identity?.privateKeyPath ?? this.options.privateKeyPath),
       certificate: readFileSync(identity?.certificatePath ?? this.options.certificatePath),
     };
+    return {
+      admin: this.createClient('RelayAdmin', material),
+      broker: this.createClient('TunnelBroker', material),
+      identity: material,
+    };
+  }
+
+  private createClient(service: 'RelayAdmin' | 'TunnelBroker', identity: ClientIdentity): any {
+    const relayV1 = loadRelayV1Proto();
     const credentials = grpc.credentials.createSsl(
       readFileSync(this.options.systemCaPath),
-      material.privateKey,
-      material.certificate
+      identity.privateKey,
+      identity.certificate
     );
-    const options = {
+    const client = new relayV1[service](this.options.target, credentials, {
       'grpc.keepalive_time_ms': 30_000,
       'grpc.keepalive_timeout_ms': 10_000,
       'grpc.keepalive_permit_without_calls': 1,
@@ -456,12 +466,47 @@ export class RelayControlClient {
       // grpc-js's default backoff of up to 120 s during which every admin call fails.
       'grpc.initial_reconnect_backoff_ms': 500,
       'grpc.max_reconnect_backoff_ms': 5_000,
-    };
-    return {
-      admin: new relayV1.RelayAdmin(this.options.target, credentials, options),
-      broker: new relayV1.TunnelBroker(this.options.target, credentials, options),
-      identity: material,
-    };
+      // Each channel owns its connection: a channel made by reconnectIfDown must not take over the failed
+      // connection (and its backoff) of the one it replaces from the shared subchannel pool.
+      'grpc.use_local_subchannel_pool': 1,
+    });
+    // Idle until its first call, which resolves the relay's address anew: nothing to replace before that.
+    const channel = channelOf(client);
+    if (channel) {
+      this.unusedClients.add(client);
+      try {
+        channel.watchConnectivityState(grpc.connectivityState.IDLE, Number.POSITIVE_INFINITY, () =>
+          this.unusedClients.delete(client)
+        );
+      } catch {
+        this.unusedClients.delete(client);
+      }
+    }
+    return client;
+  }
+
+  /**
+   * Replaces the channels to the local relay that hold no connection (failed or idle) with new ones, which resolve
+   * the relay's address and connect at once. A failed channel waits out its reconnect backoff, and both keep the
+   * address they resolved: a relay recreated with another address (Docker may give a restarted container a new one)
+   * stayed unreachable for up to the 30-s DNS re-resolution interval while daemons already used it again. A
+   * connected or connecting channel is left alone, so no call or stream on it is affected. Returns whether a channel
+   * was replaced.
+   */
+  reconnectIfDown(): boolean {
+    let replaced = false;
+    for (const service of ['RelayAdmin', 'TunnelBroker'] as const) {
+      const key = service === 'RelayAdmin' ? 'admin' : 'broker';
+      const current = this[key];
+      const state = channelOf(current)?.getConnectivityState(false);
+      if (state !== grpc.connectivityState.TRANSIENT_FAILURE && state !== grpc.connectivityState.IDLE) continue;
+      if (state === grpc.connectivityState.IDLE && this.unusedClients.has(current)) continue;
+      this[key] = this.createClient(service, this.activeIdentity);
+      // Closing a channel ends no call already running on it.
+      current.close();
+      replaced = true;
+    }
+    return replaced;
   }
 
   /**

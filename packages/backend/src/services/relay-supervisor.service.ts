@@ -103,6 +103,8 @@ export interface RelaySupervisorOptions {
   expectedVersion?: string;
   expectedProtocolMajor?: number;
   probeIntervalMs?: number;
+  /** While the local relay does not serve, how often it is checked for its return (O-2). */
+  returnProbeIntervalMs?: number;
   recoveryDelaysMs?: readonly [number, number, number];
   readinessWaitMs?: number;
   readinessPollMs?: number;
@@ -156,9 +158,14 @@ export class RelaySupervisorService implements LocalRelayOutageSignal {
   private state = defaultState();
   private failureCount = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
+  private returnTimer: ReturnType<typeof setInterval> | null = null;
   private probing = false;
+  /** The return check of watchReturn in flight. */
+  private returnChecking = false;
   private recoveryCycle: Promise<void> | null = null;
   private manualRetryStarting = false;
+  /** The persisted state was loaded (restore). */
+  private restored = false;
   /** The on-demand check of confirmLocalRelay in flight. */
   private confirming: Promise<void> | null = null;
   private stopping = false;
@@ -166,6 +173,7 @@ export class RelaySupervisorService implements LocalRelayOutageSignal {
   private stopped: Promise<void>;
   private signalStopped: () => void = () => undefined;
   private readonly probeIntervalMs: number;
+  private readonly returnProbeIntervalMs: number;
   private readonly recoveryDelaysMs: readonly [number, number, number];
   private readonly readinessWaitMs: number;
   private readonly readinessPollMs: number;
@@ -183,7 +191,9 @@ export class RelaySupervisorService implements LocalRelayOutageSignal {
   constructor(
     private readonly db: DrizzleClient,
     private readonly cache: Pick<CacheService, 'get' | 'set'>,
-    private readonly relayClient: Pick<RelayControlClient, 'getHealth'> | null,
+    private readonly relayClient:
+      | (Pick<RelayControlClient, 'getHealth'> & Partial<Pick<RelayControlClient, 'reconnectIfDown'>>)
+      | null,
     private readonly recovery: RelayDockerRecoveryService | null,
     private readonly settings: GeneralSettingsService,
     private readonly events: EventBusService,
@@ -191,6 +201,7 @@ export class RelaySupervisorService implements LocalRelayOutageSignal {
     private readonly options: RelaySupervisorOptions
   ) {
     this.probeIntervalMs = options.probeIntervalMs ?? 5_000;
+    this.returnProbeIntervalMs = options.returnProbeIntervalMs ?? 1_000;
     this.recoveryDelaysMs = options.recoveryDelaysMs ?? [0, 10_000, 30_000];
     this.readinessWaitMs = options.readinessWaitMs ?? 20_000;
     this.readinessPollMs = options.readinessPollMs ?? 1_000;
@@ -204,30 +215,48 @@ export class RelaySupervisorService implements LocalRelayOutageSignal {
     this.availabilityLease = sink;
   }
 
-  async start(): Promise<void> {
-    if (!this.options.required || !this.relayClient) return;
-    this.stopping = false;
-    this.stopped = this.armStopSignal();
+  /**
+   * Loads the state the previous process persisted, once. Called before the API answers and before nodes connect: a
+   * Gateway started during a local relay outage shows and handles that outage from its first answer, rather than
+   * reading as a relay never seen (unavailable, migration pending, no outage) until its relay startup ended (O-5).
+   */
+  async restore(): Promise<void> {
+    if (this.restored || !this.options.required || !this.relayClient) return;
+    this.restored = true;
     const persisted = await this.cache.get<RelaySupervisorState>(CONTROL_STATE_KEY).catch(() => null);
     if (persisted?.maxAttempts === MAX_ATTEMPTS) {
       // Maintenance belongs to the process that opened it (a relay update). Restored after a
       // restart it would switch supervision off for good, since nothing else ends it.
       this.state = persisted.state === 'maintenance' ? { ...persisted, state: 'migration_pending' } : persisted;
     }
+  }
+
+  async start(): Promise<void> {
+    if (!this.options.required || !this.relayClient) return;
+    this.stopping = false;
+    this.stopped = this.armStopSignal();
+    await this.restore();
     const resumeRecovery = this.state.state === 'recovering';
     await this.probeNow();
+    // The state is published on changes only, and a relay found as it was persisted changed nothing: the alert
+    // evaluator still gets the current state once, so an alert left firing by the previous process can resolve.
+    this.publish();
     if (resumeRecovery && this.state.state === 'recovering') this.startRecoveryCycle(false);
     this.timer = setInterval(() => void this.probeNow(), this.probeIntervalMs);
     this.timer.unref();
+    this.returnTimer = setInterval(() => void this.watchReturn(), this.returnProbeIntervalMs);
+    this.returnTimer.unref();
   }
 
   async stop(): Promise<void> {
     this.stopping = true;
     this.signalStopped();
     if (this.timer) clearInterval(this.timer);
+    if (this.returnTimer) clearInterval(this.returnTimer);
     this.timer = null;
+    this.returnTimer = null;
     await this.recoveryCycle;
-    while (this.probing) await this.sleep(25);
+    while (this.probing || this.returnChecking) await this.sleep(25);
   }
 
   getSnapshot(admin: boolean) {
@@ -501,6 +530,32 @@ export class RelaySupervisorService implements LocalRelayOutageSignal {
     return confirming;
   }
 
+  /**
+   * While the local relay does not serve, checks every second whether it is back, on a fresh connection: the regular
+   * probe runs every 5 s, and the channel it uses waits out its reconnect backoff and keeps the address it resolved,
+   * so a relay that came back (with a new address, as Docker may give it) was seen 9-18 s late (O-2). A relay found
+   * back gets a full probe at once, which ends the outage.
+   */
+  async watchReturn(): Promise<void> {
+    const outage = this.state.outage;
+    if (!outage || outage.servingAgainAt !== null || !this.relayClient) return;
+    if (this.stopping || this.inMaintenance() || this.probing || this.returnChecking) return;
+    this.returnChecking = true;
+    try {
+      this.relayClient.reconnectIfDown?.();
+      // Recovery polls the relay every second itself and records how it ended; it only gets fresh channels here.
+      if (this.recoveryCycle) return;
+      const result = await this.checkRelay();
+      if (result.healthy && !this.stopping && !this.inMaintenance()) await this.probeNow();
+    } catch (error) {
+      logger.debug('Local relay return check failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      this.returnChecking = false;
+    }
+  }
+
   private describeOutage() {
     const outage = this.latestOutage();
     const phase = localRelayOutagePhase(outage, this.now());
@@ -530,9 +585,25 @@ export class RelaySupervisorService implements LocalRelayOutageSignal {
     const change = this.outageChange(serving);
     if (change.outage === undefined) return;
     this.state = { ...this.state, ...change };
+    if (serving) this.reconnectChannels();
     await this.persistAndPublish();
     if (serving) logger.info('Gateway relay serves again; nodes and relays get a reconnect grace');
     else logger.warn('Gateway relay does not serve; node and relay control streams through it are reconnecting');
+  }
+
+  /**
+   * The relay serves again: Gateway's other channels to it (tunnels, policy, link reconciliation) reconnect now
+   * rather than after their reconnect backoff, during which they failed with UNAVAILABLE for up to 24 s while the
+   * nodes were already back (F-2).
+   */
+  private reconnectChannels(): void {
+    try {
+      if (this.relayClient?.reconnectIfDown?.()) logger.info('Gateway reconnected its channels to the local relay');
+    } catch (error) {
+      logger.warn('Gateway channels to the local relay were not reconnected', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   setExpectedArtifact(imageRef: string, buildVersion: string, protocolMajor: number): void {
@@ -901,7 +972,11 @@ export class RelaySupervisorService implements LocalRelayOutageSignal {
   }
 
   private async transition(update: Partial<RelaySupervisorState>): Promise<void> {
-    if (update.state === 'healthy') update = { ...update, ...this.outageChange(true) };
+    if (update.state === 'healthy') {
+      const change = this.outageChange(true);
+      update = { ...update, ...change };
+      if (change.outage) this.reconnectChannels();
+    }
     const changed = Object.entries(update).some(
       ([key, value]) => this.state[key as keyof RelaySupervisorState] !== value
     );

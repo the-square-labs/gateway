@@ -1970,6 +1970,8 @@ export async function initializeContainer(): Promise<void> {
     });
   });
   relayPoolService?.setLocalRelayOutage(relaySupervisor, nodeRegistry);
+  // Gateway's own relayed streams avoid the local relay while it does not serve, and return to it once it is stable.
+  relayPolicyService?.setLocalRelayOutage(relaySupervisor);
 
   // Update service
   const updateService = new UpdateService(

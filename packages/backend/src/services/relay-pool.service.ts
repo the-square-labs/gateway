@@ -305,6 +305,10 @@ export class RelayPoolService {
    */
   private async dataPlaneFailures(instances: RelayInstanceRow[]): Promise<Set<string>> {
     if (!this.topology?.relayDataPlaneFailures) return new Set();
+    // While the local relay does not serve, and for the reconnect grace after it, the nodes' reports stop or come from
+    // reconnecting daemons: they say nothing about a remote relay's data plane. The judgement holds as it was, so a
+    // relay whose data plane fails is not placed again mid-outage, nor one judged failing because of the outage (O-4).
+    if (localRelayOutagePhase(this.localRelayOutage?.latestOutage() ?? null)) return new Set(this.dataPlaneFailing);
     let failing: Set<string>;
     try {
       failing = await this.topology.relayDataPlaneFailures();

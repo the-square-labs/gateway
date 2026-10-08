@@ -1241,6 +1241,21 @@ describe('RelayPolicyService snapshots', () => {
       vi.advanceTimersByTime(2_000);
       health({ state: 'critical', reason: 'policy_snapshot_required' });
       expect(sync).toHaveBeenCalledTimes(2);
+      // Serving again after an outage: grants went out meanwhile without its acknowledgement (F-2).
+      vi.advanceTimersByTime(2_000);
+      health({ state: 'healthy', reason: null });
+      expect(sync).toHaveBeenCalledTimes(3);
+      // Pool and relay runtime events say nothing of the local relay.
+      vi.advanceTimersByTime(2_000);
+      health({ poolId: 'system', action: 'instances_offline' });
+      expect(sync).toHaveBeenCalledTimes(3);
+      // The publish that opens an outage still reads healthy: nothing goes to a relay that does not serve.
+      service.setLocalRelayOutage({
+        latestOutage: () => ({ since: Date.now(), servingAgainAt: null, planned: false }),
+      });
+      vi.advanceTimersByTime(2_000);
+      health({ state: 'healthy', reason: null });
+      expect(sync).toHaveBeenCalledTimes(3);
     } finally {
       vi.useRealTimers();
     }

@@ -173,6 +173,9 @@ async function main() {
 
     const statusPageService = container.resolve(StatusPageService);
     await statusPageService.primePublicHost();
+    // The local relay's state and an outage the previous process saw, before the API or a node reads them: started
+    // during an outage, Gateway reports and handles it from its first answer, not after the relay startup.
+    await container.resolve(RelaySupervisorService).restore();
 
     // Create the Hono app
     const { app, injectWebSocket, wss } = createApp();

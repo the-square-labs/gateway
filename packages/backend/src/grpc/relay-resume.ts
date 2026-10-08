@@ -1593,7 +1593,7 @@ export interface OpenedResumePath {
  */
 export type ResumeDialer = (avoidRelayId: string | null) => Promise<OpenedResumePath>;
 
-export type MigrationTrigger = 'drain' | 'goaway' | 'path_failure' | 'target_hint';
+export type MigrationTrigger = 'drain' | 'goaway' | 'path_failure' | 'target_hint' | 'return';
 export type MigrationResult = 'ok' | 'no_relay' | 'rejected' | 'resume_rejected' | 'timeout';
 
 export interface RelayResumeStatsSnapshot {
@@ -1634,6 +1634,11 @@ export class RelayResumeRegistry {
 
   remove(session: ResumableRelayDuplex): void {
     this.sessions.delete(session);
+  }
+
+  /** The live sessions, for the return to the nearest relay (gateway-relay-paths). */
+  liveSessions(): ResumableRelayDuplex[] {
+    return [...this.sessions];
   }
 
   /** A legacy (raw) stream through `relayId` opened or closed. */
@@ -1779,12 +1784,15 @@ export class ResumableRelayDuplex extends Duplex {
   private suspendedAt = -1;
   private closedError: ResumeSessionError | undefined;
   private sessionClosed = false;
+  /** When the stream opened or last moved to another path: a stream that just moved stays a while. */
+  private movedAt: number;
 
   private constructor(options: ResumableRelayDuplexOptions) {
     super({ allowHalfOpen: true });
     this.options = options;
     this.registry = options.registry ?? relayResumeRegistry;
     this.timers = options.timers ?? this.registry.timers;
+    this.movedAt = this.timers.now();
     this.session = new ResumeSession({
       role: 'source',
       routeId: options.routeId,
@@ -1852,6 +1860,16 @@ export class ResumableRelayDuplex extends Duplex {
 
   get relayId(): string | null {
     return this.session.currentRelayId;
+  }
+  get routeId(): string {
+    return this.options.routeId;
+  }
+  /** Open on a path and not moving: a planned move may start. */
+  get movable(): boolean {
+    return !this.sessionClosed && !this.migration && this.session.isOpen && !this.session.isSuspended;
+  }
+  get lastMoveAt(): number {
+    return this.movedAt;
   }
   get suspended(): boolean {
     return this.session.isSuspended;
@@ -1996,7 +2014,10 @@ export class ResumableRelayDuplex extends Duplex {
     if (opened.keyId && opened.key) this.session.setKey(opened.keyId, opened.key);
     this.attach(opened.path);
     const result = await this.session.resume(opened.path, this.options.resumeAckTimeoutMs ?? RESUME_ACK_TIMEOUT_MS);
-    if (result === 'resumed') this.lastRelayId = opened.path.relayId;
+    if (result === 'resumed') {
+      this.lastRelayId = opened.path.relayId;
+      this.movedAt = this.timers.now();
+    }
     return result;
   }
 

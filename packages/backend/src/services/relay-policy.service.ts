@@ -25,7 +25,7 @@ import {
   type RelayPolicySnapshot,
 } from '@/grpc/relay-control.client.js';
 import { encodeRelayV1Message } from '@/grpc/relay-proto.js';
-import { type AttachablePath, ResumeSessionError } from '@/grpc/relay-resume.js';
+import { type AttachablePath, ResumeSessionError, relayResumeRegistry } from '@/grpc/relay-resume.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { leaseLaneNodeIds } from '@/modules/docker/availability/lease/lease-relay-lanes.js';
@@ -37,6 +37,8 @@ import {
 import { isNodeNotConnectedError } from '@/services/node-connection-errors.js';
 import type { CryptoService } from './crypto.service.js';
 import type { EventBusService } from './event-bus.service.js';
+import { GatewayRelayPaths } from './gateway-relay-paths.js';
+import type { LocalRelayOutageSignal } from './local-relay-outage.js';
 import {
   type ManagedLinkConnections,
   sumManagedLinkReports,
@@ -480,6 +482,11 @@ export class RelayPolicyService {
     endpoints: Array<{ id: string; ownerKind: string; ownerId: string }>,
     routes: Array<{ id: string; ownerKind: string; ownerId: string }>
   ) => Promise<{ endpoints: Map<string, string>; routes: Map<string, string> }>;
+  /** How Gateway's own relayed streams choose relays and return to the nearest (O-1); made on first use. */
+  private gatewayRelayPaths?: GatewayRelayPaths;
+  private gatewayLocalRelay?: Pick<LocalRelayOutageSignal, 'latestOutage'>;
+  /** The client certificate each Gateway route was opened with, to look its candidates up again. */
+  private readonly gatewayRouteFingerprints = new Map<string, string>();
   /** What the nodes running managed links' workloads report about the links' connections. */
   private managedLinkReports?: Pick<NodeRegistryService, 'managedLinkReport' | 'requestHealthReport'> &
     Partial<Pick<NodeRegistryService, 'relayStreamReports'>>;
@@ -505,6 +512,30 @@ export class RelayPolicyService {
       syncNodeGrants: (nodeId) => this.syncNodeGrants(nodeId, { skipResumeEnable: true }),
     });
     this.grantIssuer.setResumeSecretSource(() => this.streamResume.secret());
+  }
+
+  /** The local relay's outages (its supervisor): Gateway's own streams leave it meanwhile and return once it is stable. */
+  setLocalRelayOutage(signal: Pick<LocalRelayOutageSignal, 'latestOutage'>): void {
+    this.gatewayLocalRelay = signal;
+    this.gatewayRelayPaths?.setLocalRelay(signal);
+  }
+
+  private gatewayPaths(): GatewayRelayPaths {
+    if (!this.gatewayRelayPaths) {
+      this.gatewayRelayPaths = new GatewayRelayPaths(
+        this.relay.resumeRegistry ?? relayResumeRegistry,
+        async (routeId) => {
+          const fingerprint = this.gatewayRouteFingerprints.get(routeId);
+          if (!fingerprint) return [];
+          const assignment = await this.withAcknowledgedPolicy(() =>
+            this.grantIssuer.issueGatewayConnectAssignment(routeId, fingerprint)
+          );
+          return assignment.candidates;
+        }
+      );
+      if (this.gatewayLocalRelay) this.gatewayRelayPaths.setLocalRelay(this.gatewayLocalRelay);
+    }
+    return this.gatewayRelayPaths;
   }
 
   setManagedLinkReports(
@@ -653,8 +684,12 @@ export class RelayPolicyService {
     this.events = events;
     events.subscribe('system.relay.health.changed', (payload) => {
       // The local relay answers but holds no policy (it restarted with a fresh relay.db): deliver it now instead of
-      // at the next periodic sync, so endpoint registrations are not refused for up to a minute (N-7).
-      if ((payload as { reason?: unknown } | null)?.reason !== 'policy_snapshot_required') return;
+      // at the next periodic sync, so endpoint registrations are not refused for up to a minute (N-7). The same when
+      // it serves again after an outage: grants issued meanwhile went out without its acknowledgement.
+      const event = payload as { reason?: unknown; state?: unknown } | null;
+      const outage = this.gatewayLocalRelay?.latestOutage() ?? null;
+      const servingAgain = event?.state === 'healthy' && (!outage || outage.servingAgainAt !== null);
+      if (event?.reason !== 'policy_snapshot_required' && !servingAgain) return;
       this.syncLocalPolicyAfterLoss();
     });
     events.subscribe('system.config.changed', (payload) => {
@@ -2186,6 +2221,7 @@ export class RelayPolicyService {
    * assignment for every new path. A target that turns out not to be resume-aware latches the route raw for a while.
    */
   private async openGatewayRouteTunnel(routeId: string, appCertificateFingerprint: string): Promise<Duplex> {
+    this.gatewayRouteFingerprints.set(routeId, appCertificateFingerprint);
     const issue = () =>
       this.withAcknowledgedPolicy(() =>
         this.grantIssuer.issueGatewayConnectAssignment(routeId, appCertificateFingerprint)
@@ -2197,7 +2233,7 @@ export class RelayPolicyService {
       const dial = async (avoidRelayId: string | null) => {
         const current = first ?? (await issue());
         first = null;
-        const path = await this.openGatewayResumePath(current, avoidRelayId);
+        const path = await this.openGatewayResumePath(routeId, current, avoidRelayId);
         const key = current.streamResume;
         return key ? { path, keyId: key.keyId, key: Buffer.from(key.key) } : { path };
       };
@@ -2216,7 +2252,11 @@ export class RelayPolicyService {
         logger.warn('Gateway relay route target is not resume-aware; using raw streams', { routeId });
       }
     }
-    const activeCandidates = assignment.candidates.filter(({ assignmentState }) => assignmentState === 'active');
+    const activeCandidates = this.gatewayPaths().order(
+      routeId,
+      assignment.candidates.filter(({ assignmentState }) => assignmentState === 'active'),
+      null
+    );
     let lastError: unknown;
     for (const candidate of activeCandidates) {
       try {
@@ -2237,20 +2277,20 @@ export class RelayPolicyService {
   /**
    * One relay path of a resumable Gateway stream: active candidates first, then staging ones (registered on both
    * ends: when the only active relay drains or was force-disconnected the stream moves there instead of being cut),
-   * the relay it leaves last.
+   * the relay it leaves last; among them reachable relays first, then by role and measured distance (O-1).
    */
   private async openGatewayResumePath(
+    routeId: string,
     assignment: Awaited<ReturnType<RelayGrantIssuerService['issueGatewayConnectAssignment']>>,
     avoidRelayId: string | null
   ): Promise<AttachablePath> {
-    const rank = (candidate: { assignmentState: string; relayInstanceId: string }) =>
-      (avoidRelayId && candidate.relayInstanceId === avoidRelayId ? 2 : 0) +
-      (candidate.assignmentState === 'staging' ? 1 : 0);
-    const candidates = assignment.candidates
-      .filter(({ assignmentState }) => assignmentState === 'active' || assignmentState === 'staging')
-      .map((candidate, index) => ({ candidate, index }))
-      .sort((a, b) => rank(a.candidate) - rank(b.candidate) || a.index - b.index)
-      .map(({ candidate }) => candidate);
+    const candidates = this.gatewayPaths().order(
+      routeId,
+      assignment.candidates.filter(
+        ({ assignmentState }) => assignmentState === 'active' || assignmentState === 'staging'
+      ),
+      avoidRelayId
+    );
     // A pre-pool assignment has only the local relay: a recovering stream comes back to it.
     if (!candidates.length) return this.relay.openLocalResumePath(assignment.grant, LEGACY_RELAY_PATH_ID);
     let lastError: unknown;

@@ -11,6 +11,12 @@ export interface EventMapping {
   stateful?: {
     currentState: (payload: any) => string;
     observedPatterns: string[];
+    /**
+     * The source publishes only when its state changes, so the state holds until its next event: the evaluator
+     * observes it again once each rule's window can be covered. Without that, a rule's window (resolve after 60 s,
+     * fire after a duration) stayed uncovered until the next change, and the alert resolved only then.
+     */
+    holdsUntilNextEvent?: boolean;
   };
 }
 
@@ -314,6 +320,8 @@ export const EVENT_BUS_MAPPINGS: Record<string, EventMapping[]> = {
               ? 'relay.recovering'
               : 'relay.healthy',
         observedPatterns: ['relay.recovering', 'relay.unavailable'],
+        // The supervisor publishes on state changes only: a relay healthy again sends one sample.
+        holdsUntilNextEvent: true,
       },
     },
     {
