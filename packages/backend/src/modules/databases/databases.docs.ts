@@ -245,7 +245,7 @@ export const getManagedDatabaseBindingRuntimeRoute = appRoute({
   tags: ['Databases'],
   summary: 'Get managed database binding runtime',
   description:
-    "The link's Relay counters and its connections as the node running the workload reports them: activeStreams are the link's open connections (it carries up to 64), openedTotal and the byte counters what it carried through that node, throttledTotal counts the connections refused at that limit by the node or a relay. connections is null while that node's daemon does not report links. Needs databases:view and view access to the linked workload.",
+    "The link's Relay counters and its connections as the node running the workload reports them: activeStreams are the link's open connections (as many as the database accepts), openedTotal and the byte counters what it carried through that node, throttledTotal counts the connections refused at that limit by the node or a relay. connections is null while that node's daemon does not report links. The Relay counters sum every relay that holds the link's routes; relayCountersComplete is false when one did not answer, and those counters are then partial. Needs databases:view and view access to the linked workload.",
   request: { params: IdParamSchema.extend({ bindingId: z.string().uuid() }) },
   responses: okJson(UnknownDataResponseSchema),
 });

@@ -46,10 +46,19 @@ function rollingRate(history: RuntimeSample[], pick: (sample: RuntimeSample) => 
   if (history.length < 2) return history.length ? [0] : [];
   return history.slice(1).map((sample, index) => {
     const previous = history[index];
+    // A relay that stops or starts answering changes the counters' coverage, not what the route carried.
+    if (relayUnknown(sample.runtime) !== relayUnknown(previous.runtime)) return 0;
     const elapsedSeconds = Math.max(0.001, (sample.at - previous.at) / 1000);
     return Math.max(0, pick(sample) - pick(previous)) / elapsedSeconds;
   });
 }
+
+/** A relay that holds the route did not answer: every relay counter of the route is unknown. */
+function relayUnknown(runtime: RuntimeSample["runtime"]) {
+  return runtime?.relayCountersComplete === false;
+}
+
+const RELAY_UNKNOWN = "A relay did not answer";
 
 function latest(values: number[]) {
   return values.at(-1) ?? 0;
@@ -70,6 +79,7 @@ function AdditionalLinkRuntimeSection({ link }: { link: ProxyAdditionalSecureLin
     traffic: null,
   }));
   const runtime = link.runtime;
+  const unknown = relayUnknown(runtime);
   const activeHistory = history.map((sample) => counter(sample.runtime?.activeStreams));
   const openedRateHistory = rollingRate(history, (sample) => counter(sample.runtime?.openedTotal));
   const sourceToTargetRateHistory = rollingRate(history, (sample) =>
@@ -119,77 +129,99 @@ function AdditionalLinkRuntimeSection({ link }: { link: ProxyAdditionalSecureLin
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <StatCard
               label="Active streams"
-              value={counter(runtime.activeStreams).toLocaleString()}
+              value={unknown ? "—" : counter(runtime.activeStreams).toLocaleString()}
               icon={Activity}
               history={activeHistory}
               color="#3b82f6"
-              subtitle="Current streams on this binding"
+              subtitle={unknown ? RELAY_UNKNOWN : "Current streams on this binding"}
             />
             <StatCard
               label="New streams"
-              value={`${latest(openedRateHistory).toFixed(1)}/s`}
+              value={unknown ? "—" : `${latest(openedRateHistory).toFixed(1)}/s`}
               icon={Zap}
               history={openedRateHistory}
               color="#06b6d4"
-              subtitle={`${counter(runtime.openedTotal).toLocaleString()} opened since Relay start`}
+              subtitle={
+                unknown
+                  ? RELAY_UNKNOWN
+                  : `${counter(runtime.openedTotal).toLocaleString()} opened since Relay start`
+              }
             />
             <StatCard
               label="Source → target"
-              value={`${formatBytes(latest(sourceToTargetRateHistory))}/s`}
+              value={unknown ? "—" : `${formatBytes(latest(sourceToTargetRateHistory))}/s`}
               icon={ArrowUpFromLine}
               history={sourceToTargetRateHistory}
               color="#8b5cf6"
-              subtitle={`${formatBytes(counter(runtime.sourceToTargetBytes))} transferred`}
+              subtitle={
+                unknown
+                  ? RELAY_UNKNOWN
+                  : `${formatBytes(counter(runtime.sourceToTargetBytes))} transferred`
+              }
             />
             <StatCard
               label="Target → source"
-              value={`${formatBytes(latest(targetToSourceRateHistory))}/s`}
+              value={unknown ? "—" : `${formatBytes(latest(targetToSourceRateHistory))}/s`}
               icon={ArrowDownToLine}
               history={targetToSourceRateHistory}
               color="#ec4899"
-              subtitle={`${formatBytes(counter(runtime.targetToSourceBytes))} transferred`}
+              subtitle={
+                unknown
+                  ? RELAY_UNKNOWN
+                  : `${formatBytes(counter(runtime.targetToSourceBytes))} transferred`
+              }
             />
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <StatCard
               label="Open success"
-              value={`${successPercent.toFixed(1)}%`}
+              value={unknown ? "—" : `${successPercent.toFixed(1)}%`}
               icon={ShieldCheck}
               history={successHistory}
               sparklineMax={100}
-              progress={{
-                percent: successPercent,
-                color: successPercent >= 99 ? "#22c55e" : "#f59e0b",
-              }}
+              progress={
+                unknown
+                  ? undefined
+                  : {
+                      percent: successPercent,
+                      color: successPercent >= 99 ? "#22c55e" : "#f59e0b",
+                    }
+              }
               color="#22c55e"
-              subtitle={`${Math.max(0, completed - failed).toLocaleString()} successful completions`}
+              subtitle={
+                unknown
+                  ? RELAY_UNKNOWN
+                  : `${Math.max(0, completed - failed).toLocaleString()} successful completions`
+              }
             />
             <StatCard
               label="Setup p95"
-              value={duration(counter(runtime.setupLatencyP95Ms))}
+              value={unknown ? "—" : duration(counter(runtime.setupLatencyP95Ms))}
               icon={Timer}
               history={history.map((sample) => counter(sample.runtime?.setupLatencyP95Ms))}
               color="#f59e0b"
-              subtitle="OpenTunnel to both peers ready"
+              subtitle={unknown ? RELAY_UNKNOWN : "OpenTunnel to both peers ready"}
             />
             <StatCard
               label="Average duration"
-              value={duration(counter(runtime.averageDurationMs))}
+              value={unknown ? "—" : duration(counter(runtime.averageDurationMs))}
               icon={Clock3}
               history={history.map((sample) => counter(sample.runtime?.averageDurationMs))}
               color="#a855f7"
-              subtitle={`${completed.toLocaleString()} completed streams`}
+              subtitle={unknown ? RELAY_UNKNOWN : `${completed.toLocaleString()} completed streams`}
             />
             <StatCard
               label="Admission rejects"
-              value={counter(runtime.throttledTotal).toLocaleString()}
+              value={unknown ? "—" : counter(runtime.throttledTotal).toLocaleString()}
               icon={Ban}
               history={throttledRateHistory}
               color="#ef4444"
               subtitle={
-                latest(throttledRateHistory) > 0
-                  ? `${latest(throttledRateHistory).toFixed(1)}/s currently`
-                  : `${latest(failedRateHistory).toFixed(1)}/s tunnel failures`
+                unknown
+                  ? RELAY_UNKNOWN
+                  : latest(throttledRateHistory) > 0
+                    ? `${latest(throttledRateHistory).toFixed(1)}/s currently`
+                    : `${latest(failedRateHistory).toFixed(1)}/s tunnel failures`
               }
             />
           </div>
@@ -266,6 +298,7 @@ export function SecureLinkTab({ hostId }: { hostId: string }) {
   if (!link) return null;
 
   const runtime = link.runtime;
+  const unknown = relayUnknown(runtime);
   const traffic = link.traffic;
   const additionalLinks = link.additionalLinks ?? [];
   const activeHistory = history.map((sample) => counter(sample.runtime?.activeStreams));
@@ -348,35 +381,47 @@ export function SecureLinkTab({ hostId }: { hostId: string }) {
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard
             label="Active streams"
-            value={String(runtime?.activeStreams ?? 0)}
+            value={unknown ? "—" : String(runtime?.activeStreams ?? 0)}
             icon={Activity}
             history={activeHistory}
             color="#3b82f6"
-            subtitle="Current streams on this route"
+            subtitle={unknown ? RELAY_UNKNOWN : "Current streams on this route"}
           />
           <StatCard
             label="New streams"
-            value={`${latest(openedRateHistory).toFixed(1)}/s`}
+            value={unknown ? "—" : `${latest(openedRateHistory).toFixed(1)}/s`}
             icon={Zap}
             history={openedRateHistory}
             color="#06b6d4"
-            subtitle={`${counter(runtime?.openedTotal).toLocaleString()} opened since Relay start`}
+            subtitle={
+              unknown
+                ? RELAY_UNKNOWN
+                : `${counter(runtime?.openedTotal).toLocaleString()} opened since Relay start`
+            }
           />
           <StatCard
             label="Source → target"
-            value={`${formatBytes(latest(sourceToTargetRateHistory))}/s`}
+            value={unknown ? "—" : `${formatBytes(latest(sourceToTargetRateHistory))}/s`}
             icon={ArrowUpFromLine}
             history={sourceToTargetRateHistory}
             color="#8b5cf6"
-            subtitle={`${formatBytes(counter(runtime?.sourceToTargetBytes))} transferred`}
+            subtitle={
+              unknown
+                ? RELAY_UNKNOWN
+                : `${formatBytes(counter(runtime?.sourceToTargetBytes))} transferred`
+            }
           />
           <StatCard
             label="Target → source"
-            value={`${formatBytes(latest(targetToSourceRateHistory))}/s`}
+            value={unknown ? "—" : `${formatBytes(latest(targetToSourceRateHistory))}/s`}
             icon={ArrowDownToLine}
             history={targetToSourceRateHistory}
             color="#ec4899"
-            subtitle={`${formatBytes(counter(runtime?.targetToSourceBytes))} transferred`}
+            subtitle={
+              unknown
+                ? RELAY_UNKNOWN
+                : `${formatBytes(counter(runtime?.targetToSourceBytes))} transferred`
+            }
           />
         </div>
       </section>
@@ -386,43 +431,53 @@ export function SecureLinkTab({ hostId }: { hostId: string }) {
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <StatCard
             label="Open success"
-            value={`${successPercent.toFixed(1)}%`}
+            value={unknown ? "—" : `${successPercent.toFixed(1)}%`}
             icon={ShieldCheck}
             history={successHistory}
             sparklineMax={100}
-            progress={{
-              percent: successPercent,
-              color: successPercent >= 99 ? "#22c55e" : "#f59e0b",
-            }}
+            progress={
+              unknown
+                ? undefined
+                : {
+                    percent: successPercent,
+                    color: successPercent >= 99 ? "#22c55e" : "#f59e0b",
+                  }
+            }
             color="#22c55e"
-            subtitle={`${Math.max(0, completed - failed).toLocaleString()} successful completions`}
+            subtitle={
+              unknown
+                ? RELAY_UNKNOWN
+                : `${Math.max(0, completed - failed).toLocaleString()} successful completions`
+            }
           />
           <StatCard
             label="Setup p95"
-            value={duration(runtime?.setupLatencyP95Ms ?? 0)}
+            value={unknown ? "—" : duration(runtime?.setupLatencyP95Ms ?? 0)}
             icon={Timer}
             history={history.map((sample) => counter(sample.runtime?.setupLatencyP95Ms))}
             color="#f59e0b"
-            subtitle="OpenTunnel to both peers ready"
+            subtitle={unknown ? RELAY_UNKNOWN : "OpenTunnel to both peers ready"}
           />
           <StatCard
             label="Average duration"
-            value={duration(runtime?.averageDurationMs ?? 0)}
+            value={unknown ? "—" : duration(runtime?.averageDurationMs ?? 0)}
             icon={Clock3}
             history={history.map((sample) => counter(sample.runtime?.averageDurationMs))}
             color="#a855f7"
-            subtitle={`${completed.toLocaleString()} completed streams`}
+            subtitle={unknown ? RELAY_UNKNOWN : `${completed.toLocaleString()} completed streams`}
           />
           <StatCard
             label="Admission rejects"
-            value={counter(runtime?.throttledTotal).toLocaleString()}
+            value={unknown ? "—" : counter(runtime?.throttledTotal).toLocaleString()}
             icon={Ban}
             history={throttledRateHistory}
             color="#ef4444"
             subtitle={
-              latest(throttledRateHistory) > 0
-                ? `${latest(throttledRateHistory).toFixed(1)}/s currently`
-                : `${latest(failedRateHistory).toFixed(1)}/s tunnel failures`
+              unknown
+                ? RELAY_UNKNOWN
+                : latest(throttledRateHistory) > 0
+                  ? `${latest(throttledRateHistory).toFixed(1)}/s currently`
+                  : `${latest(failedRateHistory).toFixed(1)}/s tunnel failures`
             }
           />
         </div>

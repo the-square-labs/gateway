@@ -176,6 +176,11 @@ export interface ManagedDatabaseBindingRuntime {
   metricsSince: string;
   /** Null while the node running the workload does not report its links (an older daemon). */
   connections?: ManagedLinkConnections | null;
+  /**
+   * False when a relay that holds the link's routes did not answer: failures, setup p95, duration and admission
+   * rejects are unknown, and so are the stream and byte counters without `connections`.
+   */
+  relayCountersComplete?: boolean;
 }
 
 export interface ManagedDatabaseBindingRuntimeStatus {

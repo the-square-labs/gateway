@@ -157,6 +157,8 @@ export interface ProxySecureLinkStatus {
     averageDurationMs: number;
     lastActivityAt: string | null;
     metricsSince: string;
+    /** False when a relay that holds the route did not answer: its relay counters are unknown. */
+    relayCountersComplete?: boolean;
   } | null;
   traffic: {
     hostId: string;

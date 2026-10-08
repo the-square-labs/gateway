@@ -360,6 +360,7 @@ export interface GatewayCommand {
   setRelayDrain?: SetRelayDrainCommand;
   updateRelayWorker?: UpdateRelayWorkerCommand;
   renewRelayIdentity?: RenewRelayIdentityCommand;
+  getRelayRouteRuntime?: GetRelayRouteRuntimeCommand;
   syncAvailabilityLease?: SyncAvailabilityLeaseCommand;
   availabilityLeaseHandoff?: AvailabilityLeaseHandoffCommand;
   syncDockerRegistryBindings?: SyncDockerRegistryBindingsCommand;
@@ -463,6 +464,11 @@ export interface RenewRelayIdentityCommand {
   serverKey: Buffer;
   serverIdentity: string;
   retainServerFingerprint: string;
+}
+
+/** Relay supervisors with relay_route_runtime_v1; the answer is JSON in CommandResult.detail. */
+export interface GetRelayRouteRuntimeCommand {
+  routeIds: string[];
 }
 
 export interface SyncDockerRegistryBindingsCommand {

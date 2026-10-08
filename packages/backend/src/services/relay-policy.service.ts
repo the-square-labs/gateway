@@ -10,6 +10,7 @@ import {
   relayEndpointAssignments,
   relayEndpoints,
   relayGrantSigningKeys,
+  relayInstancePolicyState,
   relayInstances,
   relayPolicyState,
   relayPools,
@@ -108,12 +109,23 @@ export interface RelayRouteRuntime {
    * are theirs and throttledTotal includes their refusals; null when a node does not report links (an older daemon).
    */
   connections?: ManagedLinkConnections | null;
+  /**
+   * False when a relay that holds the route did not answer (a relay daemon without relay_route_runtime_v1, a timeout,
+   * a relay out of touch with Gateway): failedTotal, setupLatencyP95Ms, averageDurationMs and lastActivityAt then cover
+   * only the relays that answered, and so do the other counters the link's nodes do not report.
+   */
+  relayCountersComplete: boolean;
 }
 
 export type ProxyRouteRuntime = RelayRouteRuntime;
 
 /** A link runtime older than this asks the link's nodes for a fresh report (they report every 30 s on their own). */
 const MANAGED_LINK_REPORT_FRESH_MS = 5_000;
+
+/** How long a runtime read waits for each remote relay (the local one answers within 2 s); all are asked at once. */
+const RELAY_ROUTE_RUNTIME_TIMEOUT_MS = 2_000;
+/** A relay's policy route entries hold one of `$ids`, not dropped since (removedAtRevision). */
+const HOLDS_ANY_ROUTE = '$[*] ? (@.routeId == $ids[*] && !exists(@.removedAtRevision))';
 
 const logger = createChildLogger('RelayPolicyService');
 
@@ -267,6 +279,7 @@ function relayRouteRuntime(runtime: RelayRouteRuntimeReport): RelayRouteRuntime 
     averageDurationMs: Number(runtime.averageDurationMilliseconds || 0),
     lastActivityAt: lastActivityMillis > 0 ? new Date(lastActivityMillis).toISOString() : null,
     metricsSince: new Date(metricsSinceMillis > 0 ? metricsSinceMillis : Date.now()).toISOString(),
+    relayCountersComplete: true,
   };
 }
 
@@ -305,7 +318,28 @@ function sumRouteRuntimes(runtimes: RelayRouteRuntimeReport[]): RelayRouteRuntim
         : 0,
     lastActivityAt: lastActivityMillis > 0 ? new Date(lastActivityMillis).toISOString() : null,
     metricsSince: new Date(since.length > 0 ? Math.min(...since) : Date.now()).toISOString(),
+    relayCountersComplete: true,
   };
+}
+
+/**
+ * The route runtimes a relay supervisor answered with (GetRelayRouteRuntimeCommand: protojson RouteRuntimeResponse
+ * objects in `runtimes`), or null when the answer is not one.
+ */
+function parseRelayRouteRuntimeAnswer(detail: string | undefined): RelayRouteRuntimeReport[] | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(detail ?? '');
+  } catch {
+    return null;
+  }
+  const runtimes = (parsed as { runtimes?: unknown } | null)?.runtimes;
+  if (!Array.isArray(runtimes)) return null;
+  const reports = runtimes.filter(
+    (runtime): runtime is RelayRouteRuntimeReport =>
+      !!runtime && typeof runtime === 'object' && typeof (runtime as { routeId?: unknown }).routeId === 'string'
+  );
+  return reports.length === runtimes.length ? reports : null;
 }
 
 /** The local relay could not be reached at all, as opposed to refusing what it was sent. */
@@ -393,7 +427,8 @@ export class RelayPolicyService {
   private dispatch?: Pick<
     NodeDispatchService,
     'sendRelayGrantBundle' | 'sendRelayPolicy' | 'setRelayDrain' | 'probeRelayCandidate' | 'isNodeConnected'
-  >;
+  > &
+    Partial<Pick<NodeDispatchService, 'getRelayRouteRuntime'>>;
   private lastGrantRefreshAt = 0;
   private lastGrantRefreshRevision = 0;
   /** Daemons whose last grant refresh failed: retried alone until the next full refresh is due. */
@@ -537,7 +572,8 @@ export class RelayPolicyService {
     dispatch: Pick<
       NodeDispatchService,
       'sendRelayGrantBundle' | 'sendRelayPolicy' | 'setRelayDrain' | 'probeRelayCandidate' | 'isNodeConnected'
-    >
+    > &
+      Partial<Pick<NodeDispatchService, 'getRelayRouteRuntime'>>
   ): void {
     this.dispatch = dispatch;
   }
@@ -1901,25 +1937,77 @@ export class RelayPolicyService {
     });
   }
 
-  private async getOwnedRouteRuntime(ownerKind: string, ownerId: string): Promise<RelayRouteRuntime | null> {
-    const [route] = await this.db
-      .select({ id: relayRoutes.id })
-      .from(relayRoutes)
-      .where(and(eq(relayRoutes.ownerKind, ownerKind), eq(relayRoutes.ownerId, ownerId)))
-      .limit(1);
-    if (!route) return null;
-    return relayRouteRuntime(await this.relay.getRouteRuntime(route.id));
-  }
-
   async getProxyRouteRuntime(linkId: string): Promise<ProxyRouteRuntime | null> {
     const routes = await this.db
       .select({ id: relayRoutes.id })
       .from(relayRoutes)
       .where(and(eq(relayRoutes.ownerKind, 'proxy_host_secure_link'), eq(relayRoutes.ownerId, linkId)));
-    if (routes.length <= 1) return this.getOwnedRouteRuntime('proxy_host_secure_link', linkId);
     // A route on an ingress group has one relay route per member: its runtime is their sum.
-    const runtimes = await Promise.all(routes.map((route) => this.relay.getRouteRuntime(route.id)));
-    return sumRouteRuntimes(runtimes);
+    return routes.length ? this.relayRuntime(routes.map((route) => route.id)) : null;
+  }
+
+  /**
+   * The runtime of relay routes as every relay that holds them counts it, summed: the local relay through its admin
+   * API, each remote relay whose current policy holds one of them through its supervisor (relay_route_runtime_v1),
+   * all in parallel. A relay that does not hold a route has no share; one that holds it and does not answer leaves
+   * relayCountersComplete false. Never fails: with no answer at all the counters are zero and incomplete.
+   */
+  private async relayRuntime(routeIds: string[]): Promise<RelayRouteRuntime> {
+    const [local, remote] = await Promise.all([this.localRouteReports(routeIds), this.remoteRouteReports(routeIds)]);
+    const reports = [...local.reports, ...remote.reports];
+    const runtime =
+      reports.length > 1 ? sumRouteRuntimes(reports) : relayRouteRuntime(reports[0] ?? { routeId: routeIds[0] ?? '' });
+    return { ...runtime, relayCountersComplete: local.complete && remote.complete };
+  }
+
+  private async localRouteReports(routeIds: string[]) {
+    const results = await Promise.allSettled(routeIds.map((routeId) => this.relay.getRouteRuntime(routeId)));
+    return {
+      reports: results.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : [])),
+      // NOT_FOUND: the local relay's policy does not hold the route (remote relays carry it).
+      complete: results.every(
+        (result) =>
+          result.status === 'fulfilled' || (result.reason as { code?: number } | null)?.code === GrpcStatus.NOT_FOUND
+      ),
+    };
+  }
+
+  /**
+   * The nodes of the remote relays whose current policy holds one of the routes. A relay whose policy expired admits
+   * nothing, and a route it dropped (removedAtRevision) left its counters with it.
+   */
+  private remoteRouteHolders(routeIds: string[]): Promise<Array<{ nodeId: string | null }>> {
+    const ids = JSON.stringify(routeIds);
+    return this.db
+      .select({ nodeId: relayInstances.nodeId })
+      .from(relayInstances)
+      .innerJoin(relayInstancePolicyState, eq(relayInstancePolicyState.instanceId, relayInstances.id))
+      .where(
+        and(
+          eq(relayInstances.kind, 'remote'),
+          sql`${relayInstances.policyExpiresAt} > now()`,
+          sql`jsonb_path_exists(${relayInstancePolicyState.routes}, ${HOLDS_ANY_ROUTE}::jsonpath, jsonb_build_object('ids', ${ids}::jsonb))`
+        )
+      );
+  }
+
+  private async remoteRouteReports(routeIds: string[]) {
+    const holders = await this.remoteRouteHolders(routeIds);
+    const answers = await Promise.all(
+      holders.map(async ({ nodeId }) => {
+        if (!nodeId || !this.dispatch?.getRelayRouteRuntime) return null;
+        try {
+          const result = await this.dispatch.getRelayRouteRuntime(nodeId, routeIds, RELAY_ROUTE_RUNTIME_TIMEOUT_MS);
+          return result?.success ? parseRelayRouteRuntimeAnswer(result.detail) : null;
+        } catch {
+          return null;
+        }
+      })
+    );
+    return {
+      reports: answers.flatMap((answer) => answer ?? []),
+      complete: answers.every((answer) => answer !== null),
+    };
   }
 
   async getManagedDatabaseBindingRouteRuntime(bindingId: string): Promise<RelayRouteRuntime | null> {
@@ -2025,24 +2113,14 @@ export class RelayPolicyService {
   }
 
   /**
-   * A managed link's runtime: its relay routes (one, or one per Availability placement) and what the nodes running
-   * its workloads report. The node holds the link at its capacity whichever relay of the pool carries a connection,
-   * so its count is the link's open connections. Of the relays only the local one answers Gateway: it adds its share
-   * of the routes it holds, and the counters only relays keep (failures, setup latency, duration) cover that share.
-   * Remote relays report no route runtime to Gateway, so a link they serve alone shows the nodes' counts and none of
-   * the relay-only counters, never an error.
+   * A managed link's runtime: its relay routes (one, or one per Availability placement) as every relay that holds
+   * them counts it (relayRuntime), and what the nodes running its workloads report. The node holds the link at its
+   * capacity whichever relay of the pool carries a connection, so its count is the link's open connections.
    */
   private async managedLinkRuntime(
     routes: Array<{ id: string; ownerKind: string; ownerId: string; sourceKind: string; sourceId: string }>
   ): Promise<RelayRouteRuntime> {
-    // A route the local relay does not hold (served by remote relays, or a placement it does not run yet or any
-    // more) adds nothing, and neither does a local relay that does not answer.
-    const results = await Promise.allSettled(routes.map((route) => this.relay.getRouteRuntime(route.id)));
-    const runtimes = results.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []));
-    const relayRuntime =
-      runtimes.length > 1
-        ? sumRouteRuntimes(runtimes)
-        : relayRouteRuntime(runtimes[0] ?? { routeId: routes[0]?.id ?? '' });
+    const relayRuntime = await this.relayRuntime(routes.map((route) => route.id));
     const now = Date.now();
     const reports = routes.map((route) => {
       if (route.sourceKind !== 'daemon' || !this.managedLinkReports) return null;

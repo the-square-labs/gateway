@@ -1,6 +1,6 @@
 import { generateKeyPairSync } from 'node:crypto';
 import { PgDialect } from 'drizzle-orm/pg-core';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   managedDatabaseBindingPlacements,
   relayEndpointAssignments,
@@ -206,6 +206,13 @@ describe('managed database listener equality', () => {
 });
 
 describe('RelayPolicyService route runtime', () => {
+  // No remote relay holds a route unless a test says so (remoteRouteHolders reads relay_instance_policy_state).
+  let remoteHolders: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    remoteHolders = vi.spyOn(RelayPolicyService.prototype as any, 'remoteRouteHolders').mockResolvedValue([]);
+  });
+  afterEach(() => remoteHolders.mockRestore());
+
   it('allocates signed revisions above both pool and legacy/global revisions', async () => {
     const rows = [[{ revision: 900, gatewayInstanceId: 'gateway' }], [{ id: 'local', poolId: 'system' }], [], []];
     const lock = vi.fn();
@@ -315,6 +322,7 @@ describe('RelayPolicyService route runtime', () => {
       lastActivityAt: '2026-08-28T16:00:00.000Z',
       metricsSince: '2026-08-28T15:00:00.000Z',
       connections: null,
+      relayCountersComplete: true,
     });
     expect(getRouteRuntime).toHaveBeenCalledWith('route-binding-1');
   });
@@ -516,20 +524,40 @@ describe('RelayPolicyService route runtime', () => {
       expect(requestHealthReport).toHaveBeenCalledWith('node-1', 5_000);
     });
 
-    it('shows the node counts of a link only remote relays serve instead of failing (stand rc.1 F5)', async () => {
-      const db = routesDb([
-        {
-          id: 'route-1',
-          ownerKind: 'managed_storage_binding',
-          ownerId: 'storage-binding-1',
-          sourceKind: 'daemon',
-          sourceId: 'node-1',
-        },
-      ]);
+    it('merges the counters of the remote relays that hold a link the local relay does not (stand rc.1 F5)', async () => {
+      const route = {
+        id: 'route-1',
+        ownerKind: 'managed_storage_binding',
+        ownerId: 'storage-binding-1',
+        sourceKind: 'daemon',
+        sourceId: 'node-1',
+      };
+      const db = routesDb([route], [route]);
+      const notHeld = Object.assign(new Error('5 NOT_FOUND: relay route is not active'), { code: 5 });
       const service = createService(db, {
         applySnapshot: vi.fn(),
-        getRouteRuntime: vi.fn().mockRejectedValue(new Error('5 NOT_FOUND: relay route is not active')),
+        getRouteRuntime: vi.fn().mockRejectedValue(notHeld),
       });
+      remoteHolders.mockResolvedValue([{ nodeId: 'relay-1' }, { nodeId: 'relay-2' }]);
+      // protojson of RouteRuntimeResponse: 64-bit counters as strings.
+      const answer = (failed: string, p95: string, last: string) => ({
+        success: true,
+        detail: JSON.stringify({
+          runtimes: [
+            {
+              ...relayReport('route-1', 2, 1),
+              failedTotal: failed,
+              setupLatencyP95Microseconds: p95,
+              lastActivityUnixMilliseconds: last,
+            },
+          ],
+          missing: [],
+        }),
+      });
+      const getRelayRouteRuntime = vi.fn(async (nodeId: string) =>
+        nodeId === 'relay-1' ? answer('3', '9000', '1787932900000') : answer('2', '4000', '1787932800000')
+      );
+      service.setNodeDispatch({ getRelayRouteRuntime } as never);
       service.setManagedLinkReports({
         managedLinkReport: vi.fn(() => ({
           link: linkReport('managed_storage_binding', 'storage-binding-1', 4, 0, null),
@@ -542,8 +570,57 @@ describe('RelayPolicyService route runtime', () => {
         routeId: 'route-1',
         activeStreams: 4,
         openedTotal: '40',
-        failedTotal: '0',
+        failedTotal: '5',
+        setupLatencyP95Ms: 9,
+        lastActivityAt: new Date(1787932900000).toISOString(),
+        relayCountersComplete: true,
         connections: { active: 4 },
+      });
+      expect(getRelayRouteRuntime).toHaveBeenCalledWith('relay-1', ['route-1'], 2_000);
+
+      // A relay daemon without the command, or one that does not answer in time: what is known, marked incomplete.
+      getRelayRouteRuntime.mockImplementation(async (nodeId: string) => {
+        if (nodeId === 'relay-1') return null as never;
+        throw new Error('command timed out');
+      });
+      await expect(service.getManagedStorageBindingRouteRuntime('storage-binding-1')).resolves.toMatchObject({
+        activeStreams: 4,
+        failedTotal: '0',
+        relayCountersComplete: false,
+        connections: { active: 4 },
+      });
+    });
+
+    it('sums a route Secure Link over the relays of its member routes and never fails', async () => {
+      const db = {
+        select: vi.fn(() => ({ from: () => ({ where: async () => [{ id: 'route-a' }, { id: 'route-b' }] }) })),
+      };
+      const notHeld = Object.assign(new Error('relay route is not active'), { code: 5 });
+      const getRouteRuntime = vi.fn(async (routeId: string) => {
+        if (routeId === 'route-b') throw notHeld;
+        return relayReport('route-a', 1, 0);
+      });
+      const service = createService(db, { applySnapshot: vi.fn(), getRouteRuntime });
+      remoteHolders.mockResolvedValue([{ nodeId: 'relay-1' }]);
+      service.setNodeDispatch({
+        getRelayRouteRuntime: vi.fn(async () => ({
+          success: true,
+          detail: JSON.stringify({ runtimes: [relayReport('route-b', 2, 1)], missing: ['route-a'] }),
+        })),
+      } as never);
+
+      await expect(service.getProxyRouteRuntime('host-1')).resolves.toMatchObject({
+        activeStreams: 3,
+        openedTotal: '180',
+        throttledTotal: '1',
+        relayCountersComplete: true,
+      });
+
+      // The local relay is down: its share is unknown, the remote one still counts.
+      getRouteRuntime.mockRejectedValue(Object.assign(new Error('relay unavailable'), { code: 14 }));
+      await expect(service.getProxyRouteRuntime('host-1')).resolves.toMatchObject({
+        activeStreams: 2,
+        relayCountersComplete: false,
       });
     });
 

@@ -94,10 +94,19 @@ function rollingRate(history: RuntimeSample[], pick: (sample: RuntimeSample) => 
   if (history.length < 2) return history.length ? [0] : [];
   return history.slice(1).map((sample, index) => {
     const previous = history[index];
+    // A relay that stops or starts answering changes the counters' coverage, not what the link carried.
+    if (relayUnknown(sample.runtime) !== relayUnknown(previous.runtime)) return 0;
     const elapsedSeconds = Math.max(0.001, (sample.at - previous.at) / 1000);
     return Math.max(0, pick(sample) - pick(previous)) / elapsedSeconds;
   });
 }
+
+/** A relay that holds the link's routes did not answer: its relay counters are unknown. */
+function relayUnknown(runtime: ManagedDatabaseBindingRuntime) {
+  return runtime.relayCountersComplete === false;
+}
+
+const RELAY_UNKNOWN = "A relay did not answer";
 
 function latest(values: number[]) {
   return values.at(-1) ?? 0;
@@ -147,6 +156,9 @@ function runtimeCards(runtime: ManagedDatabaseBindingRuntime, history: RuntimeSa
   const successPercent =
     completed > 0 ? clampPercent(((completed - failed) / completed) * 100) : 100;
   const connections = runtime.connections ?? null;
+  // The nodes' counts stand whatever the relays answered; without them the stream and byte counters are relays' too.
+  const relayCounters = relayUnknown(runtime);
+  const streamCounters = relayCounters && !connections;
   const lastRejection = connections?.lastRejectionReason
     ? (REJECTION_REASONS[connections.lastRejectionReason] ?? connections.lastRejectionReason)
     : null;
@@ -162,83 +174,107 @@ function runtimeCards(runtime: ManagedDatabaseBindingRuntime, history: RuntimeSa
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
       <StatCard
         label="Active streams"
-        value={counter(runtime.activeStreams).toLocaleString()}
+        value={streamCounters ? "—" : counter(runtime.activeStreams).toLocaleString()}
         icon={Activity}
         history={activeHistory}
         color="#3b82f6"
         subtitle={
-          !connections || connections.limit <= 0
-            ? "Current streams on this link"
-            : connections.limit >= UNCAPPED_LINK_CONNECTIONS
-              ? "Open connections, no fixed limit"
-              : `Open connections, limit ${connections.limit.toLocaleString()}`
+          streamCounters
+            ? RELAY_UNKNOWN
+            : !connections || connections.limit <= 0
+              ? "Current streams on this link"
+              : connections.limit >= UNCAPPED_LINK_CONNECTIONS
+                ? "Open connections, no fixed limit"
+                : `Open connections, limit ${connections.limit.toLocaleString()}`
         }
       />
       <StatCard
         label="New streams"
-        value={`${latest(openedRateHistory).toFixed(1)}/s`}
+        value={streamCounters ? "—" : `${latest(openedRateHistory).toFixed(1)}/s`}
         icon={Zap}
         history={openedRateHistory}
         color="#06b6d4"
-        subtitle={`${counter(runtime.openedTotal).toLocaleString()} opened since ${connections ? "the node's daemon started" : "Relay start"}`}
+        subtitle={
+          streamCounters
+            ? RELAY_UNKNOWN
+            : `${counter(runtime.openedTotal).toLocaleString()} opened since ${connections ? "the node's daemon started" : "Relay start"}`
+        }
       />
       <StatCard
         label="Source → target"
-        value={`${formatBytes(latest(sourceToTargetRateHistory))}/s`}
+        value={streamCounters ? "—" : `${formatBytes(latest(sourceToTargetRateHistory))}/s`}
         icon={ArrowUpFromLine}
         history={sourceToTargetRateHistory}
         color="#8b5cf6"
-        subtitle={`${formatBytes(counter(runtime.sourceToTargetBytes))} transferred`}
+        subtitle={
+          streamCounters
+            ? RELAY_UNKNOWN
+            : `${formatBytes(counter(runtime.sourceToTargetBytes))} transferred`
+        }
       />
       <StatCard
         label="Target → source"
-        value={`${formatBytes(latest(targetToSourceRateHistory))}/s`}
+        value={streamCounters ? "—" : `${formatBytes(latest(targetToSourceRateHistory))}/s`}
         icon={ArrowDownToLine}
         history={targetToSourceRateHistory}
         color="#ec4899"
-        subtitle={`${formatBytes(counter(runtime.targetToSourceBytes))} transferred`}
+        subtitle={
+          streamCounters
+            ? RELAY_UNKNOWN
+            : `${formatBytes(counter(runtime.targetToSourceBytes))} transferred`
+        }
       />
       <StatCard
         label="Open success"
-        value={`${successPercent.toFixed(1)}%`}
+        value={relayCounters ? "—" : `${successPercent.toFixed(1)}%`}
         icon={ShieldCheck}
         history={successHistory}
         sparklineMax={100}
-        progress={{
-          percent: successPercent,
-          color: successPercent >= 99 ? "#22c55e" : "#f59e0b",
-        }}
+        progress={
+          relayCounters
+            ? undefined
+            : {
+                percent: successPercent,
+                color: successPercent >= 99 ? "#22c55e" : "#f59e0b",
+              }
+        }
         color="#22c55e"
-        subtitle={`${Math.max(0, completed - failed).toLocaleString()} successful completions`}
+        subtitle={
+          relayCounters
+            ? RELAY_UNKNOWN
+            : `${Math.max(0, completed - failed).toLocaleString()} successful completions`
+        }
       />
       <StatCard
         label="Setup p95"
-        value={duration(counter(runtime.setupLatencyP95Ms))}
+        value={relayCounters ? "—" : duration(counter(runtime.setupLatencyP95Ms))}
         icon={Timer}
         history={history.map((sample) => counter(sample.runtime.setupLatencyP95Ms))}
         color="#f59e0b"
-        subtitle="OpenTunnel to both peers ready"
+        subtitle={relayCounters ? RELAY_UNKNOWN : "OpenTunnel to both peers ready"}
       />
       <StatCard
         label="Average duration"
-        value={duration(counter(runtime.averageDurationMs))}
+        value={relayCounters ? "—" : duration(counter(runtime.averageDurationMs))}
         icon={Clock3}
         history={history.map((sample) => counter(sample.runtime.averageDurationMs))}
         color="#a855f7"
-        subtitle={`${completed.toLocaleString()} completed streams`}
+        subtitle={relayCounters ? RELAY_UNKNOWN : `${completed.toLocaleString()} completed streams`}
       />
       <StatCard
         label="Admission rejects"
-        value={counter(runtime.throttledTotal).toLocaleString()}
+        value={relayCounters ? "—" : counter(runtime.throttledTotal).toLocaleString()}
         icon={Ban}
         history={throttledRateHistory}
         color="#ef4444"
         subtitle={
-          latest(throttledRateHistory) > 0
-            ? `${latest(throttledRateHistory).toFixed(1)}/s currently`
-            : lastRejection
-              ? `Last: ${lastRejection}`
-              : `${latest(failedRateHistory).toFixed(1)}/s tunnel failures`
+          relayCounters
+            ? RELAY_UNKNOWN
+            : latest(throttledRateHistory) > 0
+              ? `${latest(throttledRateHistory).toFixed(1)}/s currently`
+              : lastRejection
+                ? `Last: ${lastRejection}`
+                : `${latest(failedRateHistory).toFixed(1)}/s tunnel failures`
         }
       />
     </div>

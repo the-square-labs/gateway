@@ -18,6 +18,8 @@ const NGINX_SECURE_LINK_SOCKET_ONLY_CAPABILITY = 'nginx_secure_link_socket_only_
 // base managed-storage capabilities.
 const MANAGED_STORAGE_SEAWEEDFS_CAPABILITY = 'managed_storage_seaweedfs_v1';
 const MANAGED_STORAGE_IAM_POLICY_CAPABILITY = 'managed_storage_iam_policy_v1';
+/** Relay supervisors that answer GetRelayRouteRuntimeCommand. */
+const RELAY_ROUTE_RUNTIME_CAPABILITY = 'relay_route_runtime_v1';
 
 // The background collector runs every 10s. Leave scheduler/queue headroom so a
 // sample just under ten seconds old is refreshed in the current round instead
@@ -723,6 +725,15 @@ export class NodeDispatchService {
   ): Promise<CommandResult> {
     await this.assertRelaySupervisorNode(nodeId);
     return this.registry.sendCommand(nodeId, { setRelayDrain: { enabled, forceDisconnect } }, timeoutMs);
+  }
+
+  /**
+   * The runtime of relay routes as a remote relay counts them, from its supervisor (relay_route_runtime_v1); null when
+   * the node is not connected or its supervisor does not answer it (an older relay daemon).
+   */
+  async getRelayRouteRuntime(nodeId: string, routeIds: string[], timeoutMs = 2_000): Promise<CommandResult | null> {
+    if (!this.registry.hasCapability(nodeId, RELAY_ROUTE_RUNTIME_CAPABILITY)) return null;
+    return this.registry.sendCommand(nodeId, { getRelayRouteRuntime: { routeIds } }, timeoutMs);
   }
 
   /** Installs a renewed relay server certificate on a remote relay supervisor's worker. */
