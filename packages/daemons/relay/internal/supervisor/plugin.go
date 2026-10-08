@@ -101,7 +101,7 @@ func (p *Plugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 		NodeId: nodeID, Hostname: hostname, DaemonVersion: lifecycle.Version,
 		CpuModel: cpuModel, CpuCores: int32(cpuCores), Architecture: sysmetrics.GetArchitecture(),
 		KernelVersion: sysmetrics.GetKernelVersion(), DaemonType: "relay",
-		Capabilities: []string{relayPoolCapability},
+		Capabilities: []string{relayPoolCapability, relayRouteRuntimeCapability},
 	}
 	if state != nil {
 		register.HostIdentityId = state.HostIdentityID
@@ -161,6 +161,8 @@ func (p *Plugin) HandleCommand(command *pb.GatewayCommand) *pb.CommandResult {
 		if err == nil {
 			result.Detail = fmt.Sprintf("server_identity=%s server_fingerprint=%s", payload.RenewRelayIdentity.GetServerIdentity(), fingerprint)
 		}
+	case *pb.GatewayCommand_GetRelayRouteRuntime:
+		result.Detail, err = p.worker.routeRuntime(context.Background(), payload.GetRelayRouteRuntime.GetRouteIds())
 	case *pb.GatewayCommand_SetDaemonLogStream:
 		stream.SetDaemonLogStreaming(payload.SetDaemonLogStream.Enabled, payload.SetDaemonLogStream.MinLevel)
 	default:

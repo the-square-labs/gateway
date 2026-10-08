@@ -427,6 +427,9 @@ message GatewayCommand {
     // the current holder of one lease to release it to a designated successor.
     SyncAvailabilityLeaseCommand sync_availability_lease = 75;
     AvailabilityLeaseHandoffCommand availability_lease_handoff = 76;
+    // Relay supervisor only (relay_route_runtime_v1): the runtime of relay
+    // routes as its worker counts them.
+    GetRelayRouteRuntimeCommand get_relay_route_runtime = 77;
   }
 }
 
@@ -460,6 +463,14 @@ message RenewRelayIdentityCommand {
   string server_identity = 3;
   // SHA-256 fingerprint ("sha256:<hex>") of the certificate daemons pin now.
   string retain_server_fingerprint = 4;
+}
+
+// The supervisor asks its worker (RelayAdmin.GetRouteRuntime) for each route.
+// CommandResult.detail carries JSON: {"runtimes": [relay.v1.RouteRuntimeResponse
+// in protojson], "missing": [route ids the worker's policy does not hold]}. Any
+// other failure fails the command, so a partial answer is never taken as whole.
+message GetRelayRouteRuntimeCommand {
+  repeated string route_ids = 1;
 }
 
 message RelayRuntimeStatus {
