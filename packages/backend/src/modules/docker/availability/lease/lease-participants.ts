@@ -107,7 +107,13 @@ function relayLatencies(report: unknown): Map<string, number> {
   const result = new Map<string, number>();
   if (!Array.isArray(list)) return result;
   for (const entry of list as Array<{ relayInstanceId?: unknown; rttMs?: unknown }>) {
-    if (typeof entry?.relayInstanceId === 'string' && typeof entry.rttMs === 'number' && Number.isFinite(entry.rttMs)) {
+    // 0: a relay the node fails to reach without a recent round trip, no distance.
+    if (
+      typeof entry?.relayInstanceId === 'string' &&
+      typeof entry.rttMs === 'number' &&
+      Number.isFinite(entry.rttMs) &&
+      entry.rttMs > 0
+    ) {
       result.set(entry.relayInstanceId, entry.rttMs);
     }
   }

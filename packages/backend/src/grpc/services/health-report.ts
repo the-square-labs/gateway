@@ -45,23 +45,27 @@ export function decodeHealthDiskMounts(rawMounts: unknown): {
 }
 
 /**
- * Relay round trips of a daemon health report, in milliseconds. Absent when the daemon measured
- * none, so reports of nodes without relays keep their shape.
+ * Relay round trips of a daemon health report, in milliseconds; 0 (unknown) for a relay the daemon
+ * has failed to reach for longer than it keeps a round trip. Absent when the daemon measured none,
+ * so reports of nodes without relays keep their shape.
  */
 export function relayLatencyHealth(rawSamples: unknown): {
   relayLatencies?: Array<{ relayInstanceId: string; rttMs: number; failingMs?: number }>;
 } {
   const relayLatencies = (Array.isArray(rawSamples) ? rawSamples : []).flatMap((sample) => {
     const relayInstanceId = (sample as { relayInstanceId?: unknown })?.relayInstanceId;
-    const micros = Number((sample as { rttMicros?: unknown })?.rttMicros);
-    if (typeof relayInstanceId !== 'string' || !relayInstanceId || !Number.isFinite(micros) || micros <= 0) return [];
+    const micros = Number((sample as { rttMicros?: unknown })?.rttMicros ?? 0);
     // How long the daemon has failed to reach the relay (daemons that report it); absent while it reaches it.
     const failingMs = Number((sample as { failingMs?: unknown })?.failingMs ?? 0);
+    const failing = Number.isFinite(failingMs) && failingMs > 0;
+    const measured = Number.isFinite(micros) && micros > 0;
+    // A relay the daemon keeps failing to reach has no recent round trip (0, unknown): it is still reported.
+    if (typeof relayInstanceId !== 'string' || !relayInstanceId || (!measured && !failing)) return [];
     return [
       {
         relayInstanceId,
-        rttMs: Math.round(micros) / 1000,
-        ...(Number.isFinite(failingMs) && failingMs > 0 ? { failingMs: Math.trunc(failingMs) } : {}),
+        rttMs: measured ? Math.round(micros) / 1000 : 0,
+        ...(failing ? { failingMs: Math.trunc(failingMs) } : {}),
       },
     ];
   });

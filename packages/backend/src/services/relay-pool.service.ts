@@ -221,6 +221,9 @@ export class RelayPoolService {
   private readonly plannedRoles = new Map<string, Array<{ relayInstanceId: string; role: string }>>();
   /** When placement last saw each relay not serving; a relay ready again since is held back for a while. */
   private readonly notServingAt = new Map<string, number>();
+  /** The relays last judged failing on their data plane, and when each one last entered or left that judgement. */
+  private dataPlaneFailing = new Set<string>();
+  private readonly dataPlaneChangedAt = new Map<string, number>();
   constructor(
     private readonly db: DrizzleClient,
     private readonly policy: RelayPolicyService,
@@ -280,28 +283,98 @@ export class RelayPoolService {
   }
 
   /**
-   * The relays whose data plane the daemons that measure them fail to reach (relayDataPlaneFailures). Only
-   * asked while a remote relay is offline: it cuts that relay's disconnect grace short. Advisory: without
-   * the answer the grace runs its course.
+   * The relays whose data plane most of the daemons that measure them fail to reach (relayDataPlaneFailures),
+   * whatever their control state: such a relay is not placed, kept or returned. Advisory: without the answer
+   * relays are placed by their control state, and an offline relay's grace runs its course.
    */
   private async dataPlaneFailures(instances: RelayInstanceRow[]): Promise<Set<string>> {
     if (!this.topology?.relayDataPlaneFailures) return new Set();
-    if (!instances.some(({ kind, state }) => kind === 'remote' && state === 'offline')) return new Set();
+    let failing: Set<string>;
     try {
-      return await this.topology.relayDataPlaneFailures();
+      failing = await this.topology.relayDataPlaneFailures();
     } catch (error) {
-      logger.debug('Relay data-plane reports are unavailable; offline relays keep their grace', {
+      logger.debug('Relay data-plane reports are unavailable; relays are placed by their control state', {
         error: String(error),
       });
       return new Set();
     }
+    this.noteDataPlaneChanges(instances, failing);
+    return failing;
+  }
+
+  /** Records (and logs) the relays that entered or left the data-plane failure judgement. */
+  private noteDataPlaneChanges(instances: RelayInstanceRow[], failing: ReadonlySet<string>, now = Date.now()) {
+    const names = new Map(instances.map(({ id, displayName }) => [id, displayName]));
+    for (const id of failing) {
+      if (this.dataPlaneFailing.has(id)) continue;
+      this.dataPlaneChangedAt.set(id, now);
+      logger.warn('Most nodes that measure a relay cannot reach its relay port; it gets no assignments meanwhile', {
+        relayInstanceId: id,
+        relay: names.get(id) ?? id,
+      });
+    }
+    for (const id of this.dataPlaneFailing) {
+      if (failing.has(id)) continue;
+      this.dataPlaneChangedAt.set(id, now);
+      // A relay removed from the pool meanwhile is not reported.
+      if (names.has(id))
+        logger.info('The nodes reach a relay again; it is placed again', { relayInstanceId: id, relay: names.get(id) });
+    }
+    this.dataPlaneFailing = new Set(failing);
+    for (const [id, at] of this.dataPlaneChangedAt) {
+      if (now - at > AUTO_REBALANCE_RETRY_MS) this.dataPlaneChangedAt.delete(id);
+    }
+  }
+
+  /**
+   * When the automatic rebalance tries an endpoint again after its last attempt failed: AUTO_REBALANCE_RETRY_MS
+   * later, or at once when a relay of the failed attempt failed or recovered on its data plane after the attempt
+   * was planned. The plan then no longer holds the relay that made it fail, or holds it again now that the nodes
+   * reach it; a later attempt that fails waits out the cooldown again.
+   */
+  private async failureRetryTimes(
+    failures: ReadonlyArray<{ id: string; endpointId: string; createdAt: Date; updatedAt: Date }>
+  ): Promise<Map<string, number>> {
+    const retryAt = new Map(
+      failures.map(({ endpointId, updatedAt }) => [endpointId, updatedAt.getTime() + AUTO_REBALANCE_RETRY_MS])
+    );
+    const latestChange = Math.max(0, ...this.dataPlaneChangedAt.values());
+    const changedSince = failures.filter(({ createdAt }) => createdAt.getTime() < latestChange);
+    if (!changedSince.length) return retryAt;
+    try {
+      const relays = await this.db
+        .select({
+          generationId: relayEndpointAssignments.assignmentGenerationId,
+          relayInstanceId: relayEndpointAssignments.relayInstanceId,
+        })
+        .from(relayEndpointAssignments)
+        .where(
+          inArray(
+            relayEndpointAssignments.assignmentGenerationId,
+            changedSince.map(({ id }) => id)
+          )
+        );
+      for (const failure of changedSince) {
+        const changed = relays.some(
+          ({ generationId, relayInstanceId }) =>
+            generationId === failure.id &&
+            (this.dataPlaneChangedAt.get(relayInstanceId) ?? 0) > failure.createdAt.getTime()
+        );
+        if (changed) retryAt.set(failure.endpointId, 0);
+      }
+    } catch (error) {
+      // Advisory: the failure cooldown runs its course.
+      logger.debug('Relays of failed placement attempts are unavailable', { error: String(error) });
+    }
+    return retryAt;
   }
 
   /**
    * How placement sees the relays now. A remote relay whose control stream ended keeps its slots for
    * RELAY_DISCONNECT_GRACE_MS where it already serves, unless the daemons fail to reach it (`failing`): a
-   * control stream that drops and comes back then changes no plan and starts no generation. A relay
-   * serving again after it was not is held back for RELAY_RETURN_HOLD_MS: it fills free slots only.
+   * control stream that drops and comes back then changes no plan and starts no generation. A relay whose data
+   * plane fails is out of placement whatever its control state. A relay serving again after it was not (offline
+   * past its grace, or failing on its data plane) is held back for RELAY_RETURN_HOLD_MS: it fills free slots only.
    */
   private placementView(instances: RelayInstanceRow[], failing: ReadonlySet<string>, now = Date.now()) {
     const grace = new Set(
@@ -312,22 +385,32 @@ export class RelayPoolService {
       if (!known.has(id) || now - at >= RELAY_RETURN_HOLD_MS) this.notServingAt.delete(id);
     }
     for (const instance of instances) {
-      if (instance.state !== 'ready' && !grace.has(instance.id)) this.notServingAt.set(instance.id, now);
+      if ((instance.state !== 'ready' && !grace.has(instance.id)) || failing.has(instance.id)) {
+        this.notServingAt.set(instance.id, now);
+      }
     }
+    const serving = ({ id, state }: RelayInstanceRow) => state === 'ready' && !failing.has(id);
     const holdBack = new Set(
-      instances.filter(({ id, state }) => state === 'ready' && this.notServingAt.has(id)).map(({ id }) => id)
+      instances.filter((instance) => serving(instance) && this.notServingAt.has(instance.id)).map(({ id }) => id)
     );
     const readyFaultDomains = new Set(
-      instances.filter(({ id, state }) => state === 'ready' || grace.has(id)).map(({ faultDomainId }) => faultDomainId)
+      instances
+        .filter((instance) => serving(instance) || grace.has(instance.id))
+        .map(({ faultDomainId }) => faultDomainId)
     );
     return {
       grace,
       holdBack,
       readyFaultDomains,
-      /** The relays one endpoint is planned on: its relays in their grace count as ready. */
+      /** The relays one endpoint is planned on: its relays in their grace count as ready, failing relays do not. */
       instancesFor: (current: ReadonlyArray<{ relayInstanceId: string }>) =>
-        grace.size
-          ? placementInstances(instances, grace, new Set(current.map(({ relayInstanceId }) => relayInstanceId)))
+        grace.size || failing.size
+          ? placementInstances(
+              instances,
+              grace,
+              new Set(current.map(({ relayInstanceId }) => relayInstanceId)),
+              failing
+            )
           : instances,
     };
   }
@@ -350,6 +433,12 @@ export class RelayPoolService {
     holdBack?: ReadonlySet<string>
   ): PlannedRelayAssignment[] {
     const reference = this.plannedRoles.get(endpointId) ?? active;
+    // A relay the endpoint's traffic still runs through (its active generation) is not held back: the hold keeps a
+    // relay that came back from displacing serving relays, and holding this one would move the endpoint off it after
+    // a data-plane failure too short to have moved it.
+    const held = holdBack?.size
+      ? new Set([...holdBack].filter((id) => !active.some(({ relayInstanceId }) => relayInstanceId === id)))
+      : holdBack;
     const planned = planRelays(
       endpointId,
       instances,
@@ -359,7 +448,7 @@ export class RelayPoolService {
       reference,
       availabilityMember,
       notes,
-      holdBack
+      held
     );
     this.plannedRoles.set(
       endpointId,
@@ -382,9 +471,11 @@ export class RelayPoolService {
     if (!endpoint || endpoint.ownerKind !== 'proxy_host_secure_link') return null;
     if (!(await this.availabilityMemberEndpointIds([endpoint])).has(endpoint.id)) return null;
     if ((await this.poolIncapableEndpoints([endpoint.id])).has(endpoint.id)) return null;
-    const instances = (await this.db.select().from(relayInstances).where(eq(relayInstances.poolId, 'system'))).filter(
+    const enrolled = (await this.db.select().from(relayInstances).where(eq(relayInstances.poolId, 'system'))).filter(
       isEnrolledRelayInstance
     );
+    // A relay the nodes cannot reach on its relay port gets no first assignment either.
+    const instances = placementInstances(enrolled, new Set(), new Set(), await this.dataPlaneFailures(enrolled));
     const leaseRelays = instances.filter(
       (instance) =>
         instance.state === 'ready' && instance.capabilities?.features?.includes(AVAILABILITY_LEASE_CAPABILITY)
@@ -530,9 +621,9 @@ export class RelayPoolService {
       this.stablePlan = { key: snapshot.rebalancePlanKey, since: now };
       return;
     }
-    const failedAt = new Map(snapshot.failures.map((failure) => [failure.endpointId, failure.updatedAt.getTime()]));
+    const retryAt = new Map(snapshot.failures.map((failure) => [failure.endpointId, failure.retryAt.getTime()]));
     const endpointIds = snapshot.rebalanceEndpointIds.filter(
-      (id) => now >= (failedAt.get(id) ?? 0) + AUTO_REBALANCE_RETRY_MS && now >= (this.deferrals.get(id)?.retryAt ?? 0)
+      (id) => now >= (retryAt.get(id) ?? 0) && now >= (this.deferrals.get(id)?.retryAt ?? 0)
     );
     if (now - this.stablePlan.since < AUTO_REBALANCE_SETTLE_MS || now < this.retryAfter || !endpointIds.length) return;
     // Set the guard before any await, including failures before a generation can
@@ -1040,7 +1131,8 @@ export class RelayPoolService {
       : [];
     const updateStepByInstance = new Map(updateSteps.map((step) => [step.relayInstanceId, step]));
     const attempts = await this.getRecentAttempts();
-    const placement = this.placementView(instances, await this.dataPlaneFailures(instances));
+    const dataPlaneFailing = await this.dataPlaneFailures(instances);
+    const placement = this.placementView(instances, dataPlaneFailing);
     const readyFaultDomains = placement.readyFaultDomains;
     const localOnly = await this.poolIncapableEndpoints(
       endpoints.filter(({ ownerKind }) => ownerKind !== 'internal_registry').map(({ id }) => id)
@@ -1111,17 +1203,18 @@ export class RelayPoolService {
       .update(JSON.stringify(eligiblePlan.sort((a, b) => a.endpointId.localeCompare(b.endpointId))))
       .digest('hex');
     const endpointIds = new Set(endpoints.map(({ id }) => id));
-    const failures = latestGenerations.filter(
+    const failedAttempts = latestGenerations.filter(
       (generation) => generation.state === 'failed' && endpointIds.has(generation.endpointId)
     );
+    const retryTimes = await this.failureRetryTimes(failedAttempts);
+    /** `retryAt`: when the automatic rebalance tries the endpoint again (failureRetryTimes). */
+    const failures = failedAttempts.map((failure) => ({
+      ...failure,
+      retryAt: new Date(retryTimes.get(failure.endpointId) ?? 0),
+    }));
     const failuresByEndpoint = new Map(failures.map((failure) => [failure.endpointId, failure]));
     const nextAutomaticRetry = eligiblePlan.length
-      ? Math.min(
-          ...eligiblePlan.map(({ endpointId }) => {
-            const failure = failuresByEndpoint.get(endpointId);
-            return failure ? failure.updatedAt.getTime() + AUTO_REBALANCE_RETRY_MS : 0;
-          })
-        )
+      ? Math.min(...eligiblePlan.map(({ endpointId }) => failuresByEndpoint.get(endpointId)?.retryAt.getTime() ?? 0))
       : 0;
     const automaticRebalancePaused = Boolean(updateRun && !PLACEMENT_RUNS_DURING_RUN_STATES.includes(updateRun.state));
     // Trust status is advisory: a failure to assess it must not take the pool status down.
@@ -1197,6 +1290,8 @@ export class RelayPoolService {
             0
           ),
           updateStep: updateStepByInstance.get(instance.id) ?? null,
+          /** Most nodes that measure this relay cannot reach its relay port: it gets no assignments meanwhile. */
+          dataPlaneFailing: dataPlaneFailing.has(instance.id),
           /** An offline remote relay: when its removal becomes possible (expired policy, 90 s silent). */
           removableAfter: instance.kind === 'remote' ? relayRemovableAfter(instance) : null,
           policyTrust: policyTrust.get(instance.id) ?? null,

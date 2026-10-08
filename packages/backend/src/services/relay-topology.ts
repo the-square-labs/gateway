@@ -292,8 +292,9 @@ export const RELAY_DISCONNECT_GRACE_MS = 3 * 60_000;
 /** A daemon that failed to reach a relay this long (failingMs) reports its data plane failing. */
 export const RELAY_DATA_PLANE_FAILING_MS = 15_000;
 /**
- * A relay that came back (ready again after it was not) only fills free slots for this long: it
- * neither becomes a primary nor displaces a relay an endpoint's traffic runs through.
+ * A relay that came back (ready again after it was not, or reachable again after its data plane
+ * failed) only fills free slots for this long: it neither becomes a primary nor displaces a relay
+ * an endpoint's traffic runs through.
  */
 export const RELAY_RETURN_HOLD_MS = 2 * 60_000;
 
@@ -301,22 +302,29 @@ export const RELAY_RETURN_HOLD_MS = 2 * 60_000;
 export type NodeRelayReachability = ReadonlyArray<{ relayInstanceId: string; failingMs: number }>;
 
 /**
- * The relays whose data plane fails: at least one node reports failing to reach the relay for
- * RELAY_DATA_PLANE_FAILING_MS, and no node reports reaching it. Nodes that do not measure a relay
- * say nothing about it; daemons without failure reports always count as reaching it, so with them
- * a relay is judged by the disconnect grace alone.
+ * The relays whose data plane fails, by a clear majority of the nodes that measure them: more than
+ * half of the fresh reports that name a relay say the node has failed to reach it for at least
+ * RELAY_DATA_PLANE_FAILING_MS. A report of a shorter failure counts toward the reports, not toward
+ * the failing ones. Such a relay is out of placement whatever its control state: a relay whose
+ * control stream is up while its relay port is dead fails every generation placed on it.
+ *
+ * A majority, not every node: a daemon on the relay's own host (or its network) reaches the relay
+ * while the rest of the fleet cannot. Nodes that do not measure a relay say nothing about it, and
+ * daemons report a relay they fail to reach for as long as they keep trying it, so a relay that
+ * recovered counts as reached again with their next report. Daemons without failure reports count
+ * as reaching it, so with them a relay is judged by the disconnect grace alone.
  */
 export function relayDataPlaneFailures(reports: ReadonlyArray<NodeRelayReachability>): Set<string> {
-  const failing = new Set<string>();
-  const reached = new Set<string>();
+  const counts = new Map<string, { reports: number; failing: number }>();
   for (const report of reports) {
     for (const { relayInstanceId, failingMs } of report) {
-      if (failingMs <= 0) reached.add(relayInstanceId);
-      else if (failingMs >= RELAY_DATA_PLANE_FAILING_MS) failing.add(relayInstanceId);
+      const count = counts.get(relayInstanceId) ?? { reports: 0, failing: 0 };
+      count.reports += 1;
+      if (failingMs >= RELAY_DATA_PLANE_FAILING_MS) count.failing += 1;
+      counts.set(relayInstanceId, count);
     }
   }
-  for (const id of reached) failing.delete(id);
-  return failing;
+  return new Set([...counts].filter(([, count]) => count.failing * 2 > count.reports).map(([id]) => id));
 }
 
 /** Parses how long a node failed to reach each relay it measures (relayLatencies of its health report). */
@@ -353,16 +361,21 @@ export function inDisconnectGrace(
 
 /**
  * The relays placement sees: a relay in its disconnect grace counts as ready where it already
- * serves (`keep`), so a short control-stream loss changes no plan; elsewhere it stays out.
+ * serves (`keep`), so a short control-stream loss changes no plan; elsewhere it stays out. A relay
+ * whose data plane fails (`failing`, relayDataPlaneFailures) is out everywhere, even while its
+ * control stream is up.
  */
 export function placementInstances(
   instances: RelayInstanceRow[],
   grace: ReadonlySet<string>,
-  keep: ReadonlySet<string>
+  keep: ReadonlySet<string>,
+  failing: ReadonlySet<string> = new Set()
 ): RelayInstanceRow[] {
-  return instances.map((instance) =>
-    grace.has(instance.id) && keep.has(instance.id) ? { ...instance, state: 'ready' as const } : instance
-  );
+  return instances.map((instance) => {
+    if (failing.has(instance.id))
+      return instance.state === 'ready' ? { ...instance, state: 'offline' as const } : instance;
+    return grace.has(instance.id) && keep.has(instance.id) ? { ...instance, state: 'ready' as const } : instance;
+  });
 }
 
 /** Parses the relay latencies stored with a node's health report. */

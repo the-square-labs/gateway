@@ -104,8 +104,8 @@ export class RelayTopologyService {
   }
 
   /**
-   * The relays whose data plane fails for every node that measures them (relayDataPlaneFailures), from the
-   * health reports of the nodes seen lately.
+   * The relays whose data plane fails for most of the nodes that measure them (relayDataPlaneFailures), from
+   * the health reports of the nodes seen lately.
    */
   async relayDataPlaneFailures(now = Date.now()): Promise<Set<string>> {
     const rows = await this.db

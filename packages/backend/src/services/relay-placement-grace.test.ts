@@ -8,6 +8,7 @@ import {
   chooseRelayAssignments,
   type EndpointLatencyPath,
   inDisconnectGrace,
+  parseNodeRelayLatencies,
   parseNodeRelayReachability,
   placementInstances,
   RELAY_DISCONNECT_GRACE_MS,
@@ -147,14 +148,15 @@ describe('Relay disconnect grace', () => {
     expect(evacuated.map(({ instance }) => instance.id).sort()).toEqual(['relay-local', 'relay-uk']);
   });
 
-  it('keeps the grace while any node still reaches the relay, or a failure is still short', () => {
-    expect(
-      relayDataPlaneFailures([
-        [{ relayInstanceId: 'relay-nl', failingMs: 60_000 }],
-        [{ relayInstanceId: 'relay-nl', failingMs: 0 }],
-      ]).size
-    ).toBe(0);
-    expect(relayDataPlaneFailures([[{ relayInstanceId: 'relay-nl', failingMs: 5_000 }]]).size).toBe(0);
+  it('judges a data plane failing by a clear majority of the nodes that measure the relay', () => {
+    const report = (failingMs: number) => [{ relayInstanceId: 'relay-nl', failingMs }];
+    // Half is no majority, and a failure shorter than 15 s counts only among the reports.
+    expect(relayDataPlaneFailures([report(60_000), report(0)]).size).toBe(0);
+    expect(relayDataPlaneFailures([report(60_000), report(5_000)]).size).toBe(0);
+    expect(relayDataPlaneFailures([report(5_000)]).size).toBe(0);
+    // A daemon on the relay's own host reaches it while the rest of the fleet cannot.
+    expect([...relayDataPlaneFailures([report(150_000), report(150_000), report(0)])]).toEqual(['relay-nl']);
+    expect([...relayDataPlaneFailures([report(16_000)])]).toEqual(['relay-nl']);
     // A daemon without failure reports always counts as reaching the relay.
     expect(parseNodeRelayReachability([{ relayInstanceId: 'relay-nl', rttMs: 298 }])).toEqual([
       { relayInstanceId: 'relay-nl', failingMs: 0 },
@@ -173,6 +175,209 @@ describe('Relay disconnect grace', () => {
         { relayInstanceId: 'relay-uk', rttMs: 62 },
       ],
     });
+    // Failing for longer than the daemon keeps a round trip: still reported, its distance unknown.
+    const { relayLatencies } = relayLatencyHealth([
+      { relayInstanceId: 'relay-nl', rttMicros: 0, failingMs: 600000 },
+      { relayInstanceId: 'relay-uk', rttMicros: 0 },
+    ]);
+    expect(relayLatencies).toEqual([{ relayInstanceId: 'relay-nl', rttMs: 0, failingMs: 600000 }]);
+    expect(parseNodeRelayLatencies(relayLatencies).size).toBe(0);
+    expect(parseNodeRelayReachability(relayLatencies)).toEqual([{ relayInstanceId: 'relay-nl', failingMs: 600000 }]);
+  });
+});
+
+type PlacementView = {
+  grace: Set<string>;
+  holdBack: Set<string>;
+  readyFaultDomains: Set<string>;
+  instancesFor(current: Array<{ relayInstanceId: string }>): RelayInstanceRow[];
+};
+
+function placementViewOf(service: RelayPoolService) {
+  return (instances: RelayInstanceRow[], failing: ReadonlySet<string>, at: number) =>
+    (
+      service as unknown as {
+        placementView(instances: RelayInstanceRow[], failing: ReadonlySet<string>, now: number): PlacementView;
+      }
+    ).placementView(instances, failing, at);
+}
+
+// The rc.3 stand (F-1): NL's control stream came back while its relay port stayed dead. Gateway placed it again
+// within a minute although every node reported it failing, and that generation failed after about 70 s for all
+// 17 endpoints, retried every 5 minutes.
+describe('Relay whose data plane fails while its control stream is up', () => {
+  const instances = [relay('relay-local'), relay('relay-uk'), relay('relay-nl')];
+  const failing = new Set(['relay-nl']);
+
+  it('is neither placed nor kept, and counts toward no fault domain', () => {
+    const view = placementViewOf(new RelayPoolService({} as never, {} as never, {} as never, {} as never, {} as never));
+    const failed = view(instances, failing, NOW);
+    expect(failed.readyFaultDomains.size).toBe(2);
+    expect(failed.grace.size).toBe(0);
+    // Kept: the active generation still holds it.
+    const planned = plan(failed.instancesFor(placedOnAll));
+    expect(planned.map(({ instance }) => instance.id).sort()).toEqual(['relay-local', 'relay-uk']);
+    // Nor in its disconnect grace: an offline relay whose data plane fails leaves at once (S4).
+    const offline = view([relay('relay-local'), relay('relay-uk'), disconnected(20_000)], failing, NOW);
+    expect(offline.grace.size).toBe(0);
+    expect(plan(offline.instancesFor(placedOnAll)).map(({ instance }) => instance.id)).not.toContain('relay-nl');
+  });
+
+  it('is placed again at once when the nodes reach it, held back to free slots for a while', () => {
+    const view = placementViewOf(new RelayPoolService({} as never, {} as never, {} as never, {} as never, {} as never));
+    view(instances, failing, NOW);
+    const reached = view(instances, new Set(), NOW + 30_000);
+    expect(reached.readyFaultDomains.size).toBe(3);
+    expect([...reached.holdBack]).toEqual(['relay-nl']);
+    // Nearest relay now, yet it takes a free (fallback) slot only, without displacing the serving primary.
+    const nearerNl: EndpointLatencyPath = {
+      endpoint: new Map([
+        ['relay-local', 40],
+        ['relay-uk', 62],
+        ['relay-nl', 1],
+      ]),
+      sources: [],
+    };
+    const withoutNl = placedOnAll.filter(({ relayInstanceId }) => relayInstanceId !== 'relay-nl');
+    const returned = planRelays(
+      'endpoint-1',
+      reached.instancesFor(withoutNl),
+      3,
+      false,
+      nearerNl,
+      withoutNl,
+      false,
+      undefined,
+      reached.holdBack
+    );
+    expect(returned.find(({ instance }) => instance.id === 'relay-nl')?.role).toBe('fallback');
+    expect(returned.find(({ instance }) => instance.id === 'relay-local')?.role).toBe('primary');
+    expect(view(instances, new Set(), NOW + 30_000 + RELAY_RETURN_HOLD_MS).holdBack.size).toBe(0);
+  });
+
+  it('keeps its role where it still serves when it recovers before a generation moved the endpoint off it', () => {
+    const service = new RelayPoolService({} as never, {} as never, {} as never, {} as never, {} as never);
+    const view = placementViewOf(service);
+    const nearNl: EndpointLatencyPath = {
+      endpoint: new Map([
+        ['relay-local', 40],
+        ['relay-uk', 62],
+        ['relay-nl', 1],
+      ]),
+      sources: [],
+    };
+    const planEndpoint = (current: PlacementView, active: typeof placedOnAll) =>
+      (
+        service as unknown as {
+          planEndpoint(
+            endpointId: string,
+            instances: RelayInstanceRow[],
+            desiredCount: number,
+            localOnly: boolean,
+            path: EndpointLatencyPath,
+            active: typeof placedOnAll,
+            availabilityMember: boolean,
+            notes: undefined,
+            holdBack: ReadonlySet<string>
+          ): ReturnType<typeof planRelays>;
+        }
+      ).planEndpoint(
+        'endpoint-1',
+        current.instancesFor(active),
+        current.readyFaultDomains.size,
+        false,
+        nearNl,
+        active,
+        false,
+        undefined,
+        current.holdBack
+      );
+    const active = [
+      { relayInstanceId: 'relay-nl', role: 'primary' },
+      { relayInstanceId: 'relay-local', role: 'fallback' },
+      { relayInstanceId: 'relay-uk', role: 'fallback' },
+    ];
+    // Failing for a moment: planned without it, but nothing was staged before it recovered.
+    const failed = planEndpoint(view(instances, failing, NOW), active);
+    expect(failed.map(({ instance }) => instance.id)).not.toContain('relay-nl');
+    // Back: its endpoint still runs through it, so it is not held back and the plan is the active one again.
+    expect(samePlannedAssignments(active, planEndpoint(view(instances, new Set(), NOW + 20_000), active))).toBe(true);
+  });
+
+  it('is judged from fresh reports each pass, so a healthy relay is never kept out by an earlier judgement', async () => {
+    let failingNow = new Set(['relay-nl']);
+    const service = new RelayPoolService({} as never, {} as never, {} as never, {} as never, {} as never);
+    service.setTopology({ endpointPaths: async () => new Map(), relayDataPlaneFailures: async () => failingNow });
+    const judge = () =>
+      (
+        service as unknown as { dataPlaneFailures(instances: RelayInstanceRow[]): Promise<Set<string>> }
+      ).dataPlaneFailures(instances);
+    expect([...(await judge())]).toEqual(['relay-nl']);
+    failingNow = new Set();
+    expect((await judge()).size).toBe(0);
+    // Without the reports (a read failure) relays are placed by their control state.
+    service.setTopology({
+      endpointPaths: async () => new Map(),
+      relayDataPlaneFailures: async () => {
+        throw new Error('database unavailable');
+      },
+    });
+    expect((await judge()).size).toBe(0);
+  });
+
+  it('retries at once an attempt planned before a relay of it failed or recovered on its data plane', async () => {
+    // The judgement is timed by the clock: the attempts were planned two minutes ago and failed one minute ago.
+    const failedAt = Date.now() - 60_000;
+    const attempt = (id: string, endpointId: string) => ({
+      id,
+      endpointId,
+      createdAt: new Date(failedAt - 60_000),
+      updatedAt: new Date(failedAt),
+    });
+    const attempts = [attempt('gen-13', 'endpoint-1'), attempt('gen-20', 'endpoint-2')];
+    const relaysOf: Record<string, string[]> = { 'gen-13': ['relay-local', 'relay-nl'], 'gen-20': ['relay-local'] };
+    const db = {
+      select: () => ({
+        from: () => ({
+          where: async () =>
+            Object.entries(relaysOf).flatMap(([generationId, ids]) =>
+              ids.map((relayInstanceId) => ({ generationId, relayInstanceId }))
+            ),
+        }),
+      }),
+    };
+    let failingNow = new Set<string>();
+    const service = new RelayPoolService(db as never, {} as never, {} as never, {} as never, {} as never);
+    service.setTopology({ endpointPaths: async () => new Map(), relayDataPlaneFailures: async () => failingNow });
+    const internals = service as unknown as {
+      dataPlaneFailures(instances: RelayInstanceRow[]): Promise<Set<string>>;
+      failureRetryTimes(failures: typeof attempts): Promise<Map<string, number>>;
+    };
+    await internals.dataPlaneFailures(instances);
+    const fiveMinutes = 5 * 60_000;
+    // Nothing changed since the failures: both wait out the failure cooldown.
+    expect(await internals.failureRetryTimes(attempts)).toEqual(
+      new Map([
+        ['endpoint-1', failedAt + fiveMinutes],
+        ['endpoint-2', failedAt + fiveMinutes],
+      ])
+    );
+    // NL is judged failing after the attempt that held it was planned: that endpoint goes again at once.
+    failingNow = new Set(['relay-nl']);
+    await internals.dataPlaneFailures(instances);
+    const retry = await internals.failureRetryTimes(attempts);
+    expect(retry.get('endpoint-1')).toBe(0);
+    expect(retry.get('endpoint-2')).toBe(failedAt + fiveMinutes);
+    // The attempt planned after that judgement waits out the cooldown again when it fails.
+    const replanned = {
+      id: 'gen-14',
+      endpointId: 'endpoint-1',
+      createdAt: new Date(Date.now() + 1_000),
+      updatedAt: new Date(Date.now() + 2_000),
+    };
+    expect((await internals.failureRetryTimes([replanned])).get('endpoint-1')).toBe(
+      replanned.updatedAt.getTime() + fiveMinutes
+    );
   });
 });
 
