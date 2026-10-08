@@ -275,8 +275,10 @@ func (e *fakeConnectorEngine) serve(request *http.Request) (*http.Response, erro
 		_ = json.NewDecoder(request.Body).Decode(&body)
 		e.created++
 		slot := 0
-		if name == secureLinkConnectorSlots[1].name {
-			slot = 1
+		for index, candidate := range secureLinkConnectorSlots {
+			if name == candidate.name {
+				slot = index
+			}
 		}
 		created := &fakeConnectorContainer{
 			id: fmt.Sprintf("created-%d", e.created), name: name, image: body.Image, groups: body.HostConfig.GroupAdd, slot: slot,

@@ -195,6 +195,19 @@ func (s *proxyTunnelSet) drainWhere(match func(*drainConn) bool, limit, tick tim
 	}
 }
 
+// count reports how many tracked tunnels match selects.
+func (s *proxyTunnelSet) count(match func(*drainConn) bool) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	matched := 0
+	for connection := range s.tunnels {
+		if match(connection) {
+			matched++
+		}
+	}
+	return matched
+}
+
 // drainConn is the connection to the workload behind a Secure Link tunnel. It
 // records when a request last went in (Write) and an answer last came out
 // (Read).
