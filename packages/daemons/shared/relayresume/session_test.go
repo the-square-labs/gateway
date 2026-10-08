@@ -717,3 +717,203 @@ func TestUnplannedResumeTriesTheFailedRelayLast(t *testing.T) {
 	}
 	session.Abort(RstAborted, "done")
 }
+
+// delayFrames forwards what arrives on from to to after d, in order (a far
+// relay), until dead closes.
+func delayFrames(from, to chan *relayv1.TunnelFrame, d time.Duration, dead chan struct{}) {
+	type timed struct {
+		frame *relayv1.TunnelFrame
+		at    time.Time
+	}
+	queue := make(chan timed, 1024)
+	go func() {
+		for {
+			select {
+			case frame := <-from:
+				queue <- timed{frame, time.Now().Add(d)}
+			case <-dead:
+				return
+			}
+		}
+	}()
+	go func() {
+		for {
+			select {
+			case item := <-queue:
+				// What the transport has not delivered when a side cancels is lost.
+				select {
+				case <-time.After(time.Until(item.at)):
+				case <-dead:
+					return
+				}
+				select {
+				case to <- item.frame:
+				case <-dead:
+					return
+				}
+			case <-dead:
+				return
+			}
+		}
+	}()
+}
+
+// farRelayHarness is a harness whose target backend answers once and resets
+// the connection (as a database does when its client leaves), with a far
+// relay whose frames take 30 ms each way (a transport that drops what it has
+// not delivered when a side cancels) and a near one. Its dial opens on the far
+// relay unless told to avoid it.
+func farRelayHarness(t *testing.T) (*harness, func(context.Context, string) (OpenedPath, error)) {
+	h := newHarness(t, "relay-far", "relay-near")
+	h.backend.Close()
+	backend, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { backend.Close() })
+	h.backend = backend
+	go func() {
+		for {
+			conn, err := backend.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				buffer := make([]byte, 64)
+				n, _ := conn.Read(buffer)
+				_, _ = conn.Write(buffer[:n])
+				time.Sleep(time.Millisecond)
+				_ = conn.(*net.TCPConn).SetLinger(0)
+				_ = conn.Close()
+			}()
+		}
+	}()
+	dial := func(_ context.Context, avoid string) (OpenedPath, error) {
+		relay := h.relay("relay-far")
+		if avoid == relay.id {
+			relay = h.relay("relay-near")
+		}
+		src, tgt, tunnel := relay.open()
+		if relay.id == "relay-far" {
+			toTarget, toSource := src.out, tgt.out
+			src.out, tgt.out = make(chan *relayv1.TunnelFrame, 64), make(chan *relayv1.TunnelFrame, 64)
+			delayFrames(src.out, toTarget, 30*time.Millisecond, tunnel.dead)
+			delayFrames(tgt.out, toSource, 30*time.Millisecond, tunnel.dead)
+		}
+		h.wg.Add(1)
+		go func() {
+			defer h.wg.Done()
+			h.serveTarget(OpenedPath{Stream: tgt, Cancel: func() {
+				tgt.cancelOnce.Do(func() { close(tgt.cancelled) })
+				tunnel.kill(status.Error(codes.Canceled, "context canceled"))
+			}, CloseSend: func() error {
+				select {
+				case tgt.out <- &relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_HalfClose{HalfClose: &relayv1.TunnelHalfClose{}}}:
+				case <-tunnel.dead:
+				}
+				return nil
+			}, RelayID: relay.id, MaxFrame: relay.maxFrame})
+		}()
+		return OpenedPath{Stream: src, Cancel: func() { tunnel.kill(status.Error(codes.Canceled, "context canceled")) },
+			RelayID: relay.id, MaxFrame: relay.maxFrame}, nil
+	}
+	return h, dial
+}
+
+// shortStream runs one request through a new stream opened on the far relay
+// (during() runs meanwhile) and returns the stream once it ended. halfClose
+// ends the request with the client's FIN; without it the client waits for the
+// answer with its side open.
+func shortStream(t *testing.T, h *harness, dial func(context.Context, string) (OpenedPath, error), halfClose bool, during func(*Session)) *Session {
+	first, err := dial(context.Background(), "relay-near")
+	if err != nil {
+		t.Error(err)
+		return nil
+	}
+	session, err := h.mgr.NewSource(SourceConfig{RouteID: "route-1", Key: func() (string, []byte, bool) { return "v1", h.key, true },
+		Dial: func(ctx context.Context, request DialRequest) (OpenedPath, error) { return dial(ctx, request.Avoid) }}, first)
+	if err != nil {
+		t.Error(err)
+		return nil
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Error(err)
+		return nil
+	}
+	app, _ := net.Dial("tcp", listener.Addr().String())
+	local, _ := listener.Accept()
+	listener.Close()
+	if app == nil || local == nil {
+		t.Error("no local connection")
+		return nil
+	}
+	defer app.Close()
+	go func() {
+		_ = relaybridge.BridgeWithChunk(context.Background(), local, session, session.MaxFrame(), 32*1024, session.Cancel)
+	}()
+	if during != nil {
+		go during(session)
+	}
+	_, _ = app.Write([]byte("SELECT 1"))
+	if halfClose {
+		_ = app.(*net.TCPConn).CloseWrite()
+	}
+	_, _ = io.ReadAll(app)
+	select {
+	case <-session.Done():
+	case <-time.After(20 * time.Second):
+		t.Errorf("stream did not end: %s", session.State())
+		return nil
+	}
+	return session
+}
+
+// A target that resets its stream keeps the tunnel until the source read the
+// RST: cancelled at once, a far relay's transport dropped it, the source saw
+// its path fail, and its resume was refused as a cut (stand rc.6 O-3).
+func TestSessionTargetResetReachesTheSource(t *testing.T) {
+	h, dial := farRelayHarness(t)
+	for i := 0; i < 20; i++ {
+		session := shortStream(t, h, dial, i%2 == 0, nil)
+		if session == nil {
+			return
+		}
+		var reset *ResetError
+		if !errors.As(session.Err(), &reset) || !reset.Remote {
+			t.Fatalf("stream %d ended with %v, not the target's reset", i, session.Err())
+		}
+	}
+	if stats := h.mgr.Stats(); stats.Cut != 0 || stats.MigrationsOK+stats.MigrationsFailed != 0 {
+		t.Fatalf("cut %d, migrations %d/%d", stats.Cut, stats.MigrationsOK, stats.MigrationsFailed)
+	}
+}
+
+// Short streams whose target resets them (their backend left) end as the
+// peer's reset also when a move to a nearer relay overlaps their end: the
+// refusal of the move arrives before the RST on the far old relay, and is no
+// cut (stand rc.6 O-3).
+func TestSessionPeerResetWhileMovingIsNotCut(t *testing.T) {
+	h, dial := farRelayHarness(t)
+	var wg sync.WaitGroup
+	for i := 0; i < 150; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			session := shortStream(t, h, dial, true, func(session *Session) {
+				time.Sleep(time.Duration(rand.IntN(150)) * time.Millisecond)
+				h.mgr.Migrate(session, TriggerReturn, time.Time{})
+			})
+			if session != nil && isCut(session.Err()) {
+				t.Errorf("stream %d counted as cut: %v", i, session.Err())
+			}
+		}(i)
+		if i%25 == 24 {
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	wg.Wait()
+	if stats := h.mgr.Stats(); stats.Cut != 0 {
+		t.Fatalf("%d streams counted as cut", stats.Cut)
+	}
+}

@@ -254,6 +254,13 @@ type Core struct {
 	out        []Output
 	lostRelay  string // relay of the last current path that failed
 
+	// refused is a RESUME_REJ reset that ended a planned move while the old
+	// path still runs (source): the target reset the stream and sent its RST on
+	// the old path, which may be slower than the new one. The stream hears that
+	// path out until refusedDeadline before it counts as cut.
+	refused         byte
+	refusedDeadline time.Time
+
 	// Statistics.
 	Retransmitted uint64
 	Migrations    uint64
@@ -398,7 +405,7 @@ func (c *Core) TakeMigrateRequest() (byte, bool) {
 // CanResume reports a source session that can start a resume attempt now.
 func (c *Core) CanResume() bool {
 	return c.cfg.Role == RoleSource && c.pending == nil && (c.state == StateOpen || c.state == StateSuspended) &&
-		!c.closeEchoDone()
+		!c.closeEchoDone() && c.refused == 0
 }
 
 // NeedsPath reports a suspended source session.
@@ -969,6 +976,11 @@ func (c *Core) PathFailed(p *Path, terminal bool, cause error, now time.Time) {
 			c.closeAll()
 			return
 		}
+		if c.refused != 0 {
+			// The old path ended without telling how the target ended the stream.
+			c.endRefused(c.refused)
+			return
+		}
 		c.suspend(now)
 	}
 }
@@ -1053,19 +1065,30 @@ func (c *Core) resumeAnswer(p *Path, record *Record, now time.Time) bool {
 			c.attemptFailed(p, now)
 			return false
 		}
-		if record.Code == RejectFinished && c.Done() {
-			c.finish()
-			return false
-		}
 		if record.Code == RejectStaleEpoch {
 			// Another RESUME with this epoch reached the target first (a
 			// relay replayed or delayed one): try again with a higher epoch.
 			c.attemptFailed(p, now)
 			return false
 		}
-		c.err = &ResetError{Code: RstResumeRejected, Reject: record.Code, Err: ErrProtocol}
-		c.state = StateReset
-		c.closeAll()
+		if c.Done() {
+			// Both directions were complete: the stream had closed and only
+			// the CLOSE exchange was missing; nothing was lost, whatever the
+			// target answers.
+			c.finish()
+			return false
+		}
+		if record.Code == RejectReset && c.old != nil && !c.old.closed {
+			// A planned move: the target reset the stream meanwhile (its
+			// local connection ended) and sent its RST, after its last acks,
+			// on the old path, which this answer overtook. The old path tells
+			// how the stream ended: a peer reset, not a stream that could not
+			// move.
+			c.refused, c.refusedDeadline = record.Code, now.Add(ResumeAckTimeout)
+			c.attemptFailed(p, now)
+			return false
+		}
+		c.endRefused(record.Code)
 		return false
 	case TypeResumeAck:
 	default:
@@ -1106,6 +1129,18 @@ func (c *Core) resumeAnswer(p *Path, record *Record, now time.Time) bool {
 	c.ackSent, c.ackDue = min(c.delivered, p.resumeFrom), time.Time{}
 	c.resumed(now)
 	return true
+}
+
+// endRefused ends a stream whose resume the target refused (source): it could
+// not move, so it counts as cut, unless both directions had completed.
+func (c *Core) endRefused(code byte) {
+	if c.Done() {
+		c.finish()
+		return
+	}
+	c.err = &ResetError{Code: RstResumeRejected, Reject: code, Err: ErrProtocol}
+	c.state = StateReset
+	c.closeAll()
 }
 
 // ResumeVerdict is the target's answer to a RESUME.
@@ -1216,6 +1251,9 @@ func (c *Core) NextDeadline() time.Time {
 	consider(c.suspendDeadline)
 	consider(c.lingerDeadline)
 	consider(c.handshakeDeadine)
+	if c.refused != 0 {
+		consider(c.refusedDeadline)
+	}
 	if c.pending != nil {
 		consider(c.pending.deadline)
 	}
@@ -1236,6 +1274,11 @@ func (c *Core) Tick(now time.Time) {
 	}
 	if c.pending != nil && !now.Before(c.pending.deadline) {
 		c.attemptFailed(c.pending, now)
+	}
+	if c.refused != 0 && !now.Before(c.refusedDeadline) {
+		// The old path told nothing in time.
+		c.endRefused(c.refused)
+		return
 	}
 	if !c.suspendDeadline.IsZero() && !now.Before(c.suspendDeadline) && (c.state == StateSuspended || c.state == StateResuming) {
 		if c.Done() {

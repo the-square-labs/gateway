@@ -385,3 +385,117 @@ func TestNoteRouteKeyClearsLegacyLatch(t *testing.T) {
 		t.Fatal("a new key kept the latch")
 	}
 }
+
+// refusedMove brings a pair to a planned move the target refuses because it
+// reset the stream meanwhile: the source sent a request and its FIN, the
+// target answered and then reset (its local connection ended abruptly). The
+// target's last records (ack, answer, RST) wait on the old path, which the
+// refusal on the new path overtook. It returns them and the source's old path.
+func refusedMove(t *testing.T) (*corePair, *Path, []Output) {
+	pair := newCorePair(t)
+	old := pair.src.Current()
+	pair.src.Write([]byte("request"), pair.now)
+	pair.src.CloseWrite(pair.now)
+	pair.deliverOutputs(pair.src, pair.src.TakeOutputs(), pair.tgt)
+	for {
+		if _, fin, ok := pair.tgt.Read(pair.now); !ok || fin {
+			break
+		}
+	}
+	pair.tgt.Write([]byte("answer"), pair.now)
+	pair.tgt.Abort(RstLocal, "backend connection reset", nil)
+	held := pair.tgt.TakeOutputs()
+	_, tgtPath, resume := pair.resumeFrame("relay-b")
+	if verdict := pair.tgt.AcceptResume(tgtPath, &resume, pair.now); verdict.Accepted || verdict.Reject != RejectReset {
+		t.Fatalf("verdict %+v", verdict)
+	}
+	pair.deliverOutputs(pair.tgt, pair.tgt.TakeOutputs(), pair.src)
+	return pair, old, held
+}
+
+// A stream the target reset while it moved ends as the peer's reset, as it
+// would have on its old path, not as a stream that could not move (stand rc.6
+// O-3: short sessions that ended during a move counted as cuts).
+func TestCoreRefusedMoveHearsOutTheOldPath(t *testing.T) {
+	pair, old, held := refusedMove(t)
+	if pair.src.State() != StateOpen || pair.src.Current() != old {
+		t.Fatalf("source ended at the refusal: %s %v", pair.src.State(), pair.src.Err())
+	}
+	if pair.src.CanResume() {
+		t.Fatal("a refused stream tries to move again")
+	}
+	pair.deliverOutputs(pair.tgt, held, pair.src)
+	var reset *ResetError
+	if pair.src.State() != StateReset || !errors.As(pair.src.Err(), &reset) || !reset.Remote || isCut(pair.src.Err()) {
+		t.Fatalf("source %s err %v", pair.src.State(), pair.src.Err())
+	}
+}
+
+// Without a word on the old path (it ends, or nothing arrives in time) the
+// refusal stands: the stream could not move.
+func TestCoreRefusedMoveWithoutWordIsCut(t *testing.T) {
+	t.Run("old path ends", func(t *testing.T) {
+		pair, old, _ := refusedMove(t)
+		pair.src.PathFailed(old, false, nil, pair.now)
+		var reset *ResetError
+		if !errors.As(pair.src.Err(), &reset) || reset.Reject != RejectReset || !isCut(pair.src.Err()) {
+			t.Fatalf("err %v", pair.src.Err())
+		}
+	})
+	t.Run("nothing in time", func(t *testing.T) {
+		pair, _, _ := refusedMove(t)
+		if next := pair.src.NextDeadline(); next.IsZero() || next.After(pair.now.Add(ResumeAckTimeout)) {
+			t.Fatalf("next deadline %v", next)
+		}
+		pair.advance(ResumeAckTimeout)
+		if !isCut(pair.src.Err()) {
+			t.Fatalf("err %v", pair.src.Err())
+		}
+	})
+}
+
+// A stream whose both directions were complete when its resume was refused
+// (its CLOSE was lost with the path) finished: nothing was lost.
+func TestCoreRefusedAfterBothFinsFinishes(t *testing.T) {
+	for _, code := range []byte{RejectUnknown, RejectFinished, RejectReset} {
+		pair := newCorePair(t)
+		pair.src.Write([]byte("request"), pair.now)
+		pair.src.CloseWrite(pair.now)
+		pair.tgt.Write([]byte("answer"), pair.now)
+		pair.tgt.CloseWrite(pair.now)
+		// Everything but the CLOSE exchange gets through.
+		for i := 0; i < 10; i++ {
+			for {
+				if _, _, ok := pair.src.Read(pair.now); !ok {
+					break
+				}
+			}
+			for {
+				if _, _, ok := pair.tgt.Read(pair.now); !ok {
+					break
+				}
+			}
+			var toTarget []Output
+			for _, out := range pair.src.TakeOutputs() {
+				if out.Frame == nil || out.Frame[0] != TypeClose {
+					toTarget = append(toTarget, out)
+				}
+			}
+			pair.deliverOutputs(pair.src, toTarget, pair.tgt)
+			pair.deliverOutputs(pair.tgt, pair.tgt.TakeOutputs(), pair.src)
+		}
+		if !pair.src.Done() {
+			t.Fatal("source not done")
+		}
+		pair.src.PathFailed(pair.src.Current(), false, nil, pair.now)
+		srcPath := NewPath(nil, "relay-b", MaxFrameBytes)
+		if !pair.src.BeginResume(srcPath, pair.now) {
+			t.Fatal("BeginResume refused")
+		}
+		pair.src.TakeOutputs()
+		pair.src.PathFrame(srcPath, mustRecord(&Record{Type: TypeResumeRej, SessionID: pair.src.SessionID(), Code: code}), pair.now)
+		if pair.src.State() != StateFinished || pair.src.Err() != nil {
+			t.Fatalf("code %d: source %s err %v", code, pair.src.State(), pair.src.Err())
+		}
+	}
+}

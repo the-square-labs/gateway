@@ -56,6 +56,12 @@ type pathRun struct {
 	closing   bool
 	flushed   chan struct{}
 	flushOnce sync.Once
+	// lingering: a target path given up with its last records (RST, CLOSE
+	// echo) in flight: its reader keeps reading until the source ends the
+	// tunnel (ended), so closeRun cancels it only then. A cancel right after
+	// the send could drop those records in the transport.
+	lingering bool
+	ended     bool
 }
 
 // Session drives a Core over real relay streams. It implements the
@@ -149,12 +155,12 @@ func (s *Session) read(run *pathRun) {
 	defer close(run.reader)
 	s.mu.Lock()
 	for {
-		for !run.path.Closed() && !s.backgroundMayRead(run) {
+		for !s.readerDone(run) && !s.backgroundMayRead(run) {
 			run.bgWaiting = true
 			s.bgCond.Wait()
 			run.bgWaiting = false
 		}
-		if run.path.Closed() {
+		if s.readerDone(run) {
 			s.mu.Unlock()
 			return
 		}
@@ -165,6 +171,12 @@ func (s *Session) read(run *pathRun) {
 		run.readerBusy = false
 		s.handleFrameLocked(run, frame, err)
 	}
+}
+
+// readerDone: the path's reader has nothing more to read (mu held). A
+// lingering path is read until its stream ends.
+func (s *Session) readerDone(run *pathRun) bool {
+	return run.path.Closed() && (!run.lingering || run.ended || s.detached)
 }
 
 // backgroundMayRead: the path is free and the bridge is not about to read it.
@@ -180,6 +192,9 @@ func (s *Session) backgroundMayRead(run *pathRun) bool {
 
 // handleFrameLocked processes what a path read returned (mu held).
 func (s *Session) handleFrameLocked(run *pathRun, frame *relayv1.TunnelFrame, err error) {
+	if err != nil {
+		run.ended = true
+	}
 	if run.path.Closed() || s.detached {
 		s.bgCond.Broadcast()
 		return
@@ -295,6 +310,9 @@ func (s *Session) afterLocked(async bool) {
 		}
 		if out.Close {
 			run.close = true
+			if s.core.Role() == RoleTarget && run.op.CloseSend != nil {
+				run.lingering = true
+			}
 			s.bgCond.Broadcast()
 			if !run.closing {
 				// A given-up path ends on its own: its last records get a
@@ -430,7 +448,10 @@ func (s *Session) closeRun(run *pathRun) {
 		}
 	case run.op.CloseSend != nil:
 		// Let the last records (CLOSE echo, RST, RESUME_REJ) leave before the
-		// stream is cancelled: the source ends the tunnel.
+		// stream is cancelled: the source ends the tunnel once it read them,
+		// which the path's reader sees (lingering). Cancelled at once, the
+		// transport could drop them: the source then saw its path fail instead
+		// of the reset, and the target refused its resume (stand rc.6 O-3).
 		_ = run.op.CloseSend()
 		select {
 		case <-run.reader:
