@@ -2027,16 +2027,22 @@ export class RelayPolicyService {
   /**
    * A managed link's runtime: its relay routes (one, or one per Availability placement) and what the nodes running
    * its workloads report. The node holds the link at its capacity whichever relay of the pool carries a connection,
-   * so its count is the link's open connections; the local relay sees only its share.
+   * so its count is the link's open connections. Of the relays only the local one answers Gateway: it adds its share
+   * of the routes it holds, and the counters only relays keep (failures, setup latency, duration) cover that share.
+   * Remote relays report no route runtime to Gateway, so a link they serve alone shows the nodes' counts and none of
+   * the relay-only counters, never an error.
    */
   private async managedLinkRuntime(
     routes: Array<{ id: string; ownerKind: string; ownerId: string; sourceKind: string; sourceId: string }>
   ): Promise<RelayRouteRuntime> {
-    // A placement whose route the relay does not run yet (or any more) adds nothing.
+    // A route the local relay does not hold (served by remote relays, or a placement it does not run yet or any
+    // more) adds nothing, and neither does a local relay that does not answer.
     const results = await Promise.allSettled(routes.map((route) => this.relay.getRouteRuntime(route.id)));
     const runtimes = results.flatMap((result) => (result.status === 'fulfilled' ? [result.value] : []));
-    if (!runtimes.length) throw (results[0] as PromiseRejectedResult).reason;
-    const relayRuntime = runtimes.length === 1 ? relayRouteRuntime(runtimes[0]!) : sumRouteRuntimes(runtimes);
+    const relayRuntime =
+      runtimes.length > 1
+        ? sumRouteRuntimes(runtimes)
+        : relayRouteRuntime(runtimes[0] ?? { routeId: routes[0]?.id ?? '' });
     const now = Date.now();
     const reports = routes.map((route) => {
       if (route.sourceKind !== 'daemon' || !this.managedLinkReports) return null;

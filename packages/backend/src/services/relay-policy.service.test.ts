@@ -516,6 +516,37 @@ describe('RelayPolicyService route runtime', () => {
       expect(requestHealthReport).toHaveBeenCalledWith('node-1', 5_000);
     });
 
+    it('shows the node counts of a link only remote relays serve instead of failing (stand rc.1 F5)', async () => {
+      const db = routesDb([
+        {
+          id: 'route-1',
+          ownerKind: 'managed_storage_binding',
+          ownerId: 'storage-binding-1',
+          sourceKind: 'daemon',
+          sourceId: 'node-1',
+        },
+      ]);
+      const service = createService(db, {
+        applySnapshot: vi.fn(),
+        getRouteRuntime: vi.fn().mockRejectedValue(new Error('5 NOT_FOUND: relay route is not active')),
+      });
+      service.setManagedLinkReports({
+        managedLinkReport: vi.fn(() => ({
+          link: linkReport('managed_storage_binding', 'storage-binding-1', 4, 0, null),
+          reportedAt: new Date(),
+        })),
+        requestHealthReport: vi.fn(),
+      });
+
+      await expect(service.getManagedStorageBindingRouteRuntime('storage-binding-1')).resolves.toMatchObject({
+        routeId: 'route-1',
+        activeStreams: 4,
+        openedTotal: '40',
+        failedTotal: '0',
+        connections: { active: 4 },
+      });
+    });
+
     it('keeps the relay counts while a node does not report links (an older daemon)', async () => {
       const db = routesDb(
         [],
