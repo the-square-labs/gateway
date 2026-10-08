@@ -133,6 +133,9 @@ type Session struct {
 	// RESUME_ACK's rcv_nxt) lets the peer free bytes the next process never
 	// got, or a CLOSE exchange finishes the stream behind its back.
 	sealed bool
+	// frozenOut: Recv last answered ErrFrozen, so the bridge holds no byte
+	// from the stream until it calls Recv again (RecvBlocked).
+	frozenOut bool
 }
 
 func newSession(core *Core, routeID string, recvMax int) *Session {
@@ -632,6 +635,9 @@ func (s *Session) Recv() (*relayv1.TunnelFrame, error) {
 	defer s.mu.Unlock()
 	s.inRecv = true
 	frame, gone, err := s.recvLocked()
+	// A bridge answered ErrFrozen goes on to park holding no byte: it counts
+	// as stopped from here on, not only once it parked.
+	s.frozenOut = err == ErrFrozen
 	s.recvExitLocked(gone)
 	return frame, err
 }
@@ -882,12 +888,13 @@ func (s *Session) Unread(p []byte) {
 	s.partial = append(append(make([]byte, 0, len(p)+len(s.partial)), p...), s.partial...)
 }
 
-// RecvBlocked reports a bridge waiting inside Recv for the stream's path: it
-// holds no byte, and a frozen stream hands it none.
+// RecvBlocked reports a bridge waiting inside Recv for the stream's path, or
+// one Recv answered ErrFrozen that did not call it again: it holds no byte,
+// and a frozen stream hands it none.
 func (s *Session) RecvBlocked() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.inRecv
+	return s.inRecv || s.frozenOut
 }
 
 // HandoverState reads a frozen stream out for another process. The bridge

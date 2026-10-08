@@ -513,6 +513,22 @@ func TestHandoverSourceReadOutBeginsNoMove(t *testing.T) {
 	finish(t, restored, target)
 }
 
+// A bridge Recv answered ErrFrozen holds no byte on its way to park: the
+// handover must count it as stopped, or it finds the bridge between the two
+// and cuts the stream as busy.
+func TestHandoverFrozenRecvCountsAsStopped(t *testing.T) {
+	w := newHandoverWorld(t)
+	_, target := w.open()
+	target.Freeze()
+	if _, err := target.Recv(); err != ErrFrozen {
+		t.Fatalf("Recv: %v", err)
+	}
+	if !target.RecvBlocked() {
+		t.Fatal("a bridge Recv answered ErrFrozen does not count as stopped")
+	}
+	target.Thaw()
+}
+
 // A RESUME that reached a target process before it handed its streams over,
 // and is looked up after the stream left its table, gets no answer: the next
 // process carries the stream, so "unknown" would wrongly end it.
