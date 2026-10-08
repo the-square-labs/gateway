@@ -1508,11 +1508,13 @@ func (x *HealthReport) GetIngressHealth() *IngressHealthReport {
 type DaemonUpdateConnections struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// An update now hands connections over: the running launcher keeps them.
+	// False when an update now would restart the whole service for a newer
+	// launcher (its connections are then under service_restart).
 	HandoverAvailable bool `protobuf:"varint,1,opt,name=handover_available,json=handoverAvailable,proto3" json:"handover_available,omitempty"`
 	// Live connections an update now would keep.
 	Kept uint32 `protobuf:"varint,2,opt,name=kept,proto3" json:"kept,omitempty"`
 	// Live connections an update now would cut, by class (raw_stream,
-	// postgres_tls, registry, backup, no_handover, ...).
+	// postgres_tls, registry, backup, no_handover, service_restart, ...).
 	Cut map[string]uint32 `protobuf:"bytes,3,rep,name=cut,proto3" json:"cut,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
 	// The last update of this daemon, once its counts are final.
 	LastUpdate    *DaemonUpdateConnectionReport `protobuf:"bytes,4,opt,name=last_update,json=lastUpdate,proto3" json:"last_update,omitempty"`

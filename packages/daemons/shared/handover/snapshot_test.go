@@ -15,7 +15,7 @@ import (
 
 func snapshotFixture() *Snapshot {
 	return &Snapshot{
-		DaemonType: "docker", FromVersion: "v2.11.5", CreatedAt: time.UnixMilli(1_790_000_000_000),
+		DaemonType: "docker", FromVersion: "v2.11.4", CreatedAt: time.UnixMilli(1_790_000_000_000),
 		Items: []SnapshotItem{
 			{Kind: KindSession, Conns: []string{"conn/1"}, Inodes: []uint64{4242}, Labels: Labels{"owner_kind": "container_link", "owner_id": "x"},
 				Session: []byte{0x08, 0x01}},

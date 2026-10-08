@@ -4,6 +4,8 @@ import (
 	"net"
 	"sync/atomic"
 	"time"
+
+	"github.com/wiolett-industries/gateway/daemon-shared/handover"
 )
 
 // A restart or update of the nginx daemon hands its Secure Link sockets over
@@ -337,7 +339,7 @@ func (p *NginxPlugin) HandOverSecureLinks() {
 		started := time.Now()
 		// An update hands the resumable streams to the next process (live_handover.go): the drain neither waits
 		// for them nor ends them.
-		handingOver := exitingForUpdate() && handoverKeeper.HandsOver()
+		handingOver := exitingForUpdate() && handover.HandsOverNow(handoverKeeper)
 		resumable := func(connection *trackedConn) bool { return handingOver && connection.resumable.Load() }
 		drain := func(limit, quiet time.Duration, ends drainEnds, skip func(*trackedConn) bool) {
 			done := make(chan struct{})

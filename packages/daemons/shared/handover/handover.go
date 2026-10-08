@@ -25,6 +25,9 @@
 // What is not handed over is cut as before: raw streams of peers without
 // RSv1, connections whose bytes the daemon itself transforms (TLS), a stream
 // still in its handshake, and what does not fit the keeper (MaxConnections).
+// An update that restarts the whole service for a newer launcher (one whose
+// launcher predates self-update, lifecycle.ServiceRestartPending) hands
+// nothing over: the launcher and what it keeps stop too.
 package handover
 
 import (
@@ -37,6 +40,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 	"github.com/wiolett-industries/gateway/daemon-shared/listenerkeep"
 	"github.com/wiolett-industries/gateway/daemon-shared/relayresume"
 )
@@ -70,6 +74,10 @@ const (
 	CutNoSocket   = "no_socket"   // the daemon transforms its bytes (TLS)
 	CutKeepFailed = "keep_failed" // the keeper did not take its socket
 	CutNoHandover = "no_handover" // the update did not hand over at all
+	// CutServiceRestart: the update restarted the whole service, launcher
+	// included (a launcher that predates self-update): what the launcher
+	// keeps stops with it, so the update hands nothing over.
+	CutServiceRestart = "service_restart"
 	// CutResumeFailed: handed over, but its stream did not resume in the
 	// next process (no path within the budget, the peer refused it, or its
 	// socket did not come over).
@@ -103,6 +111,9 @@ type Registry struct {
 	state registryState
 	// handed are the items the last handover passed on, until they returned.
 	handed map[item]bool
+	// notHandedOver is the class an exit cuts what no handover left out
+	// under (no_handover when empty).
+	notHandedOver string
 }
 
 // NewRegistry creates an empty registry.
@@ -170,8 +181,41 @@ type Result struct {
 // one and was not restarted since): the update cuts as before.
 var errNoKeeper = errors.New("handover: the launcher keeps no connections")
 
+// ErrServiceRestart: the update restarts the whole service, launcher included
+// (a launcher that predates self-update), so nothing the launcher keeps
+// reaches the next process: the update cuts as before, once.
+var ErrServiceRestart = errors.New("handover: the update restarts the whole service for a newer launcher")
+
+// serviceRestartPending tells an update that restarts the whole service, and
+// serviceRestartExpected one an update now would restart (the health report's
+// preview); both are replaced in tests.
+var (
+	serviceRestartPending  = lifecycle.ServiceRestartPending
+	serviceRestartExpected = lifecycle.ServiceRestartExpected
+)
+
+// HandsOverNow reports whether the update this process exits for hands
+// connections over through keeper.
+func HandsOverNow(keeper Keeper) bool { return !serviceRestartPending() && keeper.HandsOver() }
+
+// Preview tells whether an update now would hand connections over through
+// keeper, and else the class it would cut them under: service_restart when it
+// would restart the whole service, no_handover without a keeper.
+func Preview(keeper Keeper) (available bool, notHandedOver string) {
+	switch {
+	case serviceRestartExpected():
+		return false, CutServiceRestart
+	case !keeper.HandsOver():
+		return false, CutNoHandover
+	}
+	return true, ""
+}
+
 // Available reports whether an update now hands connections over.
-func Available() bool { return LauncherKeeper.HandsOver() }
+func Available() bool {
+	available, _ := Preview(LauncherKeeper)
+	return available
+}
 
 type candidate struct {
 	it       item
@@ -197,6 +241,13 @@ func (r *Registry) HandOver(opts Options) Result {
 	keeper := opts.Keeper
 	if keeper == nil {
 		keeper = LauncherKeeper
+	}
+	if serviceRestartPending() {
+		r.mu.Lock()
+		r.notHandedOver = CutServiceRestart
+		r.mu.Unlock()
+		result.Err = ErrServiceRestart
+		return result
 	}
 	if !keeper.HandsOver() {
 		result.Err = errNoKeeper
@@ -482,8 +533,9 @@ func socketsOf(it item) []net.Conn {
 }
 
 // Live counts what an update now would keep and cut among the registry's
-// connections (the daemon adds what it carries outside it).
-func (r *Registry) Live(available bool) (kept int, cut map[string]int) {
+// connections (the daemon adds what it carries outside it); available and
+// notHandedOver come from Preview.
+func (r *Registry) Live(available bool, notHandedOver string) (kept int, cut map[string]int) {
 	cut = map[string]int{}
 	if r == nil {
 		return 0, cut
@@ -504,7 +556,7 @@ func (r *Registry) Live(available bool) (kept int, cut map[string]int) {
 		case class != "":
 			cut[class]++
 		case !available:
-			cut[CutNoHandover]++
+			cut[firstNonEmpty(notHandedOver, CutNoHandover)]++
 		default:
 			kept++
 		}
@@ -514,12 +566,16 @@ func (r *Registry) Live(available bool) (kept int, cut map[string]int) {
 
 // Remaining counts the registry's connections that are still carried by this
 // process, by the class an exit now cuts them under: why the handover left
-// them out, or no_handover without one.
+// them out, service_restart when the update restarts the whole service, or
+// no_handover without a handover.
 func (r *Registry) Remaining() map[string]int {
 	cut := map[string]int{}
 	if r == nil {
 		return cut
 	}
+	r.mu.Lock()
+	notHandedOver := firstNonEmpty(r.notHandedOver, CutNoHandover)
+	r.mu.Unlock()
 	for _, it := range r.snapshotItems() {
 		switch current := it.(type) {
 		case *Bridge:
@@ -533,7 +589,7 @@ func (r *Registry) Remaining() map[string]int {
 			current.stop.mu.Lock()
 			excluded := current.excluded
 			current.stop.mu.Unlock()
-			cut[firstNonEmpty(excluded, CutNoHandover)]++
+			cut[firstNonEmpty(excluded, notHandedOver)]++
 		case *Pipe:
 			if handed, _ := current.stop.verdictIs(verdictHanded); handed {
 				continue
@@ -541,7 +597,7 @@ func (r *Registry) Remaining() map[string]int {
 			current.stop.mu.Lock()
 			excluded := current.excluded
 			current.stop.mu.Unlock()
-			cut[firstNonEmpty(excluded, CutNoHandover)]++
+			cut[firstNonEmpty(excluded, notHandedOver)]++
 		}
 	}
 	return cut

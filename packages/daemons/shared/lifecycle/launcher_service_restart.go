@@ -50,6 +50,11 @@ var (
 	launcherServiceRestartWait = 20 * time.Second
 
 	serviceRestartPending atomic.Bool
+	// serviceRestartExpected is kept current by watchLauncher.
+	serviceRestartExpected atomic.Bool
+	// serviceRestartRecheck bounds how long an expectation stands while
+	// neither the launcher nor its refresh journal changed.
+	serviceRestartRecheck = 10 * time.Minute
 )
 
 // ServiceRestartPending reports whether the restart this daemon prepares for
@@ -57,6 +62,44 @@ var (
 // launcher keeps reaches the next daemon process.
 func ServiceRestartPending() bool {
 	return serviceRestartPending.Load()
+}
+
+// ServiceRestartExpected reports whether an update now would restart the
+// whole service, as the update decides it with the binary on disk as its
+// target: the health report's preview of what an update does to the
+// connections. The update itself decides again (ServiceRestartPending).
+func ServiceRestartExpected() bool {
+	return serviceRestartExpected.Load()
+}
+
+// serviceRestartExpectation keeps ServiceRestartExpected current. Planning
+// probes binaries, so it plans again only when the launcher or its refresh
+// journal changed, or after serviceRestartRecheck.
+type serviceRestartExpectation struct {
+	key     string
+	checked time.Time
+}
+
+func (e *serviceRestartExpectation) refresh(launcher LauncherInfo) {
+	if !launcher.Managed || launcher.Has(LauncherFeatureSelfUpdate) {
+		serviceRestartExpected.Store(false)
+		e.key = ""
+		return
+	}
+	executable, err := currentExecutable()
+	if err != nil {
+		serviceRestartExpected.Store(false)
+		return
+	}
+	stateDir := launcherStateDirFromEnvironment(executable)
+	journal, _ := os.ReadFile(launcherRefreshStatePath(stateDir))
+	key := fmt.Sprintf("%s|%v|%s", launcher.Version, launcher.Features, journal)
+	if key == e.key && time.Since(e.checked) < serviceRestartRecheck {
+		return
+	}
+	e.key, e.checked = key, time.Now()
+	plan := planLauncherServiceRestart(stateDir, executable, launcher, os.Getppid(), os.Geteuid())
+	serviceRestartExpected.Store(plan != nil && plan.method != "")
 }
 
 // launcherServiceRestart is how a staged update restarts the daemon when its

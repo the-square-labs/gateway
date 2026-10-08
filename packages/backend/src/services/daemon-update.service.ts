@@ -55,6 +55,7 @@ const NODE_UPDATE_METADATA_KEYS = [
   'updateTaskWaitStartedAt',
   'updateNow',
   'updateWarnings',
+  'updateServiceRestart',
 ] as const;
 
 /** What the node keeps of its last completed daemon update (metadata.lastUpdate). */
@@ -63,6 +64,11 @@ export interface NodeLastUpdate {
   completedAt: string;
   /** The update went ahead while long tasks of the node ran (wait timed out, or "update now"). */
   warnings: string[];
+  /**
+   * The daemon's note when its launcher predated launcher self-update: the update restarted the whole service once
+   * (its connections are then cut as service_restart), or why it ran under that launcher instead.
+   */
+  serviceRestart?: string;
   /** The daemon's own counts of the connections the update kept and cut, once it reports them final. */
   connections?: NodeLastUpdateConnections;
 }
@@ -709,12 +715,18 @@ export class DaemonUpdateService {
     return true;
   }
 
-  private async beginNodeUpdateReconnectDeadline(nodeId: string, operationId: string): Promise<boolean> {
+  private async beginNodeUpdateReconnectDeadline(
+    nodeId: string,
+    operationId: string,
+    serviceRestart?: string
+  ): Promise<boolean> {
     const [node] = await this.db.select({ metadata: nodes.metadata }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
     if (!node) return false;
     const metadata = { ...((node.metadata ?? {}) as Record<string, unknown>) };
     if (metadata.updateInProgress !== true || metadata.updateOperationId !== operationId) return false;
 
+    // Kept for the update's result (lastUpdate.serviceRestart).
+    if (serviceRestart) metadata.updateServiceRestart = serviceRestart;
     metadata.updatePhase = 'reconnecting';
     metadata.updateReconnectStartedAt = new Date().toISOString();
     metadata.updateDeadlineAt = new Date(Date.now() + NODE_UPDATE_RECONNECT_TIMEOUT_MS).toISOString();
@@ -735,13 +747,15 @@ export class DaemonUpdateService {
         if (result.success) {
           // How the daemon restarts for the update, when that differs from a restart under its launcher.
           if (result.detail) logger.info('Daemon update staged', { nodeId, detail: result.detail });
-          await this.beginNodeUpdateReconnectDeadline(nodeId, operationId).catch((error) => {
-            logger.error('Failed to start daemon reconnect deadline after update success', {
-              nodeId,
-              operationId,
-              error: error instanceof Error ? error.message : String(error),
-            });
-          });
+          await this.beginNodeUpdateReconnectDeadline(nodeId, operationId, result.detail || undefined).catch(
+            (error) => {
+              logger.error('Failed to start daemon reconnect deadline after update success', {
+                nodeId,
+                operationId,
+                error: error instanceof Error ? error.message : String(error),
+              });
+            }
+          );
           return;
         }
         const reason = result.error || result.detail || 'The daemon rejected the update';
@@ -830,6 +844,9 @@ export class DaemonUpdateService {
       targetVersion: targetVersion || reportedVersion,
       completedAt: registrationObservedAt.toISOString(),
       warnings: updateWarnings(metadata),
+      ...(typeof metadata.updateServiceRestart === 'string' && metadata.updateServiceRestart
+        ? { serviceRestart: metadata.updateServiceRestart }
+        : {}),
     };
     for (const key of NODE_UPDATE_METADATA_KEYS) delete metadata[key];
     metadata.lastUpdate = lastUpdate;

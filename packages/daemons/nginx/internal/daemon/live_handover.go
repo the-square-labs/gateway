@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"maps"
 	"net"
 	"sync"
@@ -89,6 +90,8 @@ func (p *NginxPlugin) handOverConnections() handover.Result {
 	result := p.handover.HandOver(handover.Options{DaemonType: "nginx", Version: lifecycle.Version, Logger: p.logger, Keeper: handoverKeeper})
 	if p.logger != nil {
 		switch {
+		case errors.Is(result.Err, handover.ErrServiceRestart):
+			p.logger.Info("the update restarts the whole service for a newer launcher; it cuts the open connections once")
 		case result.Err != nil:
 			p.logger.Warn("connections are not handed over to the next daemon process; the update cuts them", "error", result.Err)
 		case result.Committed:
@@ -123,8 +126,8 @@ func (p *NginxPlugin) recordUpdateConnections(started time.Time, result handover
 // updateConnections is the health report's view of the connections an update
 // now keeps and cuts, and of the last update.
 func (p *NginxPlugin) updateConnections() *pb.DaemonUpdateConnections {
-	available := handoverKeeper.HandsOver()
-	kept, cut := p.handover.Live(available)
+	available, notHandedOver := handover.Preview(handoverKeeper)
+	kept, cut := p.handover.Live(available, notHandedOver)
 	for class, n := range p.liveCuts.snapshot() {
 		cut[class] += n
 	}

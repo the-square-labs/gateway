@@ -291,8 +291,12 @@ func (s *Store) apply(message string, files []*os.File) {
 	}
 }
 
+// mirror stores what the keeper keeps in systemd's store as well, except a
+// connection or state a daemon hands to its next process (live handover): the
+// next process takes it at once, and a restart of the whole unit ends what it
+// carries anyway.
 func (s *Store) mirror(message string, file *os.File) {
-	if s.notify == nil {
+	if _, name, _ := strings.Cut(message, "\n"); s.notify == nil || transientName(name) {
 		return
 	}
 	if err := forwardToSystemd(s.notify, message, file); err != nil {

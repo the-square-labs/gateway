@@ -845,6 +845,11 @@ export function NodeDetailsTab({
                         : ""}
                     </span>
                   )}
+                  {lastUpdate.serviceRestart && (
+                    <span className="text-xs text-muted-foreground">
+                      {lastUpdate.serviceRestart}
+                    </span>
+                  )}
                   {lastUpdate.warnings.map((warning) => (
                     <span key={warning} className="text-xs text-warning-text">
                       {warning}

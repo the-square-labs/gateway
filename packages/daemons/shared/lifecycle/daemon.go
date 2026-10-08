@@ -361,7 +361,8 @@ func (d *DaemonBase) requestControlReconnect() {
 }
 
 // launcherWatchInterval is how often a daemon checks whether its launcher
-// updated itself in place.
+// updated itself in place, and whether an update now would restart its whole
+// service (ServiceRestartExpected).
 var launcherWatchInterval = 30 * time.Second
 
 func (d *DaemonBase) watchLauncher(ctx context.Context) {
@@ -369,6 +370,8 @@ func (d *DaemonBase) watchLauncher(ctx context.Context) {
 	if !last.Managed {
 		return
 	}
+	var expectation serviceRestartExpectation
+	expectation.refresh(last)
 	ticker := time.NewTicker(launcherWatchInterval)
 	defer ticker.Stop()
 	for {
@@ -378,6 +381,7 @@ func (d *DaemonBase) watchLauncher(ctx context.Context) {
 		case <-ticker.C:
 		}
 		current := LauncherFeatures()
+		expectation.refresh(current)
 		if current.equal(last) {
 			continue
 		}

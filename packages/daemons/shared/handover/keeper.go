@@ -4,6 +4,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 	"github.com/wiolett-industries/gateway/daemon-shared/listenerkeep"
 )
 
@@ -28,7 +29,11 @@ var LauncherKeeper Keeper = launcherKeeper{}
 
 type launcherKeeper struct{}
 
-func (launcherKeeper) HandsOver() bool                       { return listenerkeep.HandsOver() }
+// HandsOver asks the running launcher each time: a launcher that updated
+// itself in place may have gained the keeper since.
+func (launcherKeeper) HandsOver() bool {
+	return lifecycle.LauncherFeatures().Has(lifecycle.LauncherFeatureListenerKeep) && listenerkeep.HandsOver()
+}
 func (launcherKeeper) Keep(name string, file *os.File) error { return listenerkeep.Keep(name, file) }
 func (launcherKeeper) Drop(name string) error                { return listenerkeep.Drop(name) }
 func (launcherKeeper) Take(name string) (*os.File, bool)     { return listenerkeep.Take(name) }

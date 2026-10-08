@@ -251,7 +251,7 @@ export interface HealthReport {
 /**
  * Connections across an update of the daemon. A daemon advertising daemon_stream_handover_v1 hands its relay stream
  * sessions over to the next daemon process; what it cannot hand over is cut. Cut classes are an open set (raw_stream,
- * postgres_tls, registry, backup, no_handover, ...); maps decode to plain objects.
+ * postgres_tls, registry, backup, no_handover, service_restart, ...); maps decode to plain objects.
  */
 export interface DaemonUpdateConnections {
   handoverAvailable?: boolean;

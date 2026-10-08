@@ -7,6 +7,7 @@ const CUT_CLASS_LABELS: Record<string, string> = {
   registry: "registry pulls and pushes",
   backup: "backup runs",
   no_handover: "connections that cannot be handed over",
+  service_restart: "connections of the service restart for the newer launcher",
   handshake: "connections still being set up",
   over_limit: "connections over the handover limit",
   resume_failed: "connections that did not resume",
@@ -46,7 +47,11 @@ export function updateConnectionsSummary(
   report: NodeUpdateConnections | null | undefined
 ): { text: string; detail: string | null } {
   if (!handoverCapable || !report?.handoverAvailable) {
-    return { text: "Open connections are cut once", detail: null };
+    const serviceRestart = handoverCapable && (report?.cut?.service_restart ?? 0) > 0;
+    return {
+      text: "Open connections are cut once",
+      detail: serviceRestart ? "The whole service restarts once to start the newer launcher" : null,
+    };
   }
   const total = cutTotal(report.cut);
   if (total === 0) return { text: "The update keeps connections", detail: null };

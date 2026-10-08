@@ -209,11 +209,13 @@ message HealthReport {
 // what it cannot hand over is cut, as before.
 message DaemonUpdateConnections {
   // An update now hands connections over: the running launcher keeps them.
+  // False when an update now would restart the whole service for a newer
+  // launcher (its connections are then under service_restart).
   bool handover_available = 1;
   // Live connections an update now would keep.
   uint32 kept = 2;
   // Live connections an update now would cut, by class (raw_stream,
-  // postgres_tls, registry, backup, no_handover, ...).
+  // postgres_tls, registry, backup, no_handover, service_restart, ...).
   map<string, uint32> cut = 3;
   // The last update of this daemon, once its counts are final.
   DaemonUpdateConnectionReport last_update = 4;

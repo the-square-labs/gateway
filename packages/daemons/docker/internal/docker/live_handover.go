@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"errors"
 	"maps"
 	"net"
 	"strconv"
@@ -121,6 +122,8 @@ func (p *DockerPlugin) handOverConnections() handover.Result {
 	result := p.handover.HandOver(handover.Options{DaemonType: "docker", Version: lifecycle.Version, Tables: tables, Logger: p.logger,
 		Keeper: handoverKeeper})
 	switch {
+	case errors.Is(result.Err, handover.ErrServiceRestart):
+		p.logger.Info("the update restarts the whole service for a newer launcher; it cuts the open connections once")
 	case result.Err != nil:
 		p.logger.Warn("connections are not handed over to the next daemon process; the update cuts them", "error", result.Err)
 	case result.Committed:
@@ -158,8 +161,8 @@ func (p *DockerPlugin) updateConnections() *pb.DaemonUpdateConnections {
 	if p.cfg.Docker.Mode == "builder" {
 		return nil
 	}
-	available := handoverKeeper.HandsOver()
-	kept, cut := p.handover.Live(available)
+	available, notHandedOver := handover.Preview(handoverKeeper)
+	kept, cut := p.handover.Live(available, notHandedOver)
 	for class, n := range p.liveCuts.snapshot() {
 		cut[class] += n
 	}

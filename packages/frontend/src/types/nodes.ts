@@ -130,7 +130,10 @@ export interface NodeUpdateConnections {
   /** An update now hands connections over to the next daemon process. */
   handoverAvailable: boolean;
   kept: number;
-  /** Connections an update now would cut, by class (raw_stream, postgres_tls, registry, backup, ...). */
+  /**
+   * Connections an update now would cut, by class (raw_stream, postgres_tls, registry, backup, ...; service_restart
+   * when the update would restart the whole service for a newer launcher).
+   */
   cut: Record<string, number>;
 }
 
@@ -146,6 +149,8 @@ export interface NodeLastUpdate {
   targetVersion: string;
   completedAt: string | null;
   warnings: string[];
+  /** The daemon's note when its launcher predated self-update: the whole service restarted once, or why not. */
+  serviceRestart: string | null;
   /** The daemon's own counts, once it reports them final. */
   connections: {
     handover: boolean;
@@ -324,6 +329,10 @@ export function getNodeLastUpdate(node: Node | NodeDetail): NodeLastUpdate | nul
     warnings: Array.isArray(lastUpdate.warnings)
       ? lastUpdate.warnings.filter((warning): warning is string => typeof warning === "string")
       : [],
+    serviceRestart:
+      typeof lastUpdate.serviceRestart === "string" && lastUpdate.serviceRestart
+        ? lastUpdate.serviceRestart
+        : null,
     connections: connections
       ? {
           handover: connections.handover === true,
