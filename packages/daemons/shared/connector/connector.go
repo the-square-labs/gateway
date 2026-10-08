@@ -114,6 +114,10 @@ func (c *Connector) connect(ctx context.Context, address, serverName string, lan
 	return conn, nil
 }
 
+// LaneDialOptions are the options of a relay lane over tlsCfg (the relay's
+// throughput tests dial with them).
+func LaneDialOptions(tlsCfg *tls.Config) []grpc.DialOption { return dialOptions(tlsCfg, true) }
+
 // dialOptions configures a control session or, with lane set, a relay lane:
 // a lane is never left idle (it stays connected for the life of the process
 // and is selected by whether it is connected) and is closed once the relay

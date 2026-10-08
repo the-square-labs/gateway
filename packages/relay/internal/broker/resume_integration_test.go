@@ -424,8 +424,11 @@ type rhAccepted struct {
 // re-registered after the relay restarts, handing every accepted tunnel to
 // the handler.
 type rhTarget struct {
-	h       *rhHarness
-	handle  func(*rhAccepted)
+	h      *rhHarness
+	handle func(*rhAccepted)
+	// conn, when set, is the connection every registration uses (a link
+	// with a delay in front of the relay).
+	conn    *grpc.ClientConn
 	mu      sync.Mutex
 	ready   map[string]int // registrations per relay id
 	cancels []context.CancelFunc
@@ -457,7 +460,10 @@ func (t *rhTarget) register(relay *rhRelay) {
 	t.mu.Lock()
 	t.cancels = append(t.cancels, cancel)
 	t.mu.Unlock()
-	conn := t.h.dial(relay, t.h.targetCert)
+	conn := t.conn
+	if conn == nil {
+		conn = t.h.dial(relay, t.h.targetCert)
+	}
 	go func() {
 		for ctx.Err() == nil {
 			t.registerOnce(ctx, conn, relay.id)
