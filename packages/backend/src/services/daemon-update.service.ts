@@ -733,6 +733,8 @@ export class DaemonUpdateService {
     void completion.then(
       async (result) => {
         if (result.success) {
+          // How the daemon restarts for the update, when that differs from a restart under its launcher.
+          if (result.detail) logger.info('Daemon update staged', { nodeId, detail: result.detail });
           await this.beginNodeUpdateReconnectDeadline(nodeId, operationId).catch((error) => {
             logger.error('Failed to start daemon reconnect deadline after update success', {
               nodeId,

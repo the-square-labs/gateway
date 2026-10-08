@@ -777,6 +777,20 @@ export function NodeDetailsTab({
               </div>
             }
           />
+          {node.daemonVersion && (
+            <DetailRow
+              label="Launcher Version"
+              value={
+                typeof caps.launcherVersion === "string" && caps.launcherVersion ? (
+                  <Badge variant="secondary" className="uppercase">
+                    {caps.launcherVersion}
+                  </Badge>
+                ) : (
+                  "Unknown"
+                )
+              }
+            />
+          )}
           {node.type === "nginx" && (
             <DetailRow label="Nginx Version" value={String(caps.nginxVersion ?? "Unknown")} />
           )}

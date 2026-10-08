@@ -745,6 +745,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                     ...(msg.register.capabilities?.includes('docker_migration_v1') ? { dockerMigrationV1: true } : {}),
                     ...nodeHostAccessFlags(msg.register.capabilities),
                     ...(reportedRuntimeStatus ? { dockerRuntimeStatus: reportedRuntimeStatus } : {}),
+                    launcherVersion: msg.register.launcherVersion || undefined,
                     cpuModel: msg.register.cpuModel || undefined,
                     cpuCores: msg.register.cpuCores || undefined,
                     architecture: msg.register.architecture || undefined,

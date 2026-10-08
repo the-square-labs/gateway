@@ -118,6 +118,8 @@ export interface RegisterMessage {
   dockerRuntimeStatus?: DockerRuntimeStatus;
   hostIdentityId: string;
   relayInstanceId: string;
+  /** Empty for a launcher that predates reporting it. */
+  launcherVersion?: string;
 }
 
 export interface RelayRuntimeStatus {

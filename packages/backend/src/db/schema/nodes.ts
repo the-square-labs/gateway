@@ -36,6 +36,8 @@ export interface NodeCapabilities {
   nodeFilesDisabled?: boolean;
   /** The daemon config sets `console.user` to another user, which the daemon cannot switch to without root. */
   nodeConsoleUserUnavailable?: boolean;
+  /** The version of the launcher process the daemon runs under; absent while the launcher predates reporting it. */
+  launcherVersion?: string;
   dockerRuntimeStatus?: {
     state: 'healthy' | 'installable' | 'unsupported' | 'unknown' | 'installing' | 'failed';
     installedVersion?: string;
