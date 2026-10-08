@@ -797,7 +797,8 @@ func (s *rhSource) setDraining(relayID string, draining bool) {
 
 // dial opens a tunnel on the first active candidate other than avoid (the
 // same relay is fine when it is the only one), each within OpenTimeout.
-func (s *rhSource) dial(ctx context.Context, avoid string) (relayresume.OpenedPath, error) {
+func (s *rhSource) dial(ctx context.Context, request relayresume.DialRequest) (relayresume.OpenedPath, error) {
+	avoid := request.Avoid
 	s.dials.Add(1)
 	s.mu.Lock()
 	var candidates []*rhRelay
@@ -865,7 +866,7 @@ func (s *rhSource) config(halfClose time.Duration) relayresume.SourceConfig {
 // start opens a resumable stream on the first candidate.
 func (s *rhSource) start(halfClose time.Duration) *relayresume.Session {
 	s.h.t.Helper()
-	first, err := s.dial(context.Background(), "")
+	first, err := s.dial(context.Background(), relayresume.DialRequest{})
 	if err != nil {
 		s.h.t.Fatal(err)
 	}
@@ -1396,7 +1397,7 @@ func TestResumeRelayIdleTimeoutStaysTerminal(t *testing.T) {
 	session, err := manager.NewSource(relayresume.SourceConfig{
 		RouteID: "route-idle",
 		Key:     func() (string, []byte, bool) { return keyID, key, true },
-		Dial: func(context.Context, string) (relayresume.OpenedPath, error) {
+		Dial: func(context.Context, relayresume.DialRequest) (relayresume.OpenedPath, error) {
 			dials.Add(1)
 			return relayresume.OpenedPath{}, errors.New("no other relay")
 		},
@@ -1540,7 +1541,7 @@ func (r *rhThroughput) raw(total int) error {
 }
 
 func (r *rhThroughput) resumable(total int) error {
-	first, err := r.source.dial(context.Background(), "")
+	first, err := r.source.dial(context.Background(), relayresume.DialRequest{})
 	if err != nil {
 		return err
 	}
@@ -1771,7 +1772,7 @@ func TestResumeAnsweredWhileTheOldPathSendIsStuck(t *testing.T) {
 	session, err := manager.NewSource(relayresume.SourceConfig{
 		RouteID: "route-stuck",
 		Key:     func() (string, []byte, bool) { return keyID, key, true },
-		Dial: func(context.Context, string) (relayresume.OpenedPath, error) {
+		Dial: func(context.Context, relayresume.DialRequest) (relayresume.OpenedPath, error) {
 			path := newMemRelayPath("relay-b")
 			accept(path)
 			return relayresume.OpenedPath{Stream: path.source, Cancel: func() { path.source.fail(context.Canceled) }, RelayID: path.relayID, MaxFrame: 64 * 1024}, nil

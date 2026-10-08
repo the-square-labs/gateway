@@ -119,7 +119,7 @@ echo %[2]s >> '%[1]s/started'
 reported=%[2]s
 if [ "$(grep -cx %[2]s '%[1]s/started')" -le %[3]d ]; then reported=v1; fi
 trap 'rm -f "%[1]s/running"; kill "$child" 2>/dev/null; exit 0' TERM
-printf '%%s' "$reported" > '%[1]s/running'
+printf '%%s' "$reported" > '%[1]s/running.tmp' && mv '%[1]s/running.tmp' '%[1]s/running'
 sleep 60 &
 child=$!
 wait "$child"
