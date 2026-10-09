@@ -174,6 +174,8 @@ export class NotificationEvaluatorService {
 
   /** Probe windows kept in memory while Redis cannot take them; a Redis outage is itself an alert. */
   private readonly memoryProbeOutcomes = new Map<string, WindowProbeSample[]>();
+  /** Recovery alerts (see isRecoveryEvent) whose resource left the recovery state, when Redis cannot keep them. */
+  private readonly memoryRecoveryArmed = new Set<string>();
   private memoryProbesUntil = 0;
   /** Rules and webhooks for postgres.unavailable, copied while Postgres answers, used while it does not. */
   private postgresOutageTargets: Array<{ rule: any; webhooks: DispatchWebhook[] }> = [];
@@ -1233,6 +1235,39 @@ export class NotificationEvaluatorService {
     });
   }
 
+  private recoveryKey(ruleId: string, resourceId: string): string {
+    return `notif:recovery:armed:${ruleId}:${resourceId}`;
+  }
+
+  /** The resource left a recovery rule's state: its next return fires the rule. Kept a week. */
+  private async armRecovery(ruleId: string, resourceId: string): Promise<void> {
+    const key = this.recoveryKey(ruleId, resourceId);
+    if (this.redis && !this.usingMemoryProbes()) {
+      try {
+        await this.redis.set(key, '1', 'EX', 7 * 24 * 3600);
+        this.memoryRecoveryArmed.delete(key);
+        return;
+      } catch (error) {
+        this.fallBackToMemoryProbes(error);
+      }
+    }
+    this.memoryRecoveryArmed.add(key);
+  }
+
+  /** Whether the resource came back since it left a recovery rule's state; takes the mark, so it fires once. */
+  private async takeArmedRecovery(ruleId: string, resourceId: string): Promise<boolean> {
+    const key = this.recoveryKey(ruleId, resourceId);
+    const inMemory = this.memoryRecoveryArmed.delete(key);
+    if (this.redis && !this.usingMemoryProbes()) {
+      try {
+        return (await this.redis.del(key)) > 0 || inMemory;
+      } catch (error) {
+        this.fallBackToMemoryProbes(error);
+      }
+    }
+    return inMemory;
+  }
+
   private getProbeOutcomeKey(ruleId: string, compositeResourceId: string): string {
     return `notif:threshold:outcomes:${ruleId}:${compositeResourceId}`;
   }
@@ -1478,6 +1513,25 @@ export class NotificationEvaluatorService {
       );
 
       const existingState = await this.getActiveAlertState(rule.id, resource.type, resource.id);
+      // A recovery event (Node Online) is a transition: it fires when the resource comes back, not for a resource that
+      // simply is online (every health report observes it, so a new rule fired for every node at once and an alert
+      // that never closed blocked every later return; stand rc.8, F-5). Leaving the state arms it and closes its alert
+      // quietly at once.
+      const recovery = isRecoveryEvent(rule.category, rule.eventPattern);
+      if (recovery && !active) {
+        await this.armRecovery(rule.id, resource.id);
+        if (existingState) {
+          await this.resolveAlert(
+            existingState.id,
+            rule,
+            resource.type,
+            resource.id,
+            resource.name,
+            this.getEventTemplateDetails(context, rule.eventPattern, currentState, resource.id)
+          );
+        }
+        continue;
+      }
 
       if (active) {
         const durationMs = (rule.durationSeconds ?? 0) * 1000;
@@ -1495,6 +1549,7 @@ export class NotificationEvaluatorService {
         }
 
         if (existingState) continue;
+        if (recovery && !(await this.takeArmedRecovery(rule.id, resource.id))) continue;
 
         await this.fireAlert(
           rule,
