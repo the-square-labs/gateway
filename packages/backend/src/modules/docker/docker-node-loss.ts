@@ -1,6 +1,6 @@
 import { createChildLogger } from '@/lib/logger.js';
+import { isNodeConnectionError } from '@/lib/node-connection-error.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { isLostTrackError } from './docker-task-reconciler.js';
 
 const logger = createChildLogger('DockerNodeLoss');
 
@@ -14,13 +14,6 @@ interface DockerNodeLoss {
 }
 
 const NODE_LOSS = Symbol.for('gateway.docker.nodeLoss');
-
-/** The node's control stream dropped, did not answer in time, or is not connected: no answer from the node. */
-export function isNodeConnectionError(error: unknown): boolean {
-  if (error instanceof AppError) return false;
-  const message = error instanceof Error ? error.message : String(error);
-  return isLostTrackError(error) || /^Node \S+ is not connected$/.test(message);
-}
 
 /**
  * Records on a node connection error what became of the operation's task. The error itself (its message, which the

@@ -100,14 +100,16 @@ export async function manageDockerContainerTool(
     case 'recreate': {
       const containerId = requiredToolString(args.containerId, 'containerId');
       const config = ContainerRecreateSchema.parse(pickDefinedArguments(args, RECREATE_FIELDS));
-      await assertDockerContainerRecreateAccess(dockerService, user, nodeId, containerId, config);
+      // The access checks read the container from the node too: a node lost there is answered the same way.
       const data = await withNodeLossAnswer(
         'recreate',
-        () =>
-          dockerService.recreateWithConfig(nodeId, containerId, config, user.id, {
+        async () => {
+          await assertDockerContainerRecreateAccess(dockerService, user, nodeId, containerId, config);
+          return dockerService.recreateWithConfig(nodeId, containerId, config, user.id, {
             actorScopes: user.scopes,
             backgroundImagePull: true,
-          }),
+          });
+        },
         (message) => dockerService.recordNodeLostTask(nodeId, containerId, 'recreate', message)
       );
       return { success: true, message: 'Container recreate accepted', data };
@@ -123,15 +125,21 @@ export async function manageDockerContainerTool(
     case 'update': {
       const containerId = requiredToolString(args.containerId, 'containerId');
       const config = ContainerUpdateSchema.parse(pickDefinedArguments(args, UPDATE_FIELDS));
-      await ensureDockerContainerScopes(
-        dockerService,
-        user,
-        containerUpdateRequiredScopes(config),
-        nodeId,
-        containerId
+      return withNodeLossAnswer(
+        'update',
+        async () => {
+          await ensureDockerContainerScopes(
+            dockerService,
+            user,
+            containerUpdateRequiredScopes(config),
+            nodeId,
+            containerId
+          );
+          await assertComposeChildMutationAllowed(nodeId, containerId);
+          return dockerService.updateContainer(nodeId, containerId, config, user.id, user.scopes);
+        },
+        (message) => dockerService.recordNodeLostTask(nodeId, containerId, 'update', message)
       );
-      await assertComposeChildMutationAllowed(nodeId, containerId);
-      return dockerService.updateContainer(nodeId, containerId, config, user.id, user.scopes);
     }
     case 'processes': {
       const containerId = requiredToolString(args.containerId, 'containerId');

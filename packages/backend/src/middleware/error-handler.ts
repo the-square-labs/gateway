@@ -2,6 +2,7 @@ import type { Context, ErrorHandler } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { ZodError } from 'zod';
 import { logger } from '@/lib/logger.js';
+import { isNodeConnectionError } from '@/lib/node-connection-error.js';
 import { InferenceProtocolError } from '@/modules/inference/protocol/inference-protocol.error.js';
 import type { AppEnv } from '@/types.js';
 
@@ -189,6 +190,18 @@ export const errorHandler: ErrorHandler<AppEnv> = async (err, c) => {
       path: c.req.path,
     });
     return c.json<ApiError>({ code: 'NOT_FOUND', message: 'Resource not found' }, 404);
+  }
+
+  // A node lost while the request read from it (its control stream dropped): the node is unavailable, not Gateway.
+  if (isNodeConnectionError(err)) {
+    logger.warn('Node unavailable during a request', { requestId, path: c.req.path, message: (err as Error).message });
+    return c.json<ApiError>(
+      {
+        code: 'NODE_UNAVAILABLE',
+        message: 'The node lost its connection or did not answer. Try again once the node is online.',
+      },
+      503
+    );
   }
 
   logger.error('Unhandled error', {

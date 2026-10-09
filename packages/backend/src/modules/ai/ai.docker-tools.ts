@@ -470,12 +470,14 @@ export async function executeDockerTool(
     case 'update_docker_container_image': {
       // Mirrors the recreate route: an image change can expose the container's
       // environment and secrets, so it needs the same scopes as duplicate plus image pull access.
-      const inspectData = await assertDockerContainerRecreateAccess(
-        context.dockerService,
-        user,
-        a.nodeId,
-        a.containerId,
-        { image: String(a.imageTag ?? '') }
+      // The access check reads the container from the node: a node lost there is answered as during the recreate.
+      const inspectData = await withNodeLossAnswer(
+        'recreate',
+        () =>
+          assertDockerContainerRecreateAccess(context.dockerService, user, a.nodeId, a.containerId, {
+            image: String(a.imageTag ?? ''),
+          }),
+        (message) => context.dockerService.recordNodeLostTask(a.nodeId, a.containerId, 'recreate', message)
       );
       // A container under Availability runs a mirrored image on every replica: its own image is the workload's.
       const containerName = String((inspectData as any)?.Name ?? '').replace(/^\/+/, '');

@@ -103,7 +103,7 @@ import {
 import { assertDockerCreationAccess } from './docker-creation-access.js';
 import { DOCKER_DEPLOYMENT_MANAGED_LABEL } from './docker-deployment-labels.js';
 import { assertUserContainerAccessible } from './docker-internal-containers.js';
-import { withNodeLossAnswer } from './docker-node-loss.js';
+import { answerNodeLoss } from './docker-node-loss.middleware.js';
 import { resolveDockerContainerByName } from './docker-route-resolvers.js';
 import { DockerSecretService } from './docker-secret.service.js';
 import { DockerSnapshotService, sanitizeContainerInspect } from './docker-snapshot.service.js';
@@ -697,7 +697,10 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Update container (pull + redeploy). The scopes depend on the change: see containerUpdateRequiredScopes.
   router.openapi(
-    { ...updateContainerRoute, middleware: requireDockerContainerScope('docker:containers:view') },
+    {
+      ...updateContainerRoute,
+      middleware: answerNodeLoss('update', 'update', requireDockerContainerScope('docker:containers:view')),
+    },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -730,7 +733,10 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Recreate container with new config (ports, mounts, entrypoint, etc.)
   router.openapi(
-    { ...recreateContainerRoute, middleware: requireDockerContainerScope('docker:containers:manage') },
+    {
+      ...recreateContainerRoute,
+      middleware: answerNodeLoss('recreate', 'recreate', requireDockerContainerScope('docker:containers:manage')),
+    },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -740,15 +746,10 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const body = await c.req.json();
       const config = ContainerRecreateSchema.parse(body);
       await assertAdditionalContainerScopes(c, containerRecreateRequiredScopes(config));
-      const data = await withNodeLossAnswer(
-        'recreate',
-        () =>
-          service.recreateWithConfig(nodeId, containerId, config, user.id, {
-            actorScopes: c.get('effectiveScopes') || [],
-            backgroundImagePull: true,
-          }),
-        (message) => service.recordNodeLostTask(nodeId, containerId, 'recreate', message)
-      );
+      const data = await service.recreateWithConfig(nodeId, containerId, config, user.id, {
+        actorScopes: c.get('effectiveScopes') || [],
+        backgroundImagePull: true,
+      });
       return c.json({ data });
     }
   );
@@ -807,7 +808,10 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Update container env (recreates the container with it)
   router.openapi(
-    { ...updateContainerEnvRoute, middleware: requireDockerContainerScope('docker:containers:environment') },
+    {
+      ...updateContainerEnvRoute,
+      middleware: answerNodeLoss('env update', 'update', requireDockerContainerScope('docker:containers:environment')),
+    },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -816,11 +820,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       await assertComposeChildMutationAllowed(nodeId, containerId);
       const body = await c.req.json();
       const { env, removeEnv } = EnvUpdateSchema.parse(body);
-      const data = await withNodeLossAnswer(
-        'env update',
-        () => service.updateContainerEnv(nodeId, containerId, env, removeEnv, user.id),
-        (message) => service.recordNodeLostTask(nodeId, containerId, 'update', message)
-      );
+      const data = await service.updateContainerEnv(nodeId, containerId, env, removeEnv, user.id);
       return c.json({ data });
     }
   );

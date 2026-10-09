@@ -132,17 +132,20 @@ export async function manageDockerContainerConfigTool(
     return context.dockerService.getContainerEnv(nodeId, containerId);
   }
   if (operation === 'update_env') {
-    ensureToolScopeForResource(
-      user,
-      'docker:containers:environment',
-      await authorizationResourceId('docker:containers:environment')
-    );
     const input = EnvUpdateSchema.parse(args);
-    // Same guard as the env route: Compose-managed containers change through their project.
-    await assertComposeChildMutationAllowed(nodeId, containerId);
+    // The scope check reads the container from the node too: a node lost there is answered the same way.
     return withNodeLossAnswer(
       'env update',
-      () => context.dockerService.updateContainerEnv(nodeId, containerId, input.env, input.removeEnv, user.id),
+      async () => {
+        ensureToolScopeForResource(
+          user,
+          'docker:containers:environment',
+          await authorizationResourceId('docker:containers:environment')
+        );
+        // Same guard as the env route: Compose-managed containers change through their project.
+        await assertComposeChildMutationAllowed(nodeId, containerId);
+        return context.dockerService.updateContainerEnv(nodeId, containerId, input.env, input.removeEnv, user.id);
+      },
       (message) => context.dockerService.recordNodeLostTask(nodeId, containerId, 'update', message)
     );
   }
