@@ -156,6 +156,12 @@ export interface ManagedDatabasePendingOperation {
    * checked against that.
    */
   previousSettings?: { storageSizeBytes: number; runtimeConfig: ManagedDatabaseRuntimeConfig };
+  /**
+   * An update: the status before it. An update the node refused before it
+   * changed anything (too little disk, a size below the applied one) puts it
+   * back, so a serving database stays ready and keeps its links.
+   */
+  previousStatus?: string;
 }
 
 export type ManagedDatabaseOwnerSeparationState = 'legacy' | 'preparing' | 'active' | 'error';

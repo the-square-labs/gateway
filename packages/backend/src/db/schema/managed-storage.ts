@@ -76,6 +76,12 @@ export interface ManagedStoragePendingOperation {
    * checked against that.
    */
   previousSettings?: { storageSizeBytes: number; runtimeConfig: ManagedStorageRuntimeConfig };
+  /**
+   * An update: the status before it. An update the node refused before it
+   * changed anything (too little disk, a size below the applied one) puts it
+   * back, so a serving cluster stays ready and keeps its links.
+   */
+  previousStatus?: string;
 }
 
 export interface ManagedStorageErasureConfig {

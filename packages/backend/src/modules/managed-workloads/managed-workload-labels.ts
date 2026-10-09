@@ -14,4 +14,9 @@ export interface ManagedWorkloadLabels {
   failed: (operation: string, detail?: string) => string;
   /** lastError text recorded by `markOutcomeUnknown`. */
   reconciling: string;
+  /**
+   * lastError text of an update the node refused before it changed anything;
+   * the workload keeps the status it had. Defaults to `failed`'s text.
+   */
+  refused?: (operation: string, detail: string) => string;
 }

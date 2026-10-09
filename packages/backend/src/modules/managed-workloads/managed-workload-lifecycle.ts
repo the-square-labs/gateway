@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { AppError } from '@/middleware/error-handler.js';
 import type { DispatchResult, ManagedWorkloadDispatch } from './managed-workload-dispatch.js';
 import type { ManagedWorkloadLabels } from './managed-workload-labels.js';
+import { isUpdateRefusedBeforeChange } from './managed-workload-refusal.js';
 import type {
   ManagedWorkloadStore,
   WorkloadPendingOperation,
@@ -404,10 +405,26 @@ export class ManagedWorkloadLifecycle<TRow extends WorkloadRow, TCredentials> {
   }
 
   async markError(row: TRow, operation: string, detail?: string): Promise<unknown> {
-    const sanitizedDetail = detail
-      ?.replace(/[\r\n\t]+/g, ' ')
-      .trim()
-      .slice(0, 480);
+    const sanitizedDetail = sanitizeDaemonDetail(detail);
+    const previousStatus = (row.pendingOperation as { previousStatus?: unknown } | null)?.previousStatus;
+    if (
+      operation === 'update' &&
+      typeof previousStatus === 'string' &&
+      previousStatus !== 'updating' &&
+      isUpdateRefusedBeforeChange(sanitizedDetail)
+    ) {
+      // The node refused before it changed anything: the workload runs as it
+      // did, so it keeps its status (and its links) and shows the refusal.
+      const kept = (await this.store.setStatus(row.id, {
+        status: previousStatus,
+        pendingOperation: null,
+        lastError: this.labels.refused
+          ? this.labels.refused(operation, sanitizedDetail!)
+          : this.labels.failed(operation, sanitizedDetail),
+      })) as unknown as TRow;
+      this.dispatch.emit(kept, 'refused');
+      return this.dispatch.toView(kept);
+    }
     const failed = (await this.store.setStatus(row.id, {
       status: 'error',
       pendingOperation: null,
@@ -455,4 +472,11 @@ export class ManagedWorkloadLifecycle<TRow extends WorkloadRow, TCredentials> {
     if (!row) throw new AppError(404, this.labels.notFound.code, this.labels.notFound.message);
     return row as unknown as TRow;
   }
+}
+
+function sanitizeDaemonDetail(detail: string | undefined): string | undefined {
+  return detail
+    ?.replace(/[\r\n\t]+/g, ' ')
+    .trim()
+    .slice(0, 480);
 }
