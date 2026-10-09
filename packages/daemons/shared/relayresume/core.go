@@ -248,9 +248,19 @@ type Core struct {
 	// below twice that: on a short path, or while the bytes only wait in a
 	// queue (a slow socket at the peer, a full relay leg), more window would
 	// not move them faster, and a handover would carry more.
+	//
+	// An offset sent while nothing else was on the way (rttClean: the peer
+	// had delivered everything, the stream paused) waited in no queue this
+	// stream filled: its round trip is the path's own, and it replaces
+	// minRTT even when longer. The path's round trip can grow under a stream
+	// (a relay leg's route changed); a minRTT kept from before scaled every
+	// later sample down, and the window never grew to the longer path. A
+	// stream moving bulk data always has bytes on the way, so a queue it
+	// builds (a slow socket at the peer) never counts as the path.
 	rttOff, rttFloor uint64
 	rttDelivered     uint64
 	rttAt            time.Time
+	rttClean         bool
 	minRTT           time.Duration
 	bdp              uint64
 
@@ -645,8 +655,13 @@ func (c *Core) pump(now time.Time) {
 		if len(data) > p.maxPayload {
 			data = data[:p.maxPayload]
 		}
-		if c.rttOff == 0 && p.sendCursor >= c.rttFloor && !now.IsZero() {
-			c.rttOff, c.rttAt, c.rttDelivered = p.sendCursor+uint64(len(data)), now, c.peerDelivered
+		if p.sendCursor >= c.rttFloor && !now.IsZero() {
+			// A clean offset replaces one still timed from before the pause:
+			// that one's round trip may span a change of the path.
+			clean := p.sendCursor <= c.peerDelivered
+			if c.rttOff == 0 || (clean && !c.rttClean) {
+				c.rttOff, c.rttAt, c.rttDelivered, c.rttClean = p.sendCursor+uint64(len(data)), now, c.peerDelivered, clean
+			}
 		}
 		size := 1 + uvarintLen(c.delivered) + len(data)
 		var frame []byte
@@ -813,7 +828,7 @@ func (c *Core) ack(ack uint64, now time.Time) bool {
 		return false
 	}
 	if c.rttOff != 0 && ack >= c.rttOff {
-		c.sampleRTT(now.Sub(c.rttAt), ack-min(c.rttDelivered, ack))
+		c.sampleRTT(now.Sub(c.rttAt), ack-min(c.rttDelivered, ack), c.rttClean)
 		c.rttOff = 0
 	}
 	if ack > c.peerDelivered {
@@ -855,12 +870,13 @@ func (c *Core) grow(delivered uint64) {
 	}
 }
 
-// sampleRTT takes a timed round trip and what the peer delivered meanwhile.
-func (c *Core) sampleRTT(rtt time.Duration, delivered uint64) {
+// sampleRTT takes a timed round trip and what the peer delivered meanwhile;
+// clean: the timed offset left with nothing else on the way (see rttClean).
+func (c *Core) sampleRTT(rtt time.Duration, delivered uint64, clean bool) {
 	if rtt <= 0 {
 		rtt = time.Microsecond
 	}
-	if c.minRTT == 0 || rtt < c.minRTT {
+	if c.minRTT == 0 || rtt < c.minRTT || clean {
 		c.minRTT = rtt
 	}
 	if bdp := uint64(float64(delivered) * float64(c.minRTT) / float64(rtt)); bdp > c.bdp {

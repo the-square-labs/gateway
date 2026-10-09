@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -42,7 +43,7 @@ import (
 type rtLink struct {
 	listener net.Listener
 	upstream string
-	oneWay   time.Duration
+	oneWay   atomic.Int64 // time.Duration; setDelay changes it under running streams
 	rate     float64
 	mu       sync.Mutex
 	conns    []net.Conn
@@ -55,13 +56,18 @@ func startRTLink(tb testing.TB, upstream string, oneWay time.Duration, rate floa
 	if err != nil {
 		tb.Fatal(err)
 	}
-	link := &rtLink{listener: listener, upstream: upstream, oneWay: oneWay, rate: rate}
+	link := &rtLink{listener: listener, upstream: upstream, rate: rate}
+	link.oneWay.Store(int64(oneWay))
 	go link.serve()
 	tb.Cleanup(link.close)
 	return link
 }
 
 func (l *rtLink) addr() string { return l.listener.Addr().String() }
+
+// setDelay changes the link's one-way delay for what it reads from now on
+// (a route that got longer under its connections).
+func (l *rtLink) setDelay(oneWay time.Duration) { l.oneWay.Store(int64(oneWay)) }
 
 func (l *rtLink) close() {
 	l.mu.Lock()
@@ -160,7 +166,7 @@ func (l *rtLink) pipe(dst, src net.Conn) {
 			}
 			held += n
 			queued.Unlock()
-			queue <- rtSegment{data: buffer[:n], due: time.Now().Add(l.oneWay)}
+			queue <- rtSegment{data: buffer[:n], due: time.Now().Add(time.Duration(l.oneWay.Load()))}
 		}
 		if err != nil {
 			close(queue)
@@ -255,18 +261,23 @@ type rtRig struct {
 	h       *rhHarness
 	relay   *rhRelay
 	backend *rtBackend
+	phased  *rtPhasedBackend
 	direct  *rtLink
+	legs    []*rtLink
 	table   *relayresume.TargetTable
 	source  *rhSource
-	rawConn *grpc.ClientConn
-	size    int64
-	warmup  int64
-	chunk   int
+	// phasedSource opens streams to the phased backend (rtRoutePhased).
+	phasedSource *rhSource
+	rawConn      *grpc.ClientConn
+	size         int64
+	warmup       int64
+	chunk        int
 }
 
 const (
 	rtRouteRaw    = "route-rtt-raw"
 	rtRouteResume = "route-rtt-resume"
+	rtRoutePhased = "route-rtt-phased"
 )
 
 // newRTRig: legOneWay delays each daemon <-> relay leg in each direction, so
@@ -276,14 +287,17 @@ func newRTRig(tb testing.TB, download bool, size, warmup int64, legOneWay time.D
 	h := newRHHarness(tb)
 	h.addRoute(rhRoute{id: rtRouteRaw})
 	h.addRoute(rhRoute{id: rtRouteResume})
+	h.addRoute(rhRoute{id: rtRoutePhased})
 	relay := h.startRelay("relay-rtt")
 	rig := &rtRig{h: h, relay: relay, size: size, warmup: warmup, chunk: chunk, table: relayresume.NewTargetTable(nil)}
 	rig.backend = startRTBackend(tb, download, size, warmup)
+	rig.phased = startRTPhasedBackend(tb, download, size, warmup)
 	rig.direct = startRTLink(tb, rig.backend.listener.Addr().String(), 2*legOneWay, rate)
 	sourceAddr, targetAddr := relay.addr, relay.addr
 	if legOneWay > 0 || rate > 0 {
-		sourceAddr = startRTLink(tb, relay.addr, legOneWay, rate).addr()
-		targetAddr = startRTLink(tb, relay.addr, legOneWay, rate).addr()
+		sourceLeg, targetLeg := startRTLink(tb, relay.addr, legOneWay, rate), startRTLink(tb, relay.addr, legOneWay, rate)
+		rig.legs = []*rtLink{sourceLeg, targetLeg}
+		sourceAddr, targetAddr = sourceLeg.addr(), targetLeg.addr()
 	}
 	target := &rhTarget{h: h, handle: rig.serveTarget, ready: map[string]int{}}
 	target.conn = h.laneDial(targetAddr, h.targetCert)
@@ -295,7 +309,18 @@ func newRTRig(tb testing.TB, download bool, size, warmup int64, legOneWay time.D
 	rig.source = &rhSource{h: h, routeID: rtRouteResume, manager: relayresume.NewManager(nil), relays: []*rhRelay{relay},
 		conns: map[string]*grpc.ClientConn{relay.id: sourceConn}, draining: map[string]bool{}}
 	rig.source.keyOK.Store(true)
+	rig.phasedSource = &rhSource{h: h, routeID: rtRoutePhased, manager: rig.source.manager, relays: []*rhRelay{relay},
+		conns: map[string]*grpc.ClientConn{relay.id: sourceConn}, draining: map[string]bool{}}
+	rig.phasedSource.keyOK.Store(true)
 	return rig
+}
+
+// setLegDelay sets both relay legs' one-way delay (the stream's round trip
+// is 4*oneWay).
+func (r *rtRig) setLegDelay(oneWay time.Duration) {
+	for _, leg := range r.legs {
+		leg.setDelay(oneWay)
+	}
 }
 
 // laneDial dials addr with the daemons' relay lane options over the harness
@@ -315,7 +340,11 @@ func (h *rhHarness) laneDial(addr string, cert tls.Certificate) *grpc.ClientConn
 // the docker daemon does for a container link.
 func (r *rtRig) serveTarget(accepted *rhAccepted) {
 	route := accepted.incoming.GetRoute().GetRouteId()
-	backend, err := net.Dial("tcp", r.backend.listener.Addr().String())
+	backendAddr := r.backend.listener.Addr().String()
+	if route == rtRoutePhased {
+		backendAddr = r.phased.listener.Addr().String()
+	}
+	backend, err := net.Dial("tcp", backendAddr)
 	if err != nil {
 		accepted.cancel()
 		return
@@ -518,6 +547,241 @@ func TestSecureLinkThroughputGate(t *testing.T) {
 			if resumable.steady < 0.9*direct.steady {
 				t.Fatalf("%s: a resumable stream carried %.1f MB/s, %.0f %% of a direct connection over the same link (%.1f MB/s); the gate is 90 %%",
 					direction, resumable.steady/1e6, 100*resumable.steady/direct.steady, direct.steady/1e6)
+			}
+		})
+	}
+}
+
+// rtPhasedBackend serves a stream in two parts: phase1 bytes first, then,
+// once the test let it (a token on gate), size bytes, timed after warmup of
+// them. For an upload it counts what arrived (received, from zero for each
+// stream), so the test knows when the first part is through.
+type rtPhasedBackend struct {
+	listener net.Listener
+	download bool
+	phase1   int64
+	size     int64
+	warmup   int64
+	block    []byte
+	received atomic.Int64
+	gate     chan struct{}
+	done     chan rtTiming
+}
+
+const rtPhase1 = 32 << 20
+
+func startRTPhasedBackend(tb testing.TB, download bool, size, warmup int64) *rtPhasedBackend {
+	tb.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		tb.Fatal(err)
+	}
+	backend := &rtPhasedBackend{listener: listener, download: download, phase1: rtPhase1, size: size, warmup: warmup,
+		block: make([]byte, 256<<10), gate: make(chan struct{}, 1), done: make(chan rtTiming, 1)}
+	go backend.serve()
+	tb.Cleanup(func() { _ = listener.Close() })
+	return backend
+}
+
+func (b *rtPhasedBackend) serve() {
+	for {
+		conn, err := b.listener.Accept()
+		if err != nil {
+			return
+		}
+		go func() {
+			defer conn.Close()
+			if !b.download {
+				var timing rtTiming
+				buffer := make([]byte, 256<<10)
+				for {
+					n, err := conn.Read(buffer)
+					got := b.received.Add(int64(n))
+					if timing.warm.IsZero() && got >= b.phase1+b.warmup {
+						timing.warm = time.Now()
+					}
+					if err != nil {
+						timing.end = time.Now()
+						b.done <- timing
+						return
+					}
+				}
+			}
+			write := func(size int64) bool {
+				for sent := int64(0); sent < size; {
+					n := min(int64(len(b.block)), size-sent)
+					if _, err := conn.Write(b.block[:n]); err != nil {
+						return false
+					}
+					sent += n
+				}
+				return true
+			}
+			if !write(b.phase1) {
+				return
+			}
+			<-b.gate
+			if !write(b.size) {
+				return
+			}
+			_ = conn.(*net.TCPConn).CloseWrite()
+			_, _ = io.Copy(io.Discard, conn)
+		}()
+	}
+}
+
+// phasedTransfer runs one resumable stream that first carries phase1 bytes
+// with the legs at lanOneWay, then size bytes after the legs' delay became
+// oneWay; it reports the second part.
+func (r *rtRig) phasedTransfer(lanOneWay, oneWay time.Duration) (rtResult, error) {
+	r.setLegDelay(lanOneWay)
+	r.phased.received.Store(0)
+	local, app, err := rtTCPPair()
+	if err != nil {
+		return rtResult{}, err
+	}
+	defer app.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	first, err := r.phasedSource.dial(ctx, relayresume.DialRequest{})
+	if err != nil {
+		return rtResult{}, err
+	}
+	session, err := r.phasedSource.manager.NewSource(r.phasedSource.config(0), first)
+	if err != nil {
+		return rtResult{}, err
+	}
+	bridged := make(chan error, 1)
+	go func() {
+		bridged <- relaybridge.BridgeWithChunk(ctx, local, session, session.MaxFrame(), relayresume.ReadChunk(r.chunk), session.Cancel)
+	}()
+	var timing rtTiming
+	var started time.Time
+	// Between the parts the stream pauses, as a connection between two
+	// requests does; then the route is longer.
+	const pause = 300 * time.Millisecond
+	if r.phased.download {
+		if _, err := io.CopyN(io.Discard, app, r.phased.phase1); err != nil {
+			return rtResult{}, fmt.Errorf("first part: %w", err)
+		}
+		time.Sleep(pause)
+		r.setLegDelay(oneWay)
+		started = time.Now()
+		r.phased.gate <- struct{}{}
+		var got int64
+		timing, got = rtReceive(app, r.warmup)
+		if got != r.size {
+			return rtResult{}, fmt.Errorf("phased download: %d of %d bytes", got, r.size)
+		}
+		_ = app.(*net.TCPConn).CloseWrite()
+	} else {
+		block := make([]byte, 256<<10)
+		send := func(size int64) error {
+			for sent := int64(0); sent < size; {
+				n := min(int64(len(block)), size-sent)
+				if _, err := app.Write(block[:n]); err != nil {
+					return err
+				}
+				sent += n
+			}
+			return nil
+		}
+		if err := send(r.phased.phase1); err != nil {
+			return rtResult{}, err
+		}
+		deadline := time.Now().Add(30 * time.Second)
+		for r.phased.received.Load() < r.phased.phase1 {
+			if time.Now().After(deadline) {
+				return rtResult{}, errors.New("the first part did not arrive")
+			}
+			time.Sleep(time.Millisecond)
+		}
+		time.Sleep(pause)
+		r.setLegDelay(oneWay)
+		started = time.Now()
+		if err := send(r.size); err != nil {
+			return rtResult{}, err
+		}
+		_ = app.(*net.TCPConn).CloseWrite()
+		if _, err := io.Copy(io.Discard, app); err != nil {
+			return rtResult{}, err
+		}
+		select {
+		case timing = <-r.phased.done:
+		case <-time.After(10 * time.Second):
+			return rtResult{}, errors.New("the backend reported no upload")
+		}
+	}
+	if err := <-bridged; err != nil && !errors.Is(err, context.Canceled) {
+		return rtResult{}, fmt.Errorf("phased bridge: %w", err)
+	}
+	result := rtResult{whole: float64(r.size) / timing.end.Sub(started).Seconds()}
+	if !timing.warm.IsZero() && timing.end.After(timing.warm) {
+		result.steady = float64(r.size-r.warmup) / timing.end.Sub(timing.warm).Seconds()
+	}
+	return result, nil
+}
+
+// TestSecureLinkThroughputAfterTheRoundTripGrows: the gate's link, but the
+// relay legs start as a LAN and their round trip grows to the gate's under
+// the lanes (stand rc.7 F-5). A stream opened after that, and a stream that
+// carried a LAN transfer before it, carry at least 90 % of a direct
+// connection over the longer link once ramped up.
+func TestSecureLinkThroughputAfterTheRoundTripGrows(t *testing.T) {
+	if testing.Short() {
+		t.Skip("throughput gate: not in -short")
+	}
+	for _, download := range []bool{false, true} {
+		direction := map[bool]string{false: "upload", true: "download"}[download]
+		t.Run(direction, func(t *testing.T) {
+			rig := newRTRig(t, download, gateSize, gateWarmup, gateRTT/4, gateRate, relaybridge.DefaultChunkBytes)
+			var direct rtResult
+			for range 2 {
+				result, err := rig.transfer("direct")
+				if err != nil {
+					t.Fatalf("%s direct: %v", direction, err)
+				}
+				direct.steady = max(direct.steady, result.steady)
+			}
+			// LAN traffic over the lanes first.
+			rig.setLegDelay(0)
+			if _, err := rig.transfer("resumable"); err != nil {
+				t.Fatalf("%s LAN: %v", direction, err)
+			}
+			rig.setLegDelay(gateRTT / 4)
+			var fresh rtResult
+			for range 3 {
+				result, err := rig.transfer("resumable")
+				if err != nil {
+					t.Fatalf("%s after the round trip grew: %v", direction, err)
+				}
+				if result.steady > fresh.steady {
+					fresh = result
+				}
+				if fresh.steady >= 0.95*gateRate {
+					break
+				}
+			}
+			var kept rtResult
+			for range 3 {
+				result, err := rig.phasedTransfer(0, gateRTT/4)
+				if err != nil {
+					t.Fatalf("%s one stream, LAN then the longer round trip: %v", direction, err)
+				}
+				if result.steady > kept.steady {
+					kept = result
+				}
+				if kept.steady >= 0.95*gateRate {
+					break
+				}
+			}
+			t.Logf("%s over %.0f MB/s, %v after a LAN: direct %.1f MB/s, new stream %.1f MB/s, stream kept from the LAN %.1f MB/s", direction,
+				gateRate/1e6, gateRTT, direct.steady/1e6, fresh.steady/1e6, kept.steady/1e6)
+			for name, result := range map[string]rtResult{"a stream opened after the round trip grew": fresh, "a stream kept from the LAN": kept} {
+				if result.steady < 0.9*direct.steady {
+					t.Errorf("%s: %s carried %.1f MB/s, %.0f %% of a direct connection over the same link (%.1f MB/s); the gate is 90 %%",
+						direction, name, result.steady/1e6, 100*result.steady/direct.steady, direct.steady/1e6)
+				}
 			}
 		})
 	}

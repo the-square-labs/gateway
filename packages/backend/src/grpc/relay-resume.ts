@@ -710,11 +710,16 @@ export class ResumeSession {
    * The window's round trip (send to the peer's delivery ack): one timed offset at a time; minRtt is the shortest on
    * the current path, bdp the largest bandwidth-delay product measured there. A window above MAX_WINDOW grows only
    * while it is below twice that: on a short path, or while the bytes only wait in a queue, more window would not move
-   * them faster.
+   * them faster. An offset sent while nothing else was on the way (rttClean: the peer acknowledged everything, the
+   * stream paused) waited in no queue this stream filled: its round trip is the path's own and replaces minRtt even
+   * when longer (the path's round trip can grow under a stream; a minRtt kept from before scaled every later sample
+   * down, and the window never grew to the longer path). A stream moving bulk data always has bytes on the way, so a
+   * queue it builds never counts as the path.
    */
   private rttOffset = -1;
   private rttAt = 0;
   private rttDelivered = 0;
+  private rttClean = false;
   private rttFloor = 0;
   private minRtt = -1;
   private bdp = 0;
@@ -1317,7 +1322,7 @@ export class ResumeSession {
     const ack = safeNumber(value);
     if (ack > this.sndNxt) throw new ResumeSessionError('ack beyond snd_nxt', 'protocol', RstCode.protocol);
     if (this.rttOffset >= 0 && ack >= this.rttOffset) {
-      this.sampleRtt(this.timers.now() - this.rttAt, ack - Math.min(this.rttDelivered, ack));
+      this.sampleRtt(this.timers.now() - this.rttAt, ack - Math.min(this.rttDelivered, ack), this.rttClean);
       this.rttOffset = -1;
     }
     this.applyAck(ack, true);
@@ -1400,10 +1405,10 @@ export class ResumeSession {
     this.peerWindow = clampWindow(wnd);
   }
 
-  /** A timed round trip and what the peer delivered meanwhile. */
-  private sampleRtt(rtt: number, delivered: number): void {
+  /** A timed round trip and what the peer delivered meanwhile; clean: see rttClean. */
+  private sampleRtt(rtt: number, delivered: number, clean: boolean): void {
     const value = Math.max(rtt, 0.001);
-    if (this.minRtt < 0 || value < this.minRtt) this.minRtt = value;
+    if (this.minRtt < 0 || value < this.minRtt || clean) this.minRtt = value;
     this.bdp = Math.max(this.bdp, Math.floor((delivered * this.minRtt) / value));
   }
 
@@ -1442,10 +1447,16 @@ export class ResumeSession {
       if (path.sndOffset >= limit) break;
       const chunk = this.sliceRetained(path.sndOffset, maxPayload);
       if (!chunk.length) break;
-      if (this.rttOffset < 0 && path.sndOffset >= this.rttFloor) {
-        this.rttOffset = path.sndOffset + chunk.length;
-        this.rttAt = this.timers.now();
-        this.rttDelivered = this.sndUna;
+      if (path.sndOffset >= this.rttFloor) {
+        // A clean offset replaces one still timed from before the pause: that one's round trip may span a change of
+        // the path.
+        const clean = path.sndOffset <= this.sndUna;
+        if (this.rttOffset < 0 || (clean && !this.rttClean)) {
+          this.rttOffset = path.sndOffset + chunk.length;
+          this.rttAt = this.timers.now();
+          this.rttDelivered = this.sndUna;
+          this.rttClean = clean;
+        }
       }
       path.sndOffset += chunk.length;
       this.lastAckSent = this.delivered;

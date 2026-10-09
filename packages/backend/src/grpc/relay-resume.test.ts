@@ -1217,17 +1217,20 @@ describe('ResumableRelayDuplex', () => {
 describe('RSv1 window extension', () => {
   /**
    * A bulk upload over one path with a fixed round trip. legacyTarget: the target announces even windows, as every
-   * release before the extension did.
+   * release before the extension did. lanBytes: before the bulk upload the stream carries that much over a 1 ms round
+   * trip, 256 KiB at a time (a LAN transfer the window never limits); the path's round trip then grows to rttMs.
    */
-  function bulkUpload(legacyTarget: boolean, rttMs: number, bytes: number) {
+  function bulkUpload(legacyTarget: boolean, rttMs: number, bytes: number, lanBytes = 0) {
     const clock = new VirtualClock();
     const key = Buffer.alloc(32, 7);
     const routeId = 'route-wnd';
     const nonce = Buffer.alloc(16, 9);
     const events: Array<{ at: number; run: () => void }> = [];
-    const later = (run: () => void) => events.push({ at: clock.now() + rttMs / 2, run });
+    let pathRttMs = lanBytes > 0 ? 1 : rttMs;
+    const later = (run: () => void) => events.push({ at: clock.now() + pathRttMs / 2, run });
     let target: ResumeSession | null = null;
     let peakSourceWindow = 0;
+    let lanPeakWindow = 0;
     let peakQueued = 0;
     let delivered = 0;
     let blocked = false;
@@ -1300,12 +1303,24 @@ describe('RSv1 window extension', () => {
     source.startSource(sourceHandle);
     const chunk = Buffer.alloc(32 * 1024, 1);
     let written = 0;
-    for (let step = 0; step < 2_000_000 && delivered < bytes; step++) {
-      while (!blocked && written < bytes) {
+    let bulkFrom = 1_000_000;
+    let bulk = lanBytes === 0;
+    const total = lanBytes + bytes;
+    for (let step = 0; step < 2_000_000 && delivered < total; step++) {
+      if (!bulk && delivered >= lanBytes && source.unackedBytes === 0) {
+        // The LAN part arrived and was acknowledged; the round trip grows from here on.
+        bulk = true;
+        pathRttMs = rttMs;
+        bulkFrom = clock.now();
+      }
+      // The LAN part writes the next 256 KiB once the last arrived.
+      const limit = bulk ? total : Math.min(lanBytes, delivered === written ? written + 256 * 1024 : written);
+      while (!blocked && written < limit) {
         written += chunk.length;
         if (!source.write(chunk)) blocked = true;
       }
-      peakSourceWindow = Math.max(peakSourceWindow, source.effectiveWindow);
+      if (bulk) peakSourceWindow = Math.max(peakSourceWindow, source.effectiveWindow);
+      else lanPeakWindow = Math.max(lanPeakWindow, source.effectiveWindow);
       peakQueued = Math.max(peakQueued, source.unackedBytes);
       events.sort((a, b) => a.at - b.at);
       const next = events.shift();
@@ -1315,7 +1330,14 @@ describe('RSv1 window extension', () => {
         next.run();
       } else if (!clock.fireNext()) break;
     }
-    return { delivered, peakSourceWindow, peakQueued, seconds: (clock.now() - 1_000_000) / 1000, source };
+    return {
+      delivered: delivered - lanBytes,
+      peakSourceWindow,
+      lanPeakWindow,
+      peakQueued,
+      seconds: (clock.now() - bulkFrom) / 1000,
+      source,
+    };
   }
 
   it('grows past MAX_WINDOW between two sessions that announce it', () => {
@@ -1324,6 +1346,16 @@ describe('RSv1 window extension', () => {
     expect(run.source.peerAnnouncedExtension).toBe(true);
     expect(run.peakSourceWindow).toBe(MAX_EXTENDED_WINDOW);
     // 256 MiB over a 300 ms round trip: well above the 4 MiB window's 14 MB/s.
+    expect(256 / run.seconds).toBeGreaterThan(40);
+  });
+
+  it('takes the window a longer path needs after the round trip grew under the stream', () => {
+    // Stand rc.7 F-5: a LAN transfer first, then the path's round trip grows from 1 to 300 ms. The window grew only
+    // while it was below twice a bandwidth-delay product scaled to the LAN round trip of before.
+    const run = bulkUpload(false, 300, 256 * 1024 * 1024, 64 * 1024 * 1024);
+    expect(run.delivered).toBeGreaterThanOrEqual(256 * 1024 * 1024);
+    expect(run.lanPeakWindow).toBeLessThanOrEqual(MAX_WINDOW);
+    expect(run.peakSourceWindow).toBe(MAX_EXTENDED_WINDOW);
     expect(256 / run.seconds).toBeGreaterThan(40);
   });
 

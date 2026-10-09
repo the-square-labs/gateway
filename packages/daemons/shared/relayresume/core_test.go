@@ -365,6 +365,65 @@ func TestCoreWindowStaysWithinMaxWindowForALegacyPeer(t *testing.T) {
 	}
 }
 
+// slowPeerPipe runs a window-blocked bulk upload over a pair whose path has
+// round trips of rtt, but whose peer socket takes at most perRound bytes per
+// round trip: what the window sends beyond that only waits in the peer's
+// queue, and the round trip the window measures grows with it.
+func slowPeerPipe(t *testing.T, pair *corePair, rounds int, rtt time.Duration, perRound int) {
+	t.Helper()
+	chunk := make([]byte, 32*1024)
+	fill := func() {
+		for pair.src.CanWrite(len(chunk)) {
+			if ok, _ := pair.src.Write(chunk, pair.now); !ok {
+				t.Fatal("refused after CanWrite")
+			}
+		}
+	}
+	for round := 0; round < rounds; round++ {
+		fill()
+		pair.now = pair.now.Add(rtt / 2)
+		pair.deliverOutputs(pair.src, pair.src.TakeOutputs(), pair.tgt)
+		for read := 0; read < perRound; {
+			data, _, ok := pair.tgt.Read(pair.now)
+			if !ok {
+				break
+			}
+			read += len(data)
+		}
+		pair.now = pair.now.Add(rtt / 2)
+		pair.tgt.Tick(pair.now)
+		for _, ack := range pair.tgt.TakeOutputs() {
+			pair.deliverOutputs(pair.tgt, []Output{ack}, pair.src)
+			fill()
+		}
+	}
+}
+
+// appPipe runs an upload whose writer sends at most perRound bytes per round
+// trip of rtt (a LAN transfer: the path carries it faster than the window
+// would limit).
+func appPipe(t *testing.T, pair *corePair, rounds int, rtt time.Duration, perRound int) {
+	t.Helper()
+	chunk := make([]byte, 32*1024)
+	for round := 0; round < rounds; round++ {
+		for sent := 0; sent < perRound && pair.src.CanWrite(len(chunk)); sent += len(chunk) {
+			if ok, _ := pair.src.Write(chunk, pair.now); !ok {
+				t.Fatal("refused after CanWrite")
+			}
+		}
+		pair.now = pair.now.Add(rtt / 2)
+		pair.deliverOutputs(pair.src, pair.src.TakeOutputs(), pair.tgt)
+		for {
+			if _, _, ok := pair.tgt.Read(pair.now); !ok {
+				break
+			}
+		}
+		pair.now = pair.now.Add(rtt / 2)
+		pair.tgt.Tick(pair.now)
+		pair.deliverOutputs(pair.tgt, pair.tgt.TakeOutputs(), pair.src)
+	}
+}
+
 // The window grows past MaxWindow on a long round trip up to
 // MaxExtendedWindow, and not while the round trip says the bytes only queue
 // (the bandwidth-delay product stays below the window).
@@ -374,13 +433,33 @@ func TestCoreWindowGrowsOnlyWhileTheRoundTripHolds(t *testing.T) {
 	if pair.src.Window() != MaxExtendedWindow {
 		t.Fatalf("on a 300 ms round trip the window reached %d", pair.src.Window())
 	}
+	// The peer's socket takes 256 KiB per 20 ms round trip: the round trip
+	// grows only with what waits in its queue, and the window stays within
+	// MaxWindow.
 	queued := newCorePair(t)
-	windowPipe(t, queued, 40, 20*time.Millisecond, false)
-	before := queued.src.Window()
-	// From now on every round trip is 10x the shortest one.
-	windowPipe(t, queued, 60, 200*time.Millisecond, false)
-	if queued.src.Window() > max(before, MaxWindow) {
-		t.Fatalf("the window grew from %d to %d while the round trip said it queues", before, queued.src.Window())
+	slowPeerPipe(t, queued, 400, 20*time.Millisecond, 256*1024)
+	if queued.src.Window() > MaxWindow {
+		t.Fatalf("the window grew to %d while the round trip said it queues", queued.src.Window())
+	}
+	if queued.tgt.Queued() == 0 {
+		t.Fatal("the peer's queue is empty")
+	}
+}
+
+// A stream whose path's round trip grows (a relay leg's route got longer)
+// takes the window the longer path needs, as a stream opened there would:
+// stand rc.7 F-5, the window grew only while it was below twice a
+// bandwidth-delay product scaled to the LAN round trip of before.
+func TestCoreWindowFollowsALongerPath(t *testing.T) {
+	pair := newCorePair(t)
+	// A LAN transfer: 512 KiB per 1 ms round trip, never window-blocked.
+	appPipe(t, pair, 200, time.Millisecond, 512*1024)
+	if pair.src.Window() > MaxWindow {
+		t.Fatalf("a LAN transfer grew the window to %d", pair.src.Window())
+	}
+	windowPipe(t, pair, 120, 300*time.Millisecond, false)
+	if pair.src.Window() != MaxExtendedWindow {
+		t.Fatalf("after the round trip grew from 1 to 300 ms the window reached %d", pair.src.Window())
 	}
 }
 
