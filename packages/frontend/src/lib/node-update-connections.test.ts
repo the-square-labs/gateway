@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   describeCut,
+  lastUpdateConnectionsText,
+  launcherVersionUnknownReason,
   updateConnectionsPlacement,
   updateConnectionsSummary,
 } from "./node-update-connections";
@@ -74,5 +76,33 @@ describe("update connections summary", () => {
     expect(updateConnectionsPlacement("docker", true)).toBe("update-panel");
     expect(updateConnectionsPlacement("monitoring", false)).toBeNull();
     expect(updateConnectionsPlacement("relay", true)).toBeNull();
+  });
+});
+
+describe("last update connections", () => {
+  it("counts what the update kept and cut", () => {
+    expect(lastUpdateConnectionsText({ kept: 61, cut: {} })).toBe("Kept 61, cut 0");
+    expect(lastUpdateConnectionsText({ kept: 0, cut: { service_restart: 22 } })).toBe(
+      "Kept 0, cut 22: all connections of the node (the whole service restarted for the newer launcher)"
+    );
+  });
+
+  it("says all connections when the previous daemon did not count them", () => {
+    expect(lastUpdateConnectionsText({ kept: 0, cut: { uncounted: 1 } })).toBe(
+      "Kept 0, cut all connections of the node"
+    );
+  });
+});
+
+describe("launcher version unknown reason", () => {
+  it("names a launcher that predates self-update", () => {
+    expect(
+      launcherVersionUnknownReason(["docker_compose_v1", "launcher_listener_keep_v1"])
+    ).toMatch(/^Started before 2\.11\.4: this launcher predates launcher self-update/);
+  });
+
+  it("names an older daemon when nothing about the launcher is reported", () => {
+    expect(launcherVersionUnknownReason(undefined)).toMatch(/^Not reported/);
+    expect(launcherVersionUnknownReason(["docker_compose_v1"])).toMatch(/^Not reported/);
   });
 });

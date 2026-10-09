@@ -7,7 +7,8 @@ const CUT_CLASS_LABELS: Record<string, string> = {
   registry: "registry pulls and pushes",
   backup: "backup runs",
   no_handover: "connections that cannot be handed over",
-  service_restart: "connections of the service restart for the newer launcher",
+  service_restart: "connections of the whole service restart for the newer launcher",
+  uncounted: "all connections of the node",
   handshake: "connections still being set up",
   over_limit: "connections over the handover limit",
   resume_failed: "connections that did not resume",
@@ -58,6 +59,24 @@ export function describeCut(cut: Record<string, number> | undefined): string {
 }
 
 /**
+ * The connection line of the node's last update: "Kept 61, cut 0", "Kept 0, cut 22 (…)". An update the previous
+ * daemon did not count (it handed nothing over, so it cut every connection) says so instead of a number.
+ */
+export function lastUpdateConnectionsText(connections: {
+  kept: number;
+  cut: Record<string, number>;
+}): string {
+  if ((connections.cut?.uncounted ?? 0) > 0) {
+    return `Kept ${connections.kept}, cut all connections of the node`;
+  }
+  const total = cutTotal(connections.cut);
+  if (total > 0 && total === (connections.cut?.service_restart ?? 0)) {
+    return `Kept ${connections.kept}, cut ${total}: all connections of the node (the whole service restarted for the newer launcher)`;
+  }
+  return `Kept ${connections.kept}, cut ${total}${total > 0 ? ` (${describeCut(connections.cut)})` : ""}`;
+}
+
+/**
  * What an update of the node now does to its open connections, with the reason: kept when the daemon hands them
  * over and nothing would be cut, otherwise how many are cut and why (classes on a second line). Shown also when no
  * update is available, so it always says what the next one will do.
@@ -95,4 +114,24 @@ export function updateConnectionsSummary(
     return { text: `${count} (older peers)`, detail: null };
   }
   return { text: count, detail: describeCut(report.cut) };
+}
+
+/** Launcher capabilities a daemon reports since it reports its launcher (2.11.4). */
+const LAUNCHER_CAPABILITIES = [
+  "launcher_listener_keep_v1",
+  "launcher_self_update_v1",
+  "launcher_openrc_v1",
+];
+
+/**
+ * Why the node details show the launcher version as Unknown. A daemon that reports launcher capabilities but no
+ * launcher version runs under a launcher process started before launchers reported their version (before 2.11.4):
+ * that launcher cannot update itself and stays until the service restarts.
+ */
+export function launcherVersionUnknownReason(capabilities: unknown): string {
+  const reported = Array.isArray(capabilities) ? capabilities : [];
+  if (reported.some((capability) => LAUNCHER_CAPABILITIES.includes(String(capability)))) {
+    return "Started before 2.11.4: this launcher predates launcher self-update and is replaced when the service restarts";
+  }
+  return "Not reported: the daemon predates 2.11.4, or its launcher predates 2.11";
 }

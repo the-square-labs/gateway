@@ -1,7 +1,11 @@
 import { SQL } from 'drizzle-orm';
 import { describe, expect, it, vi } from 'vitest';
 import { dispatchNodeDaemonUpdate, resumeQueuedDaemonUpdates } from './daemon-node-update.js';
-import { DaemonUpdateService, lastUpdateConnectionsToRecord } from './daemon-update.service.js';
+import {
+  DaemonUpdateService,
+  LAUNCHER_CANDIDATE_TRIAL_LIMIT_MS,
+  lastUpdateConnectionsToRecord,
+} from './daemon-update.service.js';
 import type { NodeLongTask } from './node-long-tasks.js';
 
 const NODE_ID = '11111111-1111-4111-8111-111111111111';
@@ -260,5 +264,24 @@ describe('connections of the last update', () => {
     node.metadata = { lastUpdate: { targetVersion: 'v2.12.1', completedAt: '2027-01-15T08:00:00.000Z', warnings: [] } };
     await expect(service.recordLastUpdateConnections(NODE_ID, report)).resolves.toBe(true);
     expect(sqlWrites).toHaveLength(1);
+  });
+});
+
+describe('daemon update reconnect deadline', () => {
+  it('waits for the daemon at least as long as its launcher keeps the new daemon on trial', async () => {
+    const { service, node } = harness({
+      metadata: {
+        updateInProgress: true,
+        updateOperationId: 'op-1',
+        updateTargetVersion: 'v2.12.1',
+        updatePhase: 'executing',
+      },
+    });
+    service.trackNodeUpdateCompletion(NODE_ID, 'op-1', Promise.resolve({ commandId: 'c', success: true } as never));
+    await vi.waitFor(() => expect(node.metadata.updatePhase).toBe('reconnecting'));
+    // A rollback after the launcher's trial (3.5 min) must find the update still waiting, not failed and offline.
+    expect(Date.parse(String(node.metadata.updateDeadlineAt)) - Date.now()).toBeGreaterThan(
+      LAUNCHER_CANDIDATE_TRIAL_LIMIT_MS + 30_000
+    );
   });
 });

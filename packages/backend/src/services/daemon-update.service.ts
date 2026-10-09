@@ -27,7 +27,18 @@ import type { NodeLongTask } from '@/services/node-long-tasks.js';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
 
 const logger = createChildLogger('DaemonUpdateService');
-const NODE_UPDATE_RECONNECT_TIMEOUT_MS = 2 * 60 * 1000;
+/**
+ * The longest a node's launcher keeps an updated daemon on trial before it restores the previous one: local readiness
+ * within 30 s, then Gateway control readiness within 3 min (the daemon launcher's launcherLocalReadyLimit and
+ * launcherControlReadyLimit).
+ */
+export const LAUNCHER_CANDIDATE_TRIAL_LIMIT_MS = 30_000 + 3 * 60_000;
+/**
+ * How long Gateway waits for the daemon after it took the update: the launcher's whole trial, plus a whole-service
+ * restart (up to 25 s) and the restored daemon's reconnect. A rollback then reports itself ("came back on …") instead
+ * of the node being declared gone and offline while its launcher still waits for the new daemon.
+ */
+export const NODE_UPDATE_RECONNECT_TIMEOUT_MS = LAUNCHER_CANDIDATE_TRIAL_LIMIT_MS + 60_000;
 const NODE_UPDATE_EXECUTION_TIMEOUT_MS = 6 * 60 * 1000;
 /** A queued update of a lease member waits at most this long for its lease peers (rollout timeout + margin). */
 const NODE_UPDATE_QUEUE_TIMEOUT_MS = 31 * 60 * 1000;

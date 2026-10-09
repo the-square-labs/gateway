@@ -19,8 +19,8 @@ import { isDevForceUpdatesEnabled } from "@/lib/dev-force-updates";
 import { nodeTypeLabel } from "@/lib/node-appearance";
 import {
   carriesUpdateConnections,
-  cutTotal,
-  describeCut,
+  lastUpdateConnectionsText,
+  launcherVersionUnknownReason,
   updateConnectionsPlacement,
   updateConnectionsSummary,
 } from "@/lib/node-update-connections";
@@ -792,7 +792,12 @@ export function NodeDetailsTab({
                     {caps.launcherVersion}
                   </Badge>
                 ) : (
-                  "Unknown"
+                  <span className="flex flex-col items-end gap-0.5">
+                    <span>Unknown</span>
+                    <span className="text-xs text-muted-foreground">
+                      {launcherVersionUnknownReason(caps.capabilities)}
+                    </span>
+                  </span>
                 )
               }
             />
@@ -851,10 +856,7 @@ export function NodeDetailsTab({
                   </span>
                   {lastUpdate.connections && (
                     <span className="text-xs text-muted-foreground">
-                      Kept {lastUpdate.connections.kept}, cut {cutTotal(lastUpdate.connections.cut)}
-                      {cutTotal(lastUpdate.connections.cut) > 0
-                        ? ` (${describeCut(lastUpdate.connections.cut)})`
-                        : ""}
+                      {lastUpdateConnectionsText(lastUpdate.connections)}
                     </span>
                   )}
                   {lastUpdate.serviceRestart && (
