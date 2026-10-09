@@ -78,7 +78,21 @@ const (
 	InitialWindow  = 1024 * 1024
 	FallbackWindow = 256 * 1024
 	MinWindow      = 64 * 1024
-	MaxWindow      = 4 * 1024 * 1024
+	// MaxWindow is the largest window towards a peer that does not announce
+	// the window extension (every release before it): such a peer resets a
+	// stream that queues more than 2*(MaxWindow+MaxFrameBytes) for its socket.
+	MaxWindow = 4 * 1024 * 1024
+	// MaxExtendedWindow is the largest window towards a peer that announces
+	// the window extension: a stream through a far relay needs a window of
+	// its whole round trip (both relay legs), and 4 MiB held a 600 ms round
+	// trip at 7 MB/s, below a plain TCP connection through the same relay
+	// host.
+	MaxExtendedWindow = 32 * 1024 * 1024
+	// WindowExtension is the bit a session sets in every window it announces
+	// (HELLO, HELLO_ACK, ACK) to say it takes windows up to
+	// MaxExtendedWindow. Windows are otherwise multiples of 1 KiB, and a
+	// session before the extension announces only those.
+	WindowExtension = 1
 	// DefaultProcessBudget bounds the unacked bytes all sessions of a process
 	// may hold beyond their floor windows.
 	DefaultProcessBudget = 256 * 1024 * 1024

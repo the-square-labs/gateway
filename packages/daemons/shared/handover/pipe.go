@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"sync"
 )
 
 // PipeConfig configures a pipe between two local connections.
@@ -24,7 +25,20 @@ type Pipe struct {
 	excluded string
 }
 
-const pipeChunk = 32 * 1024
+const (
+	// pipeChunk is a direction's read buffer while it moves little: what an
+	// idle connection holds.
+	pipeChunk = 32 * 1024
+	// pipeBulkChunk is its read buffer while reads fill the small one: a
+	// node-local link moved a bulk transfer in 32 KiB reads, two syscalls and
+	// a copy each, at a third of a direct connection.
+	pipeBulkChunk = 256 * 1024
+)
+
+var pipeBulkBuffers = sync.Pool{New: func() any {
+	buffer := make([]byte, pipeBulkChunk)
+	return &buffer
+}}
 
 // Pipe copies both ways between left and right until both directions ended,
 // passing a half-close on, like the daemons' local pipes: a direction that
@@ -69,7 +83,17 @@ func (p *Pipe) copy(d side) bool {
 	if d == sideRemote {
 		source, destination = destination, source
 	}
-	buffer := make([]byte, pipeChunk)
+	small := make([]byte, pipeChunk)
+	// bulk is the pooled large buffer while reads fill the small one;
+	// pending aliases the buffer it was read into until it is written, so a
+	// direction lets go of bulk only with nothing pending.
+	var bulk *[]byte
+	shrink := false
+	defer func() {
+		if bulk != nil {
+			pipeBulkBuffers.Put(bulk)
+		}
+	}()
 	fail := func() bool {
 		p.stop.terminate()
 		_ = destination.Close()
@@ -95,9 +119,23 @@ func (p *Pipe) copy(d side) bool {
 				return true
 			}
 		}
+		if shrink {
+			pipeBulkBuffers.Put(bulk)
+			bulk, shrink = nil, false
+		}
+		buffer := small
+		if bulk != nil {
+			buffer = *bulk
+		}
 		n, err := source.Read(buffer)
 		if n > 0 {
-			p.pending[d] = append(p.pending[d][:0], buffer[:n]...)
+			p.pending[d] = buffer[:n]
+			switch {
+			case bulk == nil && n == len(buffer):
+				bulk = pipeBulkBuffers.Get().(*[]byte)
+			case bulk != nil && n < len(buffer)/4:
+				shrink = true
+			}
 			continue
 		}
 		if err == nil {

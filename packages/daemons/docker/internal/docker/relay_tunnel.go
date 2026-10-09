@@ -497,7 +497,12 @@ func (r *relayTunnelRouter) runRegistration(ctx context.Context, update relayReg
 }
 
 func (r *relayTunnelRouter) acceptIncoming(ctx context.Context, assignment *pb.RelayGrantAssignment, incoming *relayv1.IncomingTunnel) {
-	tunnelCtx, cancel := context.WithCancel(ctx)
+	// Accepted on the least busy lane of the relay, like source tunnels: the
+	// relay matches the accept by certificate, not by connection, and every
+	// download from this node rode the primary lane (one TCP connection, one
+	// HTTP/2 writer) next to the endpoint registration.
+	lane := r.sourceLane()
+	tunnelCtx, cancel := lane.tunnelContext(ctx)
 	defer cancel()
 	// Refused tunnels are never accepted: the relay times the opener out.
 	release, refusal := r.admitIncoming(assignment, incoming, cancel)
@@ -505,7 +510,7 @@ func (r *relayTunnelRouter) acceptIncoming(ctx context.Context, assignment *pb.R
 		return
 	}
 	defer release()
-	stream, err := r.client.AcceptTunnel(tunnelCtx)
+	stream, err := lane.client.AcceptTunnel(tunnelCtx)
 	if err != nil {
 		r.tunnelFailed(assignment, "accept", err)
 		return
@@ -1022,6 +1027,9 @@ func bridgeRelayConnection(connection net.Conn, stream relayFrameStream, maxFram
 	if readChunk <= 0 || readChunk > maxFrame {
 		readChunk = maxFrame
 	}
+	// The frame's message stays within the read size: a few bytes over a gRPC
+	// buffer tier cost a 1 MiB buffer clear per frame.
+	readChunk = relaybridge.DataLimit(readChunk)
 	extendIdle := func() {}
 	if idle > 0 {
 		extendIdle = func() { _ = connection.SetDeadline(time.Now().Add(idle)) }
@@ -1115,6 +1123,9 @@ func bridgeRelayConnection(connection net.Conn, stream relayFrameStream, maxFram
 	}
 	if !terminated {
 		_ = stream.Send(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Close{Close: &relayv1.TunnelClose{}}})
+		// The tail of what this side sent may still wait for HTTP/2 window:
+		// cancelling at once dropped it.
+		relaybridge.AwaitEnd(stream, relaybridge.CloseFlushTimeout)
 		cancel()
 		_ = connection.Close()
 	}

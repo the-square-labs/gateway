@@ -33,6 +33,7 @@ import (
 
 	"github.com/wiolett-industries/gateway/daemon-shared/relayresume"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/tlsbatch"
 	"github.com/wiolett-industries/gateway/relay/internal/codec"
 	"github.com/wiolett-industries/gateway/relay/internal/grant"
 	"github.com/wiolett-industries/gateway/relay/internal/identity"
@@ -252,13 +253,15 @@ func (h *rhHarness) startRelay(id string) *rhRelay {
 
 func (r *rhRelay) serve(listener net.Listener) {
 	server := grpc.NewServer(
-		grpc.Creds(credentials.NewTLS(&tls.Config{
+		grpc.Creds(tlsbatch.Credentials(credentials.NewTLS(&tls.Config{
 			Certificates: []tls.Certificate{r.h.serverCert},
 			ClientCAs:    r.h.pki.pool,
 			ClientAuth:   tls.RequireAndVerifyClientCert,
 			MinVersion:   tls.VersionTLS13,
-		})),
-		grpc.ForceServerCodec(codec.Codec{}),
+		}))),
+		grpc.ForceServerCodecV2(codec.ServerCodec{}),
+		// The relay's fixed HTTP/2 windows (server.laneStreamWindow, laneConnWindow).
+		grpc.InitialWindowSize(8<<20), grpc.InitialConnWindowSize(32<<20),
 		grpc.MaxRecvMsgSize(4*1024*1024), grpc.MaxSendMsgSize(4*1024*1024),
 	)
 	broker := New(r.store)
@@ -424,8 +427,11 @@ type rhAccepted struct {
 // re-registered after the relay restarts, handing every accepted tunnel to
 // the handler.
 type rhTarget struct {
-	h       *rhHarness
-	handle  func(*rhAccepted)
+	h      *rhHarness
+	handle func(*rhAccepted)
+	// conn, when set, is the connection every registration uses (a link
+	// with a delay in front of the relay).
+	conn    *grpc.ClientConn
 	mu      sync.Mutex
 	ready   map[string]int // registrations per relay id
 	cancels []context.CancelFunc
@@ -457,7 +463,10 @@ func (t *rhTarget) register(relay *rhRelay) {
 	t.mu.Lock()
 	t.cancels = append(t.cancels, cancel)
 	t.mu.Unlock()
-	conn := t.h.dial(relay, t.h.targetCert)
+	conn := t.conn
+	if conn == nil {
+		conn = t.h.dial(relay, t.h.targetCert)
+	}
 	go func() {
 		for ctx.Err() == nil {
 			t.registerOnce(ctx, conn, relay.id)

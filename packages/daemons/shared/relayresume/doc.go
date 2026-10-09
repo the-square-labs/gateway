@@ -38,6 +38,13 @@
 // the record sender's current send window; the peer acknowledges at least once
 // every wnd/4 delivered bytes and within the delayed-ack time.
 //
+// Window extension: a session that takes windows up to MaxExtendedWindow
+// announces every wnd with the lowest bit set (wnd | 1; windows are multiples
+// of 1 KiB, and sessions before the extension announce no odd value). A
+// sender keeps at most MaxWindow beyond what the peer delivered unless the
+// peer's last HELLO, HELLO_ACK or ACK since the stream last resumed was odd;
+// after a resume it waits for the peer's next ACK to learn it again.
+//
 // # MACs
 //
 // mac = HMAC-SHA256(key, transcript)[:16]. Transcript fields are

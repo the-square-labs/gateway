@@ -148,6 +148,7 @@ func buildVectors(t *testing.T) vectorFile {
 			"key_len": KeyLen, "max_key_id_len": MaxKeyIDLen, "max_frame_bytes": MaxFrameBytes, "transcript_domain": transcriptDomain,
 			"capability":     Capability,
 			"initial_window": InitialWindow, "fallback_window": FallbackWindow, "min_window": MinWindow, "max_window": MaxWindow, "process_budget": DefaultProcessBudget,
+			"max_extended_window": MaxExtendedWindow, "window_extension": WindowExtension,
 			"delayed_ack_ms": DelayedAck.Milliseconds(), "first_record_timeout_ms": FirstRecordTimeout.Milliseconds(),
 			"open_timeout_ms": OpenTimeout.Milliseconds(), "resume_ack_timeout_ms": ResumeAckTimeout.Milliseconds(),
 			"hello_ack_timeout_ms": HelloAckTimeout.Milliseconds(), "planned_budget_ms": PlannedBudget.Milliseconds(),

@@ -13,6 +13,7 @@ import (
 
 	"github.com/wiolett-industries/gateway/daemon-shared/auth"
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/tlsbatch"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/connectivity"
@@ -38,6 +39,11 @@ const (
 	// connections to 2 s (peer liveness), so a lane stalled this long is
 	// dropped there anyway.
 	relayLaneAckTimeout = 2 * time.Second
+	// LaneStreamWindow and LaneConnWindow are a relay lane's HTTP/2 receive
+	// windows per stream and per connection; the relay serves its side with
+	// the same values.
+	LaneStreamWindow = 8 << 20
+	LaneConnWindow   = 32 << 20
 )
 
 var (
@@ -114,6 +120,10 @@ func (c *Connector) connect(ctx context.Context, address, serverName string, lan
 	return conn, nil
 }
 
+// LaneDialOptions are the options of a relay lane over tlsCfg (the relay's
+// throughput tests dial with them).
+func LaneDialOptions(tlsCfg *tls.Config) []grpc.DialOption { return dialOptions(tlsCfg, true) }
+
 // dialOptions configures a control session or, with lane set, a relay lane:
 // a lane is never left idle (it stays connected for the life of the process
 // and is selected by whether it is connected) and is closed once the relay
@@ -123,8 +133,12 @@ func dialOptions(tlsCfg *tls.Config, lane bool) []grpc.DialOption {
 	if lane {
 		keepaliveParams = laneKeepalive
 	}
+	transportCredentials := credentials.NewTLS(tlsCfg)
+	if lane {
+		transportCredentials = tlsbatch.Credentials(transportCredentials)
+	}
 	options := []grpc.DialOption{
-		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+		grpc.WithTransportCredentials(transportCredentials),
 		grpc.WithConnectParams(ReconnectParams),
 		grpc.WithKeepaliveParams(keepaliveParams),
 		grpc.WithDefaultCallOptions(
@@ -133,7 +147,16 @@ func dialOptions(tlsCfg *tls.Config, lane bool) []grpc.DialOption {
 		),
 	}
 	if lane {
-		options = append(options, grpc.WithIdleTimeout(0))
+		options = append(options, grpc.WithIdleTimeout(0),
+			// A bulk stream's frames leave in writes of up to 256 KiB, one
+			// send each (tlsbatch); the buffer is pooled while the lane is idle.
+			grpc.WithWriteBufferSize(tlsbatch.WriteBuffer), grpc.WithSharedWriteBuffer(true),
+			// Fixed HTTP/2 windows: gRPC's BDP estimator grows a connection's
+			// windows only on a new maximum of measured bandwidth, so a lane
+			// that once carried LAN traffic kept LAN-sized windows when its
+			// round trip grew and carried under 0.5 MB/s at 300 ms. Setting
+			// them turns the estimator off.
+			grpc.WithInitialWindowSize(LaneStreamWindow), grpc.WithInitialConnWindowSize(LaneConnWindow))
 	}
 	return options
 }

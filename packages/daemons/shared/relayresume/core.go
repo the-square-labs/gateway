@@ -233,6 +233,26 @@ type Core struct {
 	// resumeAckFallback the window counts from sndUna again.
 	peerDelivered uint64
 	awaitPeerAck  time.Time
+	// peerExtended: the peer announced the window extension (an odd window)
+	// since the stream last resumed, so the window may exceed MaxWindow. A
+	// resume forgets it: another process (perhaps an older release, after a
+	// rollback) may answer there, and a new one announces it again with its
+	// first ACK.
+	peerExtended bool
+
+	// The window's round trip: from sending an offset to the peer's ack of
+	// it (delivered to its socket). One timed offset at a time; minRTT is the
+	// shortest on the current path, bdp the largest bandwidth-delay product
+	// measured there (what the peer delivered during a timed round trip,
+	// scaled to minRTT). A window above MaxWindow grows only while it is
+	// below twice that: on a short path, or while the bytes only wait in a
+	// queue (a slow socket at the peer, a full relay leg), more window would
+	// not move them faster, and a handover would carry more.
+	rttOff, rttFloor uint64
+	rttDelivered     uint64
+	rttAt            time.Time
+	minRTT           time.Duration
+	bdp              uint64
 
 	// Receive side: [delivered, rcvNxt) is queued for the local socket.
 	rcvNxt, delivered, ackSent uint64
@@ -281,8 +301,8 @@ func NewSource(cfg Config, path *Path, now time.Time) *Core {
 	c.bindPath(path)
 	path.established = true
 	path.awaiting = TypeHelloAck
-	hello := Record{Type: TypeHello, KeyID: c.keyID, SessionID: c.sessionID, Wnd: c.wnd}
-	hello.MAC = ComputeMAC(c.key, path.mac.HelloTranscript(c.wnd))
+	hello := Record{Type: TypeHello, KeyID: c.keyID, SessionID: c.sessionID, Wnd: c.announcedWindow()}
+	hello.MAC = ComputeMAC(c.key, path.mac.HelloTranscript(hello.Wnd))
 	path.mac.HelloMAC = hello.MAC
 	c.emitRecord(path, &hello)
 	return c
@@ -297,14 +317,14 @@ func NewTarget(cfg Config, path *Path, hello *Record, keyID string, key []byte, 
 	c.sessionID = hello.SessionID
 	c.nonce = cfg.TargetNonce
 	c.keyID, c.key = keyID, key
-	c.peerWnd = clampPeerWindow(hello.Wnd)
+	c.notePeerWindow(hello.Wnd)
 	c.state = StateOpen
 	c.cur = path
 	c.bindPath(path)
 	path.established = true
 	path.mac.HelloMAC = hello.MAC
-	ack := Record{Type: TypeHelloAck, SessionID: c.sessionID, Nonce: c.nonce, Wnd: c.wnd}
-	ack.MAC = ComputeMAC(key, path.mac.HelloAckTranscript(c.nonce, c.wnd))
+	ack := Record{Type: TypeHelloAck, SessionID: c.sessionID, Nonce: c.nonce, Wnd: c.announcedWindow()}
+	ack.MAC = ComputeMAC(key, path.mac.HelloAckTranscript(c.nonce, ack.Wnd))
 	c.emitRecord(path, &ack)
 	if len(rest) > 0 {
 		c.records(path, rest, now)
@@ -319,7 +339,7 @@ func newCore(cfg Config, now time.Time) *Core {
 		wnd = initialWindow
 	}
 	wnd = max(wnd, MinWindow)
-	wnd = min(wnd, MaxWindow)
+	wnd = min(wnd, MaxExtendedWindow)
 	if wnd > MinWindow && cfg.Budget != nil && !cfg.Budget.reserve(wnd-MinWindow) {
 		wnd = min(wnd, FallbackWindow)
 		if wnd > MinWindow && !cfg.Budget.reserve(wnd-MinWindow) {
@@ -371,8 +391,31 @@ func (c *Core) Old() *Path { return c.old }
 // resume tries it last: its lane may still look up while it refuses).
 func (c *Core) LostRelay() string { return c.lostRelay }
 
-// Window is the current send window.
+// Window is the current send window (what the peer allows of it:
+// EffectiveWindow).
 func (c *Core) Window() uint64 { return c.wnd }
+
+// EffectiveWindow is the window the session sends with: the window, within
+// MaxWindow unless the peer announced the window extension.
+func (c *Core) EffectiveWindow() uint64 {
+	if c.peerExtended {
+		return c.wnd
+	}
+	return min(c.wnd, MaxWindow)
+}
+
+// PeerExtended reports a peer that announced the window extension.
+func (c *Core) PeerExtended() bool { return c.peerExtended }
+
+// announcedWindow is the window as this side announces it: with the
+// extension bit.
+func (c *Core) announcedWindow() uint64 { return c.wnd | WindowExtension }
+
+// notePeerWindow takes a window the peer announced.
+func (c *Core) notePeerWindow(wnd uint64) {
+	c.peerExtended = wnd&WindowExtension != 0
+	c.peerWnd = clampPeerWindow(wnd)
+}
 
 // Unacked is the number of retained offset units.
 func (c *Core) Unacked() uint64 { return c.sndNxt - c.sndUna }
@@ -422,7 +465,7 @@ func (c *Core) CanWrite(n int) bool {
 		return true // Write reports the error
 	}
 	inflight := c.inflight()
-	if inflight == 0 || inflight+uint64(n) <= c.wnd {
+	if inflight == 0 || inflight+uint64(n) <= c.EffectiveWindow() {
 		return true
 	}
 	c.blocked = true
@@ -449,17 +492,18 @@ func (c *Core) Write(p []byte, now time.Time) (bool, error) {
 		return true, nil
 	}
 	inflight := c.inflight()
-	if inflight > 0 && inflight+uint64(len(p)) > c.wnd {
+	wnd := c.EffectiveWindow()
+	if inflight > 0 && inflight+uint64(len(p)) > wnd {
 		c.blocked = true
 		return false, nil
 	}
-	if inflight < c.wnd/2 {
+	if inflight < wnd/2 {
 		c.blocked, c.ackedBlocked = false, 0
 	}
 	c.segs = append(c.segs, segment{off: c.sndNxt, data: p})
 	c.sndNxt += uint64(len(p))
 	c.lastActivity = now
-	c.pump()
+	c.pump(now)
 	return true, nil
 }
 
@@ -478,7 +522,7 @@ func (c *Core) writeFrozen(p []byte, now time.Time) error {
 	c.segs = append(c.segs, segment{off: c.sndNxt, data: p})
 	c.sndNxt += uint64(len(p))
 	c.lastActivity = now
-	c.pump()
+	c.pump(now)
 	return nil
 }
 
@@ -494,7 +538,7 @@ func (c *Core) CloseWrite(now time.Time) error {
 	c.finOff = c.sndNxt
 	c.sndNxt++
 	c.lastActivity = now
-	c.pump()
+	c.pump(now)
 	c.checkFinish(now)
 	return nil
 }
@@ -566,18 +610,22 @@ func (c *Core) sendAck(announceWindow bool) {
 	if c.delivered == c.ackSent && !announceWindow {
 		return
 	}
-	c.out = append(c.out, Output{Path: c.cur, Frame: AppendAck(nil, c.delivered, c.wnd)})
+	c.out = append(c.out, Output{Path: c.cur, Frame: AppendAck(nil, c.delivered, c.announcedWindow())})
 	c.AcksSent++
 	c.ackSent = c.delivered
 	c.ackDue = time.Time{}
 }
 
-// pump transmits [cursor, sndNxt) on the current path.
-func (c *Core) pump() {
+// pump transmits [cursor, sndNxt) on the current path, at most the
+// effective window beyond what the peer delivered: a retransmission after a
+// resume, a frozen stream's last reads and a write larger than the window
+// leave as acks come.
+func (c *Core) pump(now time.Time) {
 	p := c.cur
 	if !c.canSendOn(p) {
 		return
 	}
+	limit := c.WindowBase() + c.EffectiveWindow()
 	for p.sendCursor < c.sndNxt {
 		if c.finQueued && p.sendCursor == c.finOff {
 			c.out = append(c.out, Output{Path: p, Frame: AppendFin(nil, c.delivered)})
@@ -585,10 +633,16 @@ func (c *Core) pump() {
 			p.sendCursor++
 			continue
 		}
+		if p.sendCursor >= limit {
+			break
+		}
 		seg := c.segmentAt(p.sendCursor)
 		data := seg.data[p.sendCursor-seg.off:]
 		if len(data) > p.maxPayload {
 			data = data[:p.maxPayload]
+		}
+		if c.rttOff == 0 && p.sendCursor >= c.rttFloor && !now.IsZero() {
+			c.rttOff, c.rttAt, c.rttDelivered = p.sendCursor+uint64(len(data)), now, c.peerDelivered
 		}
 		size := 1 + uvarintLen(c.delivered) + len(data)
 		var frame []byte
@@ -604,10 +658,41 @@ func (c *Core) pump() {
 		c.ackSent, c.ackDue = c.delivered, time.Time{}
 		p.sendCursor += uint64(len(data))
 	}
+	if c.segHead < len(c.segs) && c.segs[c.segHead].off < c.sndUna {
+		c.releaseSent()
+	}
+}
+
+// releaseSent drops the segments below sndUna that the current path sent.
+// The peer may acknowledge bytes this path did not carry yet (a planned move
+// keeps receiving on the path it leaves, and the window holds back the
+// retransmission on the new one); a path's offsets are implicit, so it still
+// carries them, and they stay until it did.
+func (c *Core) releaseSent() {
+	free := c.sndUna
+	if p := c.cur; p != nil && p.established && p.sendCursor < free {
+		free = p.sendCursor
+	}
+	for c.segHead < len(c.segs) {
+		seg := &c.segs[c.segHead]
+		if seg.off+uint64(len(seg.data)) > free {
+			break
+		}
+		*seg = segment{}
+		c.segHead++
+	}
+	if c.segHead == len(c.segs) {
+		c.segs, c.segHead = c.segs[:0], 0
+	} else if c.segHead > 64 && c.segHead*2 > len(c.segs) {
+		n := copy(c.segs, c.segs[c.segHead:])
+		clear(c.segs[n:])
+		c.segs, c.segHead = c.segs[:n], 0
+	}
 }
 
 // segmentAt finds the retained segment holding offset (sndUna <= offset <
-// data end). Transmission is almost always at the tail.
+// data end, or an offset the current path has yet to carry). Transmission is
+// almost always at the tail.
 func (c *Core) segmentAt(offset uint64) *segment {
 	for i := len(c.segs) - 1; i >= c.segHead; i-- {
 		if c.segs[i].off <= offset {
@@ -659,7 +744,7 @@ func (c *Core) PathFrame(p *Path, frame []byte, now time.Time) {
 		}
 		frame = rest
 		if len(frame) == 0 {
-			c.pump()
+			c.pump(now)
 			c.checkFinish(now)
 			return
 		}
@@ -677,16 +762,16 @@ func (c *Core) records(p *Path, frame []byte, now time.Time) {
 		frame = rest
 		switch record.Type {
 		case TypeData:
-			if !c.ack(record.Ack) || !c.data(p, record.Payload, now) {
+			if !c.ack(record.Ack, now) || !c.data(p, record.Payload, now) {
 				return
 			}
 		case TypeAck:
-			if !c.ack(record.Ack) {
+			c.notePeerWindow(record.Wnd)
+			if !c.ack(record.Ack, now) {
 				return
 			}
-			c.peerWnd = clampPeerWindow(record.Wnd)
 		case TypeFin:
-			if !c.ack(record.Ack) || !c.fin(p) {
+			if !c.ack(record.Ack, now) || !c.fin(p) {
 				return
 			}
 		case TypeRst:
@@ -713,20 +798,76 @@ func (c *Core) records(p *Path, frame []byte, now time.Time) {
 			return
 		}
 	}
-	c.pump()
+	c.pump(now)
 	c.checkFinish(now)
 }
 
 // ack processes a cumulative ack (the peer's delivered offset).
-func (c *Core) ack(ack uint64) bool {
+func (c *Core) ack(ack uint64, now time.Time) bool {
 	if ack > c.sndNxt {
 		c.reset(RstProtocol, "ack beyond sent data", ErrProtocol)
 		return false
 	}
-	c.peerDelivered = max(c.peerDelivered, ack)
+	if c.rttOff != 0 && ack >= c.rttOff {
+		c.sampleRTT(now.Sub(c.rttAt), ack-min(c.rttDelivered, ack))
+		c.rttOff = 0
+	}
+	if ack > c.peerDelivered {
+		delivered := ack - c.peerDelivered
+		c.peerDelivered = ack
+		c.grow(delivered)
+	}
 	c.awaitPeerAck = time.Time{}
 	c.advanceUna(ack)
 	return true
+}
+
+// grow doubles the window once the writer waited for it and the peer
+// delivered a whole window meanwhile: up to MaxWindow as before the window
+// extension, beyond it while the window is below twice the measured
+// bandwidth-delay product and the peer takes it. Only the peer's acks count
+// (bytes handed to its socket), not what a resume says it received.
+func (c *Core) grow(delivered uint64) {
+	if !c.blocked {
+		return
+	}
+	c.ackedBlocked += delivered
+	limit := uint64(MaxWindow)
+	if c.peerExtended {
+		limit = MaxExtendedWindow
+	}
+	if c.ackedBlocked < c.wnd || c.wnd >= limit {
+		return
+	}
+	c.ackedBlocked = 0
+	if c.wnd >= MaxWindow && c.wnd >= 2*c.bdp {
+		return
+	}
+	step := min(c.wnd, limit-c.wnd)
+	if c.cfg.Budget == nil || c.cfg.Budget.reserve(step) {
+		c.wnd += step
+		c.reserved += step
+		c.sendAck(true)
+	}
+}
+
+// sampleRTT takes a timed round trip and what the peer delivered meanwhile.
+func (c *Core) sampleRTT(rtt time.Duration, delivered uint64) {
+	if rtt <= 0 {
+		rtt = time.Microsecond
+	}
+	if c.minRTT == 0 || rtt < c.minRTT {
+		c.minRTT = rtt
+	}
+	if bdp := uint64(float64(delivered) * float64(c.minRTT) / float64(rtt)); bdp > c.bdp {
+		c.bdp = bdp
+	}
+}
+
+// newPathTiming forgets the round trip of the last path (a resume).
+func (c *Core) newPathTiming() {
+	c.rttOff, c.minRTT, c.bdp = 0, 0, 0
+	c.rttFloor = c.sndNxt
 }
 
 // resumeAckFallback bounds the wait for the peer's ack after a resume (see
@@ -739,6 +880,8 @@ func (c *Core) resumed(now time.Time) {
 	if c.peerDelivered < c.sndUna {
 		c.awaitPeerAck = now.Add(resumeAckFallback)
 	}
+	c.peerExtended = false
+	c.newPathTiming()
 	c.sendAck(true)
 }
 
@@ -746,35 +889,8 @@ func (c *Core) advanceUna(ack uint64) {
 	if ack <= c.sndUna {
 		return
 	}
-	delta := ack - c.sndUna
 	c.sndUna = ack
-	for c.segHead < len(c.segs) {
-		seg := &c.segs[c.segHead]
-		if seg.off+uint64(len(seg.data)) > ack {
-			break
-		}
-		*seg = segment{}
-		c.segHead++
-	}
-	if c.segHead == len(c.segs) {
-		c.segs, c.segHead = c.segs[:0], 0
-	} else if c.segHead > 64 && c.segHead*2 > len(c.segs) {
-		n := copy(c.segs, c.segs[c.segHead:])
-		clear(c.segs[n:])
-		c.segs, c.segHead = c.segs[:n], 0
-	}
-	if c.blocked {
-		c.ackedBlocked += delta
-		if c.ackedBlocked >= 2*c.wnd && c.wnd < MaxWindow {
-			grow := min(c.wnd, MaxWindow-c.wnd)
-			if c.cfg.Budget == nil || c.cfg.Budget.reserve(grow) {
-				c.wnd += grow
-				c.reserved += grow
-				c.sendAck(true)
-			}
-			c.ackedBlocked = 0
-		}
-	}
+	c.releaseSent()
 }
 
 func (c *Core) data(p *Path, payload []byte, now time.Time) bool {
@@ -796,7 +912,7 @@ func (c *Core) data(p *Path, payload []byte, now time.Time) bool {
 	c.rq = append(c.rq, chunk{data: payload[skip:]})
 	c.rcvNxt += n - skip
 	c.lastActivity = now
-	if c.rcvNxt-c.delivered > 2*(MaxWindow+MaxFrameBytes) {
+	if c.rcvNxt-c.delivered > 2*(MaxExtendedWindow+MaxFrameBytes) {
 		c.reset(RstWindowViolation, "peer exceeded its window", ErrProtocol)
 		return false
 	}
@@ -1015,7 +1131,7 @@ func (c *Core) attemptFailed(p *Path, now time.Time) {
 		c.cur.rxOnly = false
 		c.state = StateOpen
 		c.lastActivity = now
-		c.pump()
+		c.pump(now)
 		c.afterDeliver(now)
 		c.checkFinish(now)
 		return
@@ -1221,7 +1337,7 @@ func (c *Core) AcceptResume(p *Path, record *Record, now time.Time) ResumeVerdic
 	c.advanceUna(record.RcvNxt)
 	c.ackSent = c.delivered
 	c.resumed(now)
-	c.pump()
+	c.pump(now)
 	c.afterDeliver(now)
 	return ResumeVerdict{Accepted: true}
 }
@@ -1302,6 +1418,7 @@ func (c *Core) Tick(now time.Time) {
 		// from what it received, as it did before.
 		c.awaitPeerAck = time.Time{}
 		c.peerDelivered = max(c.peerDelivered, c.sndUna)
+		c.pump(now)
 	}
 	if !c.ackDue.IsZero() && !now.Before(c.ackDue) {
 		c.ackDue = time.Time{}
@@ -1323,5 +1440,5 @@ func (c *Core) halfCloseArmed() bool {
 var initialWindow uint64 = InitialWindow
 
 func clampPeerWindow(wnd uint64) uint64 {
-	return min(max(wnd, 1024), MaxWindow)
+	return min(max(wnd&^WindowExtension, 1024), MaxExtendedWindow)
 }

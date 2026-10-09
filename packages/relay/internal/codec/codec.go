@@ -3,6 +3,7 @@ package codec
 import (
 	"fmt"
 
+	"google.golang.org/grpc/mem"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -17,6 +18,10 @@ func (Codec) Name() string { return "proto" }
 
 func (Codec) Marshal(value any) ([]byte, error) {
 	switch message := value.(type) {
+	case *TunnelFrame:
+		buffers := message.take()
+		defer buffers.Free()
+		return buffers.Materialize(), nil
 	case *Frame:
 		// No copy: the proxy hands every received frame to SendMsg once and
 		// never touches it again, and a large proxied message was held twice.
@@ -30,6 +35,10 @@ func (Codec) Marshal(value any) ([]byte, error) {
 
 func (Codec) Unmarshal(data []byte, value any) error {
 	switch message := value.(type) {
+	case *TunnelFrame:
+		// gRPC copied the message into data for this call alone.
+		message.hold(mem.BufferSlice{mem.SliceBuffer(data)})
+		return nil
 	case *Frame:
 		*message = append((*message)[:0], data...)
 		return nil

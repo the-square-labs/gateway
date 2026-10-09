@@ -10,6 +10,7 @@ import (
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protowire"
 )
 
 // Stream is one relay tunnel stream (OpenTunnel or AcceptTunnel).
@@ -821,14 +822,27 @@ func (s *Session) pathDone(path *Path) <-chan struct{} {
 	return closed
 }
 
-// ReadChunk is the read size for a bridge over a session: a DATA frame
-// (header and payload) then fits chunk bytes, so the common 32 KiB read stays
-// in the allocator's small size classes on both ends.
+// ReadChunk is the read size for a bridge over a session: a DATA record of
+// it (header and payload) in its TunnelFrame then fits chunk bytes as a gRPC
+// message. gRPC takes message buffers from size tiers (16 KiB, 32 KiB, 1 MiB)
+// and clears the whole buffer on every use: a 32 KiB read made a message a
+// few bytes over 32 KiB, which took and cleared a 1 MiB buffer for every frame
+// on both daemons.
 func ReadChunk(chunk int) int {
 	if chunk <= 4*MaxRecordHeader {
 		return chunk
 	}
-	return chunk - MaxRecordHeader
+	return tunnelDataLimit(chunk) - MaxRecordHeader
+}
+
+// tunnelDataLimit is the largest TunnelData payload whose TunnelFrame message
+// is at most message bytes (relaybridge.DataLimit).
+func tunnelDataLimit(message int) int {
+	n := message - 2
+	for n > 0 && n+2+protowire.SizeVarint(uint64(n))+protowire.SizeVarint(uint64(n+1+protowire.SizeVarint(uint64(n)))) > message {
+		n--
+	}
+	return n
 }
 
 // ErrFrozen is what Recv answers while the stream is frozen for a handover.

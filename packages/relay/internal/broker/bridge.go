@@ -10,6 +10,7 @@ import (
 	"time"
 
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
+	"github.com/wiolett-industries/gateway/relay/internal/codec"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -41,7 +42,7 @@ func bridgeWithTimeouts(left, right tunnelStream, maxFrame int, stopped <-chan s
 	bridgeDone := make(chan struct{})
 	defer close(bridgeDone)
 	go func() {
-		terminal, err := pumpUntil(right, left, maxFrame, activity, bridgeDone, func(bytes uint64) {
+		terminal, err := pumpEither(right, left, maxFrame, activity, bridgeDone, func(bytes uint64) {
 			if metrics == nil {
 				return
 			}
@@ -51,7 +52,7 @@ func bridgeWithTimeouts(left, right tunnelStream, maxFrame int, stopped <-chan s
 		results <- pumpResult{terminal: terminal, err: err, direction: pumpSourceToTarget}
 	}()
 	go func() {
-		terminal, err := pumpUntil(left, right, maxFrame, activity, bridgeDone, func(bytes uint64) {
+		terminal, err := pumpEither(left, right, maxFrame, activity, bridgeDone, func(bytes uint64) {
 			if metrics == nil {
 				return
 			}
@@ -271,6 +272,124 @@ func pumpUntil(destination tunnelSender, source tunnelReceiver, maxFrame int, ac
 			return false, nil
 		}
 	}
+}
+
+// rawTunnelStream is a gRPC stream of the relay's servers: it receives and
+// sends codec.TunnelFrames, a tunnel's frames as the bytes gRPC read.
+type rawTunnelStream interface {
+	RecvMsg(any) error
+	SendMsg(any) error
+}
+
+// pumpEither carries frames from source to destination as received when both
+// are gRPC streams, and decoded otherwise (a built-in local service).
+func pumpEither(destination tunnelSender, source tunnelReceiver, maxFrame int, activity chan<- struct{}, stopped <-chan struct{}, recordBytes func(uint64)) (bool, error) {
+	rawDestination, destinationOK := destination.(rawTunnelStream)
+	rawSource, sourceOK := source.(rawTunnelStream)
+	if destinationOK && sourceOK {
+		return pumpRaw(rawDestination, rawSource, maxFrame, activity, stopped, recordBytes)
+	}
+	return pumpUntil(destination, source, maxFrame, activity, stopped, recordBytes)
+}
+
+// pumpRaw is pumpUntil for frames the relay passes on without decoding them:
+// it checks what pumpUntil checks (the payload kind and the data size) from
+// the frame's encoded header.
+func pumpRaw(destination, source rawTunnelStream, maxFrame int, activity chan<- struct{}, stopped <-chan struct{}, recordBytes func(uint64)) (bool, error) {
+	for {
+		var frame codec.TunnelFrame
+		if err := source.RecvMsg(&frame); err != nil {
+			if err == io.EOF {
+				if channelClosed(stopped) {
+					return true, nil
+				}
+				return false, destination.SendMsg(&relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_HalfClose{HalfClose: &relayv1.TunnelHalfClose{}}})
+			}
+			return true, err
+		}
+		if frame.Kind == codec.KindUnparsed {
+			decoded, err := frame.Decode()
+			if err != nil {
+				return true, status.Error(codes.Internal, "grpc: failed to unmarshal the received message: "+err.Error())
+			}
+			terminal, done, err := pumpOne(destination.SendMsg, decoded, maxFrame, activity, stopped, recordBytes)
+			if done {
+				return terminal, err
+			}
+			continue
+		}
+		dataBytes := 0
+		switch frame.Kind {
+		case codec.KindData:
+			if frame.DataLen == 0 || frame.DataLen > maxFrame {
+				frame.Free()
+				return false, status.Error(codes.InvalidArgument, "tunnel data frame exceeds negotiated limit")
+			}
+			dataBytes = frame.DataLen
+		case codec.KindHalfClose, codec.KindClose, codec.KindError:
+		default:
+			frame.Free()
+			return false, status.Error(codes.InvalidArgument, "unexpected tunnel frame")
+		}
+		if channelClosed(stopped) {
+			frame.Free()
+			return true, nil
+		}
+		kind := frame.Kind
+		if err := destination.SendMsg(&frame); err != nil {
+			frame.Free()
+			return false, err
+		}
+		if dataBytes > 0 && recordBytes != nil {
+			recordBytes(uint64(dataBytes))
+		}
+		select {
+		case activity <- struct{}{}:
+		default:
+		}
+		if kind == codec.KindClose || kind == codec.KindError {
+			return true, nil
+		}
+		if kind == codec.KindHalfClose {
+			return false, nil
+		}
+	}
+}
+
+// pumpOne passes one decoded frame on as pumpUntil does; done reports that
+// the pump ends with terminal and err.
+func pumpOne(send func(any) error, frame *relayv1.TunnelFrame, maxFrame int, activity chan<- struct{}, stopped <-chan struct{}, recordBytes func(uint64)) (terminal, done bool, err error) {
+	dataBytes := 0
+	switch payload := frame.Payload.(type) {
+	case *relayv1.TunnelFrame_Data:
+		if len(payload.Data.Data) == 0 || len(payload.Data.Data) > maxFrame {
+			return false, true, status.Error(codes.InvalidArgument, "tunnel data frame exceeds negotiated limit")
+		}
+		dataBytes = len(payload.Data.Data)
+	case *relayv1.TunnelFrame_HalfClose, *relayv1.TunnelFrame_Close, *relayv1.TunnelFrame_Error:
+	default:
+		return false, true, status.Error(codes.InvalidArgument, "unexpected tunnel frame")
+	}
+	if channelClosed(stopped) {
+		return true, true, nil
+	}
+	if err := send(frame); err != nil {
+		return false, true, err
+	}
+	if dataBytes > 0 && recordBytes != nil {
+		recordBytes(uint64(dataBytes))
+	}
+	select {
+	case activity <- struct{}{}:
+	default:
+	}
+	if frame.GetClose() != nil || frame.GetError() != nil {
+		return true, true, nil
+	}
+	if frame.GetHalfClose() != nil {
+		return false, true, nil
+	}
+	return false, false, nil
 }
 
 func channelClosed(channel <-chan struct{}) bool {
