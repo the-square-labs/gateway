@@ -179,4 +179,21 @@ describe.skipIf(!url)('Relay Pool update placement (stand rc.8, F-2, O-7)', () =
     expect(await t.tryActivate(current.id)).toBe(true);
     expect(t.policy.gatewayAssignmentsChanged).toHaveBeenCalled();
   });
+
+  it('lists the remote relays as ready and reconnecting, not offline, while the local relay restarts', async () => {
+    await db.delete(relayEndpoints);
+    await db.delete(relayInstances);
+    const since = Date.now() - 6_000;
+    await relay('local', 'local', { state: 'offline' });
+    const uk = await relay('uk', 'remote', { state: 'offline', lastSeenAt: new Date(since - 2_000) });
+    const t = service();
+    t.pool.setLocalRelayOutage({ latestOutage: () => ({ since, servingAgainAt: null, planned: true }) });
+    vi.spyOn(t.pool as unknown as { getRecentAttempts(): unknown }, 'getRecentAttempts').mockResolvedValue([]);
+    const settings = { getConfig: async () => ({ relay: { assignmentSpread: { mode: 'fixed', count: 2 } } }) };
+    (t.pool as unknown as { settings: unknown }).settings = settings;
+    const snapshot = await t.pool.getSnapshot();
+    const listed = snapshot.instances.find(({ id }) => id === uk.id);
+    expect(snapshot.state).toBe('local_relay_restarting');
+    expect(listed).toMatchObject({ state: 'ready', reconnecting: true });
+  });
 });

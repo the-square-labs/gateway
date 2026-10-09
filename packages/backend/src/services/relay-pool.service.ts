@@ -200,6 +200,13 @@ export function planRelays(
   return placed.planned;
 }
 
+/** The state a reconnecting remote relay is listed in: the one it reported last, drained by an operator or not. */
+function reconnectingState(instance: RelayInstanceRow): RelayInstanceRow['state'] {
+  if (instance.manualDrainStartedAt) return 'draining';
+  const reported = instance.health?.admissionState;
+  return reported === 'draining' ? 'draining' : reported === 'ready' ? 'ready' : instance.state;
+}
+
 export class RelayPoolService {
   private reconciliationTimer: ReturnType<typeof setInterval> | null = null;
   private reconciliationFlight: Promise<void> | null = null;
@@ -1296,12 +1303,15 @@ export class RelayPoolService {
     // Advisory, like the trust and certificate status.
     const routeHistories = await loadRelayRouteHistories(this.db).catch(() => new Map());
     const revocations = new Map(instances.map(({ id }) => [id, describeRelayRevocation(routeHistories.get(id))]));
+    const outage = await this.describeLocalRelayOutage(instances);
+    // A remote relay whose control stream ended with the local relay is reconnecting, not offline: its data plane
+    // serves on (stand rc.8, O-7: NL and UK were listed offline during the local relay's update).
+    const reconnecting = (instance: RelayInstanceRow) => outage?.reconnectingRelayIds.has(instance.id) ?? false;
     const degraded =
       !unavailable &&
-      (instances.some(({ state }) => ['offline', 'error'].includes(state)) ||
+      (instances.some((instance) => ['offline', 'error'].includes(instance.state) && !reconnecting(instance)) ||
         [...revocations.values()].some((revocation) => revocation?.state === 'stale'));
     const warnings = await this.gatewayHostOnlyWarnings(gatewayHostOnly, instances, latencyPaths).catch(() => []);
-    const outage = await this.describeLocalRelayOutage(instances);
     return {
       poolId: 'system',
       // One state while the local relay restarts: every remote relay and node drops with it, none of them failed.
@@ -1371,8 +1381,12 @@ export class RelayPoolService {
           certificate: certificates.get(instance.id) ?? null,
           /** Revoked routes this relay has not applied; `stale` once past the deadline. */
           revocation: revocations.get(instance.id) ?? null,
-          /** A remote relay whose control stream ended with the local relay and has not come back yet. */
-          reconnecting: outage?.reconnectingRelayIds.has(instance.id) ?? false,
+          /**
+           * A remote relay whose control stream ended with the local relay and has not come back yet. It is listed in
+           * the state it reported last (ready, draining), not offline: its data plane serves meanwhile.
+           */
+          reconnecting: reconnecting(instance),
+          ...(reconnecting(instance) ? { state: reconnectingState(instance) } : {}),
         };
       }),
       staging: [...stagingByEndpoint.values()],
