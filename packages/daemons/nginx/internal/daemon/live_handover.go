@@ -139,6 +139,7 @@ func (p *NginxPlugin) updateConnections() *pb.DaemonUpdateConnections {
 // start): each looks for a path at once and resumes.
 func (p *NginxPlugin) restoreHandover() {
 	p.handoverTracker = handover.NewTracker(p.baseCfg.StateDir, lifecycle.Version)
+	p.handover.Observe(p.handoverTracker)
 	restored, err := handover.RestoreFrom(handoverKeeper, "nginx", p.logger)
 	if err != nil && p.logger != nil {
 		p.logger.Warn("could not take over the connections the previous daemon process handed over; they are cut", "error", err)

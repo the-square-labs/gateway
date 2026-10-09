@@ -46,6 +46,9 @@ type fakeConnectorEngine struct {
 	legacyImages map[string]bool
 	// events is the event stream the engine serves (nil: none).
 	events io.Reader
+	// onSync, when set, applies a connector's sync before the connector answers it (a connector that serves its
+	// egress listeners, live_handover_egress_test.go).
+	onSync func(current *fakeConnectorContainer, request securelink.SyncRequest)
 }
 
 type fakeConnectorContainer struct {
@@ -131,7 +134,11 @@ func (e *fakeConnectorEngine) serveControl(current *fakeConnectorContainer) {
 					current.draining = true
 				}
 				draining := current.draining
+				onSync := e.onSync
 				e.mu.Unlock()
+				if onSync != nil && !request.Drain && !draining {
+					onSync(current, request)
+				}
 				if request.Drain {
 					response := securelink.SyncResponse{Version: securelink.ProtocolVersion, Active: active}
 					if drainFails {

@@ -174,6 +174,7 @@ func (p *DockerPlugin) updateConnections() *pb.DaemonUpdateConnections {
 // target streams, and the source streams look for a path at once.
 func (p *DockerPlugin) restoreHandover() {
 	p.handoverTracker = handover.NewTracker(p.cfg.StateDir, lifecycle.Version)
+	p.handover.Observe(p.handoverTracker)
 	restored, err := handover.RestoreFrom(handoverKeeper, "docker", p.logger)
 	if err != nil {
 		p.logger.Warn("could not take over the connections the previous daemon process handed over; they are cut", "error", err)

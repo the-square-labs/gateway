@@ -23,15 +23,80 @@ func (m *dockerSecureLinkManager) connectorRequest(ingress []securelink.BindingC
 // syncConnectorLocked sends ingress to the connector together with the egress listeners it already holds, which a
 // sync of the ingress side therefore leaves as they are.
 func (m *dockerSecureLinkManager) syncConnectorLocked(ctx context.Context, ingress []securelink.BindingConfig) (*securelink.SyncResponse, error) {
-	var egress []securelink.EgressConfig
-	if m.egress.configsFor == m.connectorID {
-		egress = m.egress.configs
-	}
+	egress, known := m.heldEgressLocked(ctx)
 	response, err := securelink.Sync(ctx, m.socketPath, m.connectorRequest(ingress, egress))
 	if err == nil {
 		m.egress.ingressConfigs, m.egress.ingressFor = ingress, m.connectorID
+		if !known {
+			// The connector holds these now, whatever it held before.
+			m.egress.configs, m.egress.configsFor = egress, m.connectorID
+		}
 	}
 	return response, err
+}
+
+// heldEgressLocked returns the egress listeners the connector holds, for a sync of its ingress side: the ones this
+// process sent it last (known), or, before this process synced the egress at all (its start, before the first egress
+// reconcile), the ones the previous process left it. Those are rebuilt from the desired egress (the persisted grant
+// bundle) and the anchor's endpoints on the link networks, without changing anything: a connector sync names every
+// listener it keeps, and one without them would close them with every workload connection they carry, which the
+// previous process handed over to this one (stand rc.7 F-1).
+func (m *dockerSecureLinkManager) heldEgressLocked(ctx context.Context) (configs []securelink.EgressConfig, known bool) {
+	if m.egress.configsFor == m.connectorID {
+		return m.egress.configs, true
+	}
+	serving := m.egress.serving(time.Now())
+	if len(serving) == 0 || m.connectorID == "" || m.plugin == nil || m.plugin.client == nil {
+		return nil, false
+	}
+	inspected, err := m.plugin.client.cli.ContainerInspect(ctx, m.networkHolder(), mobyclient.ContainerInspectOptions{})
+	if err != nil {
+		if m.plugin.logger != nil {
+			m.plugin.logger.Warn("could not read the secure-link connector's link networks; its egress listeners are set again", "error", err)
+		}
+		return nil, false
+	}
+	connectorNetworks := connectorNetworksOf(inspected.Container.NetworkSettings)
+	ids := make([]string, 0, len(serving))
+	for id := range serving {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		desired := serving[id]
+		endpoint := connectorNetworks[desired.networkName]
+		if endpoint == nil || !endpoint.IPAddress.IsValid() || !endpoint.IPAddress.Is4() {
+			continue
+		}
+		info, cached := m.egress.networks[desired.networkName]
+		if !cached || info.id != endpoint.NetworkID {
+			linkNetwork, err := m.plugin.client.cli.NetworkInspect(ctx, desired.networkName, mobyclient.NetworkInspectOptions{})
+			if err != nil {
+				continue
+			}
+			if info, err = egressNetworkOf(linkNetwork.Network); err != nil || info.id != endpoint.NetworkID {
+				continue
+			}
+			if m.egress.networks == nil {
+				m.egress.networks = map[string]egressNetwork{}
+			}
+			m.egress.networks[desired.networkName] = info
+		}
+		if !info.prefix.Contains(endpoint.IPAddress) {
+			continue
+		}
+		configs = append(configs, egressConfigFor(id, desired, endpoint.IPAddress, info.prefix))
+	}
+	return configs, false
+}
+
+// egressConfigFor is the connector's listener id of desired at address on a link network of prefix.
+func egressConfigFor(id string, desired egressDesired, address netip.Addr, prefix netip.Prefix) securelink.EgressConfig {
+	return securelink.EgressConfig{
+		ID: id, OwnerKind: desired.ownerKind, Generation: desired.generation, ListenHost: address.String(),
+		ListenPort: desired.listenPort, AllowedPrefix: prefix.String(), MaxSessions: desired.maxSessions,
+		TLSCAPEM: desired.tlsCAPEM, TLSServerName: desired.tlsName,
+	}
 }
 
 // releaseIngressLocked leaves the connector without ingress bindings. It is removed with its management network
@@ -228,11 +293,7 @@ func (m *dockerSecureLinkManager) reconcileEgressStatusesLocked(ctx context.Cont
 			continue
 		}
 		m.recordEgressAddressLocked(desired.networkName, endpoint.IPAddress)
-		configs = append(configs, securelink.EgressConfig{
-			ID: id, OwnerKind: desired.ownerKind, Generation: desired.generation, ListenHost: endpoint.IPAddress.String(),
-			ListenPort: desired.listenPort, AllowedPrefix: info.prefix.String(), MaxSessions: desired.maxSessions,
-			TLSCAPEM: desired.tlsCAPEM, TLSServerName: desired.tlsName,
-		})
+		configs = append(configs, egressConfigFor(id, desired, endpoint.IPAddress, info.prefix))
 	}
 	m.egress.configs, m.egress.configsFor = configs, m.connectorID
 	ingress := m.egress.ingressConfigs

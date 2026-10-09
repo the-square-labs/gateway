@@ -29,6 +29,13 @@ const (
 	settleLimit = relayresume.TargetSuspendTimeout + 5*time.Second
 )
 
+// settleProof is how long the counts wait after the last stream resumed, and
+// settleTick how often they look (variables for tests).
+var (
+	settleProof = time.Second
+	settleTick  = 250 * time.Millisecond
+)
+
 // Report is what one update did to the daemon's connections.
 type Report struct {
 	FromVersion string         `json:"fromVersion"`
@@ -89,10 +96,14 @@ type Tracker struct {
 	mu       sync.Mutex
 	pending  *Report
 	sessions []*relayresume.Session
-	kept     int
-	cut      map[string]int
-	last     *Report
-	settled  chan struct{}
+	// lost are the sessions whose local connection ended before they
+	// resumed, or failed before the counts were final (CutLocalClosed).
+	lost    map[*relayresume.Session]bool
+	tracked map[*relayresume.Session]bool
+	kept    int
+	cut     map[string]int
+	last    *Report
+	settled chan struct{}
 }
 
 // NewTracker starts a tracker for a process of version: it takes the report
@@ -121,7 +132,36 @@ func NewTracker(stateDir, version string) *Tracker {
 func (t *Tracker) Track(session *relayresume.Session) {
 	t.mu.Lock()
 	t.sessions = append(t.sessions, session)
+	if t.tracked == nil {
+		t.tracked = map[*relayresume.Session]bool{}
+	}
+	t.tracked[session] = true
 	t.mu.Unlock()
+}
+
+// localEnded hears that the local connection of a bridged session ended (err
+// nil: its end of stream). For a stream taken over whose counts are not final
+// yet, an end before the stream resumed (the local peer gave up, or something
+// closed it, during the pause) or a failure at any time means the update did
+// not keep the connection: a stream that resumed carries nothing to a local
+// connection that is gone (stand rc.7 F-1, a truncated download reported
+// kept).
+func (t *Tracker) localEnded(session *relayresume.Session, err error) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.pending == nil || !t.tracked[session] {
+		return
+	}
+	if _, resumed, _ := session.HandoverPause(); resumed && err == nil {
+		return
+	}
+	if t.lost == nil {
+		t.lost = map[*relayresume.Session]bool{}
+	}
+	t.lost[session] = true
 }
 
 // Kept counts n connections taken over that carry on without a stream to
@@ -153,36 +193,57 @@ func (t *Tracker) Settle() {
 		return
 	}
 	deadline := time.Now().Add(settleLimit)
-	var pauses []time.Duration
+	var settledAt time.Time
 	for {
 		t.mu.Lock()
 		sessions := slices.Clone(t.sessions)
 		t.mu.Unlock()
-		pauses = pauses[:0]
 		open := 0
 		failed := 0
 		for _, session := range sessions {
-			pause, resumed, ended := session.HandoverPause()
+			_, resumed, ended := session.HandoverPause()
 			switch {
 			case resumed:
-				pauses = append(pauses, pause)
 			case ended:
 				failed++
 			default:
 				open++
 			}
 		}
-		if open == 0 || time.Now().After(deadline) {
-			t.finish(pending, pauses, failed+open)
+		now := time.Now()
+		if open > 0 {
+			settledAt = time.Time{}
+		} else if settledAt.IsZero() {
+			// A local connection that is gone shows when the resumed stream
+			// first writes to it: the counts become final a moment later.
+			settledAt = now
+		}
+		if (open == 0 && now.Sub(settledAt) >= settleProof) || now.After(deadline) {
+			t.finish(pending, sessions, failed+open)
 			return
 		}
-		time.Sleep(250 * time.Millisecond)
+		time.Sleep(settleTick)
 	}
 }
 
-func (t *Tracker) finish(pending *Report, pauses []time.Duration, failed int) {
+func (t *Tracker) finish(pending *Report, sessions []*relayresume.Session, failed int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	var pauses []time.Duration
+	lost := 0
+	for _, session := range sessions {
+		pause, resumed, _ := session.HandoverPause()
+		switch {
+		case t.lost[session]:
+			lost++
+			if !resumed {
+				// Counted as not resumed already.
+				failed--
+			}
+		case resumed:
+			pauses = append(pauses, pause)
+		}
+	}
 	report := *pending
 	report.Cut = map[string]int{}
 	for class, n := range pending.Cut {
@@ -193,9 +254,10 @@ func (t *Tracker) finish(pending *Report, pauses []time.Duration, failed int) {
 		report.AddCut(class, n)
 	}
 	report.AddCut(CutResumeFailed, failed)
+	report.AddCut(CutLocalClosed, lost)
 	// What the previous process handed over and this one never saw (a
 	// snapshot that did not come over) is cut too.
-	accounted := report.Kept + failed
+	accounted := report.Kept + failed + lost
 	for _, n := range t.cut {
 		accounted += n
 	}

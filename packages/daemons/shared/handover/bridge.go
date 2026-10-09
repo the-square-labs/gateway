@@ -208,6 +208,18 @@ type Bridge struct {
 	stop    *stopper
 	// excluded: why the last handover left it out ("" before any).
 	excluded string
+	// registry hears when the local connection ends (localEnded).
+	registry *Registry
+}
+
+// localEnded reports the end of the local connection (err nil: its end of
+// stream), unless the bridge itself closed it for an end of its own.
+func (b *Bridge) localEnded(err error) {
+	if _, terminated := b.stop.directions(); terminated || errors.Is(err, os.ErrDeadlineExceeded) {
+		// Its own end, or its idle limit.
+		return
+	}
+	b.registry.localEnded(b.session, err)
 }
 
 // readBufferPools[i] holds read buffers of 1<<i bytes, up to the largest frame.
@@ -244,7 +256,7 @@ func (r *Registry) Bridge(connection net.Conn, session *relayresume.Session, cfg
 		readChunk = maxFrame
 	}
 	cfg.ReadChunk = readChunk
-	b := &Bridge{conn: connection, session: session, cfg: cfg, stop: newStopper(cfg.Idle, connection)}
+	b := &Bridge{conn: connection, session: session, cfg: cfg, stop: newStopper(cfg.Idle, connection), registry: r}
 	if cfg.Idle > 0 {
 		b.stop.touch()
 	}
@@ -331,6 +343,7 @@ func (b *Bridge) readLoop(completed chan<- bridgeResult) {
 			continue
 		}
 		if errors.Is(err, io.EOF) {
+			b.localEnded(nil)
 			if sendErr := b.session.CloseWrite(); sendErr != nil {
 				completed <- bridgeResult{local: true, terminal: true, handed: errors.Is(sendErr, relayresume.ErrHandedOver), err: sendErr}
 				return
@@ -339,6 +352,7 @@ func (b *Bridge) readLoop(completed chan<- bridgeResult) {
 			completed <- bridgeResult{local: true}
 			return
 		}
+		b.localEnded(err)
 		completed <- bridgeResult{local: true, terminal: true, err: err}
 		return
 	}
@@ -382,6 +396,7 @@ func (b *Bridge) writeLoop(completed chan<- bridgeResult, maxFrame int) {
 					continue
 				}
 				if !park {
+					b.localEnded(writeErr)
 					completed <- bridgeResult{terminal: true, err: writeErr}
 					return
 				}

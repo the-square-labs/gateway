@@ -93,6 +93,11 @@ const (
 	CutResumeFailed = "resume_failed"
 	// CutRevoked: handed over, but its route was revoked meanwhile.
 	CutRevoked = "revoked"
+	// CutLocalClosed: handed over, and its stream resumed or could have, but
+	// its local connection ended before the stream resumed in the next
+	// process, or failed before the update's counts were final: what the
+	// stream carried did not reach it, so the update did not keep it.
+	CutLocalClosed = "local_closed"
 )
 
 // item is a bridge or a pipe.
@@ -123,6 +128,32 @@ type Registry struct {
 	// notHandedOver is the class an exit cuts what no handover left out
 	// under (no_handover when empty).
 	notHandedOver string
+	// tracker hears of the local connections of handed over streams that
+	// ended (Observe).
+	tracker *Tracker
+}
+
+// Observe tells tracker when the local connection of a stream it follows ends
+// (Tracker.Track): one that ends before its stream resumed is cut, not kept.
+func (r *Registry) Observe(tracker *Tracker) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.tracker = tracker
+	r.mu.Unlock()
+}
+
+// localEnded passes the end of a bridge's local connection on to the tracker:
+// err nil for its end of stream.
+func (r *Registry) localEnded(session *relayresume.Session, err error) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	tracker := r.tracker
+	r.mu.Unlock()
+	tracker.localEnded(session, err)
 }
 
 // NewRegistry creates an empty registry.

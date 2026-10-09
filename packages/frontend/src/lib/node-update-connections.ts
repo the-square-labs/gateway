@@ -16,6 +16,7 @@ const CUT_CLASS_LABELS: Record<string, string> = {
   no_socket: "connections the daemon cannot pass on",
   keep_failed: "connections the daemon could not pass on",
   revoked: "connections of removed routes",
+  local_closed: "connections whose local side closed during the update",
 };
 
 /** Monitoring and relay daemons carry no connections an update could keep or cut. */

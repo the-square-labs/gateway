@@ -339,3 +339,59 @@ func TestDatabaseExtraHostsLeaveOutLinksServedByTheConnector(t *testing.T) {
 		t.Fatalf("a consumer recreated during the migration kept the host listener entry: %v %v", entries, err)
 	}
 }
+
+// A daemon start (an update's next process) restores the connector's ingress bindings before it syncs the egress. The
+// connector keeps the egress listeners the previous process gave it, and with them the workloads' link connections
+// that process handed over: every sync of the new process names them, or the connector closes the listeners with
+// every connection they carry (stand rc.7 F-1: each source-side link connection of the updated node was cut).
+func TestDaemonStartKeepsTheConnectorsEgressListeners(t *testing.T) {
+	engine := &egressFakeEngine{fakeConnectorEngine: newFakeConnectorEngine(t)}
+	engine.containers["app"] = &fakeConnectorContainer{id: "app-id", name: "app", ip: "10.50.0.5", running: true}
+	newManager := func() *dockerSecureLinkManager {
+		plugin := &DockerPlugin{client: engine.client()}
+		manager := &dockerSecureLinkManager{plugin: plugin, socketPath: engine.controlDir + "/" + secureLinkConnectorSlots[0].socket,
+			bindings: map[string]dockerSecureLinkBinding{}, attached: map[string]struct{}{}}
+		manager.publishViewLocked()
+		plugin.secureLinks = manager
+		return manager
+	}
+	bundle := egressTestBundle(egressTestAssignment(egressTestLinkID, egressTestNetwork))
+	connector := secureLinkConnectorSlots[0].name
+
+	// The previous process: the egress listens, the ingress binding is bound.
+	previous := newManager()
+	if statuses := previous.syncEgress(bundle); statuses[egressTestLinkID].State != egressStateReady {
+		t.Fatalf("egress status %+v", statuses[egressTestLinkID])
+	}
+	if _, err := previous.apply(replaceTestCommand(replaceTestNewImage), nil, nil, false); err != nil {
+		t.Fatalf("ingress apply: %v", err)
+	}
+	held := engine.lastRequest(connector).Egress
+	if len(held) != 1 {
+		t.Fatalf("egress held by the connector %+v", held)
+	}
+	syncs := engine.requestCount(connector)
+
+	// The next process, as Init runs it: the egress of the persisted bundle, then the restore of the committed
+	// ingress bindings.
+	next := newManager()
+	next.setDesiredEgress(bundle)
+	if _, err := next.restore(replaceTestCommand(replaceTestNewImage)); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	engine.mu.Lock()
+	requests := append([]securelink.SyncRequest(nil), engine.containers[connector].requests[syncs:]...)
+	engine.mu.Unlock()
+	if len(requests) == 0 {
+		t.Fatal("the restore sent the connector nothing")
+	}
+	for index, request := range requests {
+		if len(request.Egress) != 1 || request.Egress[0] != held[0] {
+			t.Fatalf("sync %d of the next process names egress %+v, want the listener the connector holds %+v: the connector "+
+				"would close it with the connections it carries", index, request.Egress, held[0])
+		}
+	}
+	if removed := engine.removedIDs(); len(removed) != 0 {
+		t.Fatalf("the restore removed %v", removed)
+	}
+}

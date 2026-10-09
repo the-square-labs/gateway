@@ -158,7 +158,7 @@ export interface NodeHealthReport {
  * The connections across an update of a docker or nginx daemon. With daemon_stream_handover_v1 the daemon hands its
  * relay stream sessions over to the next process; what it cannot hand over is cut, by class (an open set: raw_stream,
  * postgres_tls, registry, backup, no_handover, service_restart, handshake, over_limit, resume_failed, busy,
- * idle_closed, ...).
+ * idle_closed, local_closed, ...).
  */
 export interface NodeUpdateConnectionsReport {
   /**
