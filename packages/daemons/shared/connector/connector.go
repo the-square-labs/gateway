@@ -39,6 +39,11 @@ const (
 	// connections to 2 s (peer liveness), so a lane stalled this long is
 	// dropped there anyway.
 	relayLaneAckTimeout = 2 * time.Second
+	// LaneStreamWindow and LaneConnWindow are a relay lane's HTTP/2 receive
+	// windows per stream and per connection; the relay serves its side with
+	// the same values.
+	LaneStreamWindow = 8 << 20
+	LaneConnWindow   = 32 << 20
 )
 
 var (
@@ -145,7 +150,13 @@ func dialOptions(tlsCfg *tls.Config, lane bool) []grpc.DialOption {
 		options = append(options, grpc.WithIdleTimeout(0),
 			// A bulk stream's frames leave in writes of up to 256 KiB, one
 			// send each (tlsbatch); the buffer is pooled while the lane is idle.
-			grpc.WithWriteBufferSize(tlsbatch.WriteBuffer), grpc.WithSharedWriteBuffer(true))
+			grpc.WithWriteBufferSize(tlsbatch.WriteBuffer), grpc.WithSharedWriteBuffer(true),
+			// Fixed HTTP/2 windows: gRPC's BDP estimator grows a connection's
+			// windows only on a new maximum of measured bandwidth, so a lane
+			// that once carried LAN traffic kept LAN-sized windows when its
+			// round trip grew and carried under 0.5 MB/s at 300 ms. Setting
+			// them turns the estimator off.
+			grpc.WithInitialWindowSize(LaneStreamWindow), grpc.WithInitialConnWindowSize(LaneConnWindow))
 	}
 	return options
 }

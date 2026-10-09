@@ -260,6 +260,8 @@ func (r *rhRelay) serve(listener net.Listener) {
 			MinVersion:   tls.VersionTLS13,
 		}))),
 		grpc.ForceServerCodecV2(codec.ServerCodec{}),
+		// The relay's fixed HTTP/2 windows (server.laneStreamWindow, laneConnWindow).
+		grpc.InitialWindowSize(8<<20), grpc.InitialConnWindowSize(32<<20),
 		grpc.MaxRecvMsgSize(4*1024*1024), grpc.MaxSendMsgSize(4*1024*1024),
 	)
 	broker := New(r.store)

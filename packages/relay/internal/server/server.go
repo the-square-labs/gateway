@@ -47,6 +47,13 @@ type Runtime struct {
 	Lease    *lease.Coordinator
 }
 
+// laneStreamWindow and laneConnWindow match the daemons' relay lanes
+// (connector.LaneStreamWindow, connector.LaneConnWindow).
+const (
+	laneStreamWindow = 8 << 20
+	laneConnWindow   = 32 << 20
+)
+
 func Start(cfg config.Config, buildVersion string) (*Runtime, error) {
 	identityStore, err := identity.NewStore(cfg.IdentityDir, cfg.StateDir)
 	if err != nil {
@@ -74,6 +81,13 @@ func Start(cfg config.Config, buildVersion string) (*Runtime, error) {
 		grpc.Creds(handshakenCredentials{}),
 		grpc.ForceServerCodecV2(codec.ServerCodec{}),
 		grpc.MaxSendMsgSize(maxMessageBytes),
+		// Fixed HTTP/2 receive windows, as the daemons' lanes: gRPC's BDP
+		// estimator grows windows only on a new maximum of measured
+		// bandwidth, so a connection that once carried LAN traffic kept
+		// LAN-sized windows when its round trip grew (< 0.5 MB/s at 300 ms).
+		// What the relay can hold for a reader that does not read is bounded
+		// by them: 8 MiB per stream, 32 MiB per connection.
+		grpc.InitialWindowSize(laneStreamWindow), grpc.InitialConnWindowSize(laneConnWindow),
 		grpc.KeepaliveParams(peerKeepalive()),
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
 			MinTime:             clientKeepaliveMinTime,
