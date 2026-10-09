@@ -72,7 +72,7 @@ func Start(cfg config.Config, buildVersion string) (*Runtime, error) {
 	// servers read the identity it established.
 	serverOptions := []grpc.ServerOption{
 		grpc.Creds(handshakenCredentials{}),
-		grpc.ForceServerCodec(codec.Codec{}),
+		grpc.ForceServerCodecV2(codec.ServerCodec{}),
 		grpc.MaxSendMsgSize(maxMessageBytes),
 		grpc.KeepaliveParams(peerKeepalive()),
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{

@@ -258,7 +258,7 @@ func (r *rhRelay) serve(listener net.Listener) {
 			ClientAuth:   tls.RequireAndVerifyClientCert,
 			MinVersion:   tls.VersionTLS13,
 		})),
-		grpc.ForceServerCodec(codec.Codec{}),
+		grpc.ForceServerCodecV2(codec.ServerCodec{}),
 		grpc.MaxRecvMsgSize(4*1024*1024), grpc.MaxSendMsgSize(4*1024*1024),
 	)
 	broker := New(r.store)
