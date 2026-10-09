@@ -21,7 +21,7 @@ it("docker-compose-source-connect", async () => {
     height: 1100,
     before: detailSetup,
     ready: async () => {
-      await screen.findByText("Connect repository");
+      await screen.findByText(/No repository connected/);
     },
     notes: [
       "A Compose project deployed from Gateway-stored YAML; the Source tab offers to connect a Git repository.",

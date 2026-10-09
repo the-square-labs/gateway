@@ -15,7 +15,8 @@ it("ingress-pages-project-source-connect-step-2", async () => {
       await screen.findByText(/No repository connected/);
     },
     interact: async (user) => {
-      await user.click(screen.getByRole("button", { name: "Connect repository" }));
+      // The panel header and the empty state both offer it; use the header button.
+      await user.click(screen.getAllByRole("button", { name: "Connect repository" })[0]);
       const dialog = await screen.findByRole("dialog", { name: "Connect Repository" });
       await user.click(within(dialog).getByPlaceholderText("Select Git integration"));
       await user.click(await screen.findByRole("button", { name: "Northwind GitLab" }));

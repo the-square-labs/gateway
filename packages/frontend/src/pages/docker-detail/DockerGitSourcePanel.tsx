@@ -859,6 +859,14 @@ export function DockerGitSourcePanel({
           icon={<GitBranch className="h-4 w-4" />}
           title="Repository"
           description="Build and deploy this resource directly from a Git repository."
+          actions={
+            canEdit ? (
+              <Button type="button" onClick={openConnect}>
+                <Plus className="h-4 w-4" />
+                Connect repository
+              </Button>
+            ) : undefined
+          }
         >
           <EmptyState
             message={

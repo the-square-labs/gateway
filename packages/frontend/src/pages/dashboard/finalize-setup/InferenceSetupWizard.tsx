@@ -469,6 +469,11 @@ export function InferenceSetupWizard({
           <PanelShell
             title="Inference providers"
             description="Connected providers are the source for models Gateway can manage."
+            actions={
+              <Button onClick={() => setProviderOpen(true)}>
+                <Plus /> Connect provider
+              </Button>
+            }
           >
             <EmptyState
               embedded
