@@ -16,11 +16,15 @@ export function registerTaskRoutes(router: OpenAPIHono<AppEnv>) {
     const nodeId = c.req.query('nodeId');
     const status = c.req.query('status');
     const type = c.req.query('type');
+    // Validated by the route's query schema (an integer from 1 to 1000).
+    const limitParam = c.req.query('limit');
+    const limit = limitParam ? Number(limitParam) : undefined;
     const scopes = c.get('effectiveScopes') || [];
     const data = await service.list({
       nodeId,
       status,
       type,
+      limit,
       allowedNodeIds: scopes.includes('docker:tasks') ? undefined : getResourceScopedIds(scopes, 'docker:tasks'),
     });
     return c.json({ data });

@@ -1147,7 +1147,18 @@ export const listTasksRoute = appRoute({
   tags: ['Docker Tasks'],
   summary: 'List background tasks',
   request: {
-    query: z.object({ nodeId: z.string().optional(), status: z.string().optional(), type: z.string().optional() }),
+    query: z.object({
+      nodeId: z.string().optional(),
+      status: z.string().optional(),
+      type: z.string().optional(),
+      limit: z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(1000)
+        .optional()
+        .openapi({ description: 'Newest tasks to return; all when omitted' }),
+    }),
   },
   responses: okJson(UnknownDataResponseSchema),
 });

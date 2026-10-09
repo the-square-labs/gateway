@@ -108,7 +108,14 @@ export class DockerTaskService {
     });
   }
 
-  async list(filters?: { nodeId?: string; status?: string; type?: string; allowedNodeIds?: string[] }) {
+  async list(filters?: {
+    nodeId?: string;
+    status?: string;
+    type?: string;
+    /** The newest this many tasks; all when omitted. */
+    limit?: number;
+    allowedNodeIds?: string[];
+  }) {
     await this.markStaleActiveTasksFailed();
     const conditions = [];
     if (filters?.nodeId) conditions.push(eq(dockerTasks.nodeId, filters.nodeId));
@@ -119,11 +126,13 @@ export class DockerTaskService {
       conditions.push(inArray(dockerTasks.nodeId, filters.allowedNodeIds));
     }
 
-    const rows = await this.db
+    const query = this.db
       .select()
       .from(dockerTasks)
       .where(buildWhere(conditions))
-      .orderBy(desc(dockerTasks.createdAt));
+      .orderBy(desc(dockerTasks.createdAt))
+      .$dynamic();
+    const rows = await (filters?.limit ? query.limit(filters.limit) : query);
     return rows.map(publicDockerTask);
   }
 

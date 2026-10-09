@@ -1034,6 +1034,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
         nodeId: { type: 'string' },
         status: { type: 'string' },
         type: { type: 'string' },
+        limit: { type: 'number', description: 'list: newest tasks to return (1-1000; default all)' },
       },
       required: ['operation'],
     },

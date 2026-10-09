@@ -1561,6 +1561,10 @@ async function manageDockerTask(user: User, args: Record<string, unknown>) {
       nodeId: typeof a.nodeId === 'string' ? a.nodeId : undefined,
       status: typeof a.status === 'string' ? a.status : undefined,
       type: typeof a.type === 'string' ? a.type : undefined,
+      limit:
+        typeof a.limit === 'number' && Number.isFinite(a.limit)
+          ? Math.min(Math.max(Math.trunc(a.limit), 1), 1000)
+          : undefined,
       allowedNodeIds: user.scopes.includes('docker:tasks')
         ? undefined
         : getResourceScopedIds(user.scopes, 'docker:tasks'),
