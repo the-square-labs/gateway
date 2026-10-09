@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import os from 'node:os';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import type { Env } from '@/config/env.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { settings } from '@/db/schema/settings.js';
@@ -56,6 +56,10 @@ const SETTINGS_KEYS = {
 
 type Fetcher = typeof fetch;
 type PaidPlan = Exclude<LicensePlan, 'community'>;
+
+interface StoredSettings {
+  get<T>(key: string, fallback: T): T;
+}
 
 const PLAN_RANK: Record<LicensePlan, number> = { community: 0, personal: 1, business: 2, enterprise: 3 };
 const UNVERIFIED_STATE_MESSAGE = 'License state is not signed by the license server';
@@ -123,12 +127,21 @@ export class LicenseService {
   ) {}
 
   async getStatus(): Promise<LicenseStatusView> {
-    const [installationId, encryptedKey, encryptedToken, cached] = await Promise.all([
-      this.getInstallationId(),
-      this.getSetting<EncryptedLicenseCredential | null>(SETTINGS_KEYS.keyEncrypted, null),
-      this.getSetting<EncryptedLicenseCredential | null>(SETTINGS_KEYS.installationTokenEncrypted, null),
-      this.getCachedState(),
+    // Every license gate a request passes reads the status: one query for all of it.
+    const stored = await this.getSettings([
+      SETTINGS_KEYS.installationId,
+      SETTINGS_KEYS.keyEncrypted,
+      SETTINGS_KEYS.installationTokenEncrypted,
+      SETTINGS_KEYS.cachedState,
+      SETTINGS_KEYS.legacyCachedState,
     ]);
+    const installationId = await this.storedInstallationId(stored);
+    const encryptedKey = stored.get<EncryptedLicenseCredential | null>(SETTINGS_KEYS.keyEncrypted, null);
+    const encryptedToken = stored.get<EncryptedLicenseCredential | null>(
+      SETTINGS_KEYS.installationTokenEncrypted,
+      null
+    );
+    const cached = this.storedCachedState(stored);
     const registrationStatus = encryptedToken ? 'registered' : (cached?.registrationStatus ?? 'pending');
     const effectiveCached = cached ? { ...cached, registrationStatus } : this.communityState(registrationStatus);
     const resolved = this.resolveCachedState(effectiveCached, installationId);
@@ -143,7 +156,13 @@ export class LicenseService {
    * signature. Existing paid resources keep operating with them after every grace.
    */
   async getRuntimeContinuityEntitlements(): Promise<LicenseStatusView['entitlements'] | null> {
-    const [installationId, cached] = await Promise.all([this.getInstallationId(), this.getCachedState()]);
+    const stored = await this.getSettings([
+      SETTINGS_KEYS.installationId,
+      SETTINGS_KEYS.cachedState,
+      SETTINGS_KEYS.legacyCachedState,
+    ]);
+    const installationId = await this.storedInstallationId(stored);
+    const cached = this.storedCachedState(stored);
     if (!cached) return null;
     const continuity = this.resolveCachedState(cached, installationId).continuity;
     return continuity ? (this.contractEntitlements(continuity) ?? null) : null;
@@ -1152,6 +1171,19 @@ export class LicenseService {
     return created;
   }
 
+  /** The stored installation id, or the one `getInstallationId` loads or creates when none is stored yet. */
+  private async storedInstallationId(stored: StoredSettings): Promise<string> {
+    return stored.get<string | null>(SETTINGS_KEYS.installationId, null) || this.getInstallationId();
+  }
+
+  /** {@link getCachedState} over values already read. */
+  private storedCachedState(stored: StoredSettings): CachedLicenseState | null {
+    const value =
+      stored.get<Record<string, unknown> | null>(SETTINGS_KEYS.cachedState, null) ??
+      stored.get<Record<string, unknown> | null>(SETTINGS_KEYS.legacyCachedState, null);
+    return value ? this.normalizeCachedState(value) : null;
+  }
+
   private async getCachedState(): Promise<CachedLicenseState | null> {
     const value = await this.getStoredCachedState();
     return value ? this.normalizeCachedState(value) : null;
@@ -1170,6 +1202,21 @@ export class LicenseService {
   private async getSetting<T>(key: string, fallback: T): Promise<T> {
     const [row] = await this.db.select().from(settings).where(eq(settings.key, key)).limit(1);
     return (row?.value !== undefined ? row.value : fallback) as T;
+  }
+
+  /** Several settings in one query; `get` falls back exactly like {@link getSetting}. */
+  private async getSettings(keys: readonly string[]): Promise<StoredSettings> {
+    const rows = await this.db
+      .select({ key: settings.key, value: settings.value })
+      .from(settings)
+      .where(inArray(settings.key, [...keys]));
+    const values = new Map(rows.map((row) => [row.key, row.value]));
+    return {
+      get: <T>(key: string, fallback: T) => {
+        const value = values.get(key);
+        return (value !== undefined ? value : fallback) as T;
+      },
+    };
   }
 
   private async setSetting(key: string, value: unknown): Promise<void> {

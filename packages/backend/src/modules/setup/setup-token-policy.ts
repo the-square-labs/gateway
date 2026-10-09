@@ -1,10 +1,20 @@
-import { count, eq, isNull, not, or } from 'drizzle-orm';
+import { count, eq, inArray, isNull, not, or } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { settings, users } from '@/db/schema/index.js';
 
 const GATEWAY_SYSTEM_OIDC_SUBJECT = 'system:gateway-setup';
 const SETUP_COMPLETED_AT_KEY = 'setup:completed_at';
 const SETUP_FORCED_OPEN_KEY = 'setup:forced_open';
+
+function isForcedOpenValue(value: unknown): boolean {
+  return value === true || value === 'true';
+}
+
+function parseTimestamp(value: unknown): Date | null {
+  if (typeof value !== 'string') return null;
+  const timestamp = new Date(value);
+  return Number.isNaN(timestamp.getTime()) ? null : timestamp;
+}
 
 export class SetupTokenPolicyService {
   constructor(
@@ -44,9 +54,15 @@ export class SetupTokenPolicyService {
     await this.markSetupComplete();
   }
 
+  /** Read on every request (host and setup guards): both markers in one query. */
   async isSetupComplete(): Promise<boolean> {
-    if (await this.isForcedOpen()) return false;
-    return Boolean(await this.getTimestampSetting(SETUP_COMPLETED_AT_KEY));
+    const rows = await this.db
+      .select({ key: settings.key, value: settings.value })
+      .from(settings)
+      .where(inArray(settings.key, [SETUP_FORCED_OPEN_KEY, SETUP_COMPLETED_AT_KEY]));
+    const value = (key: string) => rows.find((row) => row.key === key)?.value;
+    if (isForcedOpenValue(value(SETUP_FORCED_OPEN_KEY))) return false;
+    return Boolean(parseTimestamp(value(SETUP_COMPLETED_AT_KEY)));
   }
 
   async markSetupComplete(): Promise<void> {
@@ -74,15 +90,12 @@ export class SetupTokenPolicyService {
       .from(settings)
       .where(eq(settings.key, SETUP_FORCED_OPEN_KEY))
       .limit(1);
-    return row?.value === true || row?.value === 'true';
+    return isForcedOpenValue(row?.value);
   }
 
   private async getTimestampSetting(key: string): Promise<Date | null> {
     const [row] = await this.db.select({ value: settings.value }).from(settings).where(eq(settings.key, key)).limit(1);
-    if (typeof row?.value !== 'string') return null;
-
-    const timestamp = new Date(row.value);
-    return Number.isNaN(timestamp.getTime()) ? null : timestamp;
+    return parseTimestamp(row?.value);
   }
 
   private async upsertSetting(key: string, value: string): Promise<void> {

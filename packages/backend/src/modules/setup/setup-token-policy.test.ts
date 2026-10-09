@@ -11,6 +11,17 @@ function makeUserCountDb(realUserCount: number) {
   } as any;
 }
 
+/** A db whose settings table holds `markers`, read with one `inArray` query. */
+function makeMarkerDb(markers: Record<string, unknown>) {
+  return {
+    select: vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn(async () => Object.entries(markers).map(([key, value]) => ({ key, value }))),
+      })),
+    })),
+  } as any;
+}
+
 function makeService() {
   const service = new SetupTokenPolicyService({} as any) as any;
   vi.spyOn(service, 'isForcedOpen').mockResolvedValue(false);
@@ -24,31 +35,33 @@ describe('SetupTokenPolicyService', () => {
   });
 
   it('keeps setup API enabled until setup is explicitly completed', async () => {
-    const service = makeService();
-    vi.spyOn(service, 'getTimestampSetting').mockResolvedValue(null);
+    const service = new SetupTokenPolicyService(makeMarkerDb({}));
 
     await expect(service.isSetupApiEnabled()).resolves.toBe(true);
   });
 
   it('recognizes the JSONB boolean written by the forced-open marker', async () => {
-    const db = {
-      select: vi.fn(() => ({
-        from: vi.fn(() => ({
-          where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([{ value: true }]) })),
-        })),
-      })),
-    };
+    const db = makeMarkerDb({ 'setup:forced_open': true, 'setup:completed_at': new Date().toISOString() });
 
-    await expect(new SetupTokenPolicyService(db as any).isSetupComplete()).resolves.toBe(false);
+    await expect(new SetupTokenPolicyService(db).isSetupComplete()).resolves.toBe(false);
+  });
+
+  it('recognizes the string forced-open marker', async () => {
+    const db = makeMarkerDb({ 'setup:forced_open': 'true', 'setup:completed_at': new Date().toISOString() });
+
+    await expect(new SetupTokenPolicyService(db).isSetupComplete()).resolves.toBe(false);
   });
 
   it('disables setup API after setup is completed', async () => {
-    const service = makeService();
-    vi.spyOn(service, 'getTimestampSetting').mockImplementation(async (key: unknown) =>
-      key === 'setup:completed_at' ? new Date() : null
-    );
+    const service = new SetupTokenPolicyService(makeMarkerDb({ 'setup:completed_at': new Date().toISOString() }));
 
     await expect(service.isSetupApiEnabled()).resolves.toBe(false);
+  });
+
+  it('ignores a completion marker that is not a timestamp', async () => {
+    const service = new SetupTokenPolicyService(makeMarkerDb({ 'setup:completed_at': 'not a date' }));
+
+    await expect(service.isSetupComplete()).resolves.toBe(false);
   });
 
   it('commits the completion marker and forced-open removal atomically', async () => {

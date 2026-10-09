@@ -35,19 +35,49 @@ export function isValidCidr(cidr: string): boolean {
 }
 
 export function ipInAnyCidr(ip: string, cidrs: string[]): boolean {
-  return cidrs.some((cidr) => ipInCidr(ip, cidr));
+  const parsedIp = parseIp(ip);
+  return parsedIp ? cidrs.some((cidr) => ipInParsedCidr(parsedIp, cidr)) : false;
 }
 
 export function ipInCidr(ip: string, cidr: string): boolean {
-  const [range, bitsRaw] = cidr.split('/');
   const parsedIp = parseIp(ip);
+  return parsedIp ? ipInParsedCidr(parsedIp, cidr) : false;
+}
+
+function ipInParsedCidr(parsedIp: { version: 4 | 6; value: bigint }, cidr: string): boolean {
+  const range = parseCidrRange(cidr);
+  return range !== null && range.version === parsedIp.version && parsedIp.value >> range.shift === range.prefix;
+}
+
+interface CidrRange {
+  version: 4 | 6;
+  shift: bigint;
+  prefix: bigint;
+}
+
+// Client IP resolution checks the same proxy and Cloudflare ranges on every request.
+const CIDR_RANGE_CACHE_MAX_ENTRIES = 1024;
+const cidrRangeCache = new Map<string, CidrRange | null>();
+
+function parseCidrRange(cidr: string): CidrRange | null {
+  const cached = cidrRangeCache.get(cidr);
+  if (cached !== undefined) return cached;
+  const [range, bitsRaw] = cidr.split('/');
   const parsedRange = parseIp(range);
   const bits = Number(bitsRaw);
-  if (!parsedIp || !parsedRange || parsedIp.version !== parsedRange.version || !Number.isInteger(bits)) return false;
-  const maxBits = parsedIp.version === 4 ? 32 : 128;
-  if (bits < 0 || bits > maxBits) return false;
-  const shift = BigInt(maxBits - bits);
-  return parsedIp.value >> shift === parsedRange.value >> shift;
+  let result: CidrRange | null = null;
+  if (parsedRange && Number.isInteger(bits)) {
+    const maxBits = parsedRange.version === 4 ? 32 : 128;
+    if (bits >= 0 && bits <= maxBits) {
+      const shift = BigInt(maxBits - bits);
+      result = { version: parsedRange.version, shift, prefix: parsedRange.value >> shift };
+    }
+  }
+  if (cidr.length <= 64) {
+    if (cidrRangeCache.size >= CIDR_RANGE_CACHE_MAX_ENTRIES) cidrRangeCache.clear();
+    cidrRangeCache.set(cidr, result);
+  }
+  return result;
 }
 
 export function isInternalIp(ip: string): boolean {

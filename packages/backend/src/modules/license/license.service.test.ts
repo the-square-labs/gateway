@@ -22,23 +22,30 @@ const verifier = createTestLicenseVerifier(signer);
 
 function createDb() {
   const rows = new Map<string, unknown>([['license:installation_id', TEST_INSTALLATION_ID]]);
-  const keyFromCondition = (condition: unknown): string | undefined => {
-    const chunks = (condition as { queryChunks?: Array<{ value?: unknown }> }).queryChunks ?? [];
-    for (const chunk of chunks) {
-      const value = chunk.value;
-      if (typeof value === 'string' && value.startsWith('license:')) return value;
-    }
-    return undefined;
+  // `eq(settings.key, key)` binds one value; `inArray(settings.key, keys)` binds an array of them.
+  const keysFromCondition = (condition: unknown): string[] => {
+    const chunks = (condition as { queryChunks?: unknown[] }).queryChunks ?? [];
+    return chunks
+      .flatMap((chunk) => (Array.isArray(chunk) ? chunk : [chunk]))
+      .map((chunk) => (chunk as { value?: unknown }).value)
+      .filter((value): value is string => typeof value === 'string' && value.startsWith('license:'));
   };
+  const keyFromCondition = (condition: unknown): string | undefined => keysFromCondition(condition)[0];
   return {
     select: () => ({
       from: () => ({
-        where: (condition: unknown) => ({
-          limit: () => {
-            const key = keyFromCondition(condition);
-            return Promise.resolve(key && rows.has(key) ? [{ key, value: rows.get(key) }] : []);
-          },
-        }),
+        where: (condition: unknown) => {
+          const matching = () =>
+            keysFromCondition(condition)
+              .filter((key) => rows.has(key))
+              .map((key) => ({ key, value: rows.get(key) }));
+          return {
+            limit: () => Promise.resolve(matching().slice(0, 1)),
+            // biome-ignore lint/suspicious/noThenProperty: a query builder is awaited without `.limit()`
+            then: (resolve: (rows: unknown) => unknown, reject: (error: unknown) => unknown) =>
+              Promise.resolve(matching()).then(resolve, reject),
+          };
+        },
       }),
     }),
     insert: () => ({
