@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/moby/moby/client"
 	"golang.org/x/sys/unix"
 )
 
@@ -491,5 +494,41 @@ func TestDatabaseStartRetriesAFailedDiskRepair(t *testing.T) {
 	}
 	if got := inspectDatabase(t, m, id); got["status"] != "ready" {
 		t.Fatalf("after the repair: %v", got)
+	}
+}
+
+// A removal also removes a container of the member that a recreation the
+// daemon could not finish left behind (the stand: "-0" next to "-0-replaced").
+func TestStorageRemovalRemovesLeftoverMemberContainers(t *testing.T) {
+	var removed []string
+	var filters string
+	cli, err := client.NewClientWithOpts(client.WithHost("tcp://docker.test:2375"), client.WithAPIVersion("1.47"),
+		client.WithHTTPClient(&http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			reply := func(code int, body string) (*http.Response, error) {
+				return &http.Response{StatusCode: code, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+			}
+			switch {
+			case request.Method == http.MethodGet && strings.HasSuffix(request.URL.Path, "/containers/json"):
+				filters = request.URL.Query().Get("filters")
+				return reply(http.StatusOK, `[{"Id":"left1","Names":["/gateway-storage-s-0"]}]`)
+			case request.Method == http.MethodDelete && strings.HasSuffix(request.URL.Path, "/containers/left1"):
+				removed = append(removed, "left1")
+				return reply(http.StatusNoContent, "")
+			}
+			t.Errorf("unexpected Docker request %s %s", request.Method, request.URL.Path)
+			return reply(http.StatusNotFound, `{"message":"not found"}`)
+		})}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := &managedStorageManager{client: &Client{cli: cli}, logger: slog.New(slog.DiscardHandler)}
+	if err := m.removeMemberContainers(context.Background(), managedStorageRecord{ID: "s", MemberIndex: 0}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(removed, []string{"left1"}) {
+		t.Fatalf("removed %v", removed)
+	}
+	if !strings.Contains(filters, managedStorageLabel+"=s") || !strings.Contains(filters, managedStorageMemberLabel+"=0") {
+		t.Fatalf("listed with filters %s, want the member's labels", filters)
 	}
 }

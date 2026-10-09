@@ -285,6 +285,11 @@ func (m *managedStorageManager) remove(ctx context.Context, record *managedStora
 		if err := m.client.RemoveContainer(ctx, record.ContainerID, true); err != nil && !isNotFoundErr(err) {
 			return err
 		}
+		// A recreation the daemon could not finish (it restarted while the
+		// new container was starting) leaves a second container of the member.
+		if err := m.removeMemberContainers(ctx, *record); err != nil {
+			return err
+		}
 	}
 	if record.NetworkName != "" {
 		_, _ = m.client.cli.NetworkRemove(ctx, record.NetworkName, mobyclient.NetworkRemoveOptions{})
@@ -702,3 +707,24 @@ func (m *managedStorageManager) marshalManagedStorageDetail(ctx context.Context,
 	return jsonString(detail)
 }
 func jsonString(value any) (string, error) { raw, err := json.Marshal(value); return string(raw), err }
+
+// removeMemberContainers removes every container labelled as this storage
+// member, whatever its name.
+func (m *managedStorageManager) removeMemberContainers(ctx context.Context, record managedStorageRecord) error {
+	listed, err := m.client.cli.ContainerList(ctx, mobyclient.ContainerListOptions{
+		All: true,
+		Filters: mobyclient.Filters{}.
+			Add("label", managedStorageLabel+"="+record.ID).
+			Add("label", managedStorageMemberLabel+"="+strconv.Itoa(record.MemberIndex)),
+	})
+	if err != nil {
+		return fmt.Errorf("list managed storage containers: %w", err)
+	}
+	for _, item := range listed.Items {
+		if err := m.client.RemoveContainer(ctx, item.ID, true); err != nil && !isNotFoundErr(err) {
+			return fmt.Errorf("remove managed storage container: %w", err)
+		}
+		m.logger.Info("removed a leftover container of a removed managed storage member", "id", record.ID, "container", item.Names)
+	}
+	return nil
+}
