@@ -974,9 +974,13 @@ func (m *dockerSecureLinkManager) retireConnectorUntil(previous connectorRuntime
 				m.plugin.logger.Info("the replaced secure-link connector was signalled to drain", "drain_error", drainErr, "signal_error", err)
 			}
 		}
-		busy := m.plugin.proxyTunnels.drainWhere(func(connection *drainConn) bool {
+		busy, closed := m.plugin.proxyTunnels.drainCounted(func(connection *drainConn) bool {
 			return connectionConnector(connection) == previous.id
 		}, limit, secureLinkConnectorRetireTick, true)
+		if m.plugin.logger != nil {
+			m.plugin.logger.Info("closed the idle tunnels of the replaced secure-link connector",
+				"connector", previous.id, "closed", closed, "still_busy", busy)
+		}
 		// Workload sessions through its egress listeners end on their own: wait for them within the same limit. The
 		// connector's last answer counts every session it still carries, its tunnels and its egress sessions alike.
 		stopped, carried := !sent, 0

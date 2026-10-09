@@ -3,6 +3,8 @@ package docker
 import (
 	"io"
 	"net"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -78,6 +80,98 @@ func TestConnectorRetirementKeepsUpgradedConnections(t *testing.T) {
 	// A daemon restart drains the upgraded connection too once it is idle.
 	if busy := tunnels.drainWhere(func(*drainConn) bool { return true }, time.Second, 10*time.Millisecond, false); busy != 0 || !cancelled[websocket] {
 		t.Fatalf("restart drain: busy %d, websocket cancelled %v", busy, cancelled[websocket])
+	}
+}
+
+// A response that is still streaming is not idle between its parts (stand rc.7 O-14: an event stream with an event
+// every ~100 ms was cut by the 100 ms quiet rule): an event stream, a chunked body and a body of a known length stay
+// on the retired connector until they end, while a finished keep-alive response is closed. A chunked or sized body
+// that has ended is closed at the next quiet tick. A daemon restart still closes every tunnel once idle.
+func TestConnectorRetirementKeepsStreamingResponses(t *testing.T) {
+	var tunnels proxyTunnelSet
+	const (
+		request = "GET / HTTP/1.1\r\n\r\n"
+		gap     = 120 * time.Millisecond
+	)
+	names := []string{"sse", "chunked", "sized", "keepalive"}
+	conns := map[string]*drainConn{}
+	workloads := map[string]net.Conn{}
+	cancelled := map[string]bool{}
+	for _, name := range names {
+		name := name
+		conns[name], workloads[name] = workloadPair(t)
+		tunnels.add(conns[name], func() { cancelled[name] = true })
+	}
+	exchangeThrough(t, conns["keepalive"], workloads["keepalive"], request, "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+	// The tunnel side reads whatever the workload sends, like the bridge does.
+	for _, name := range names[:3] {
+		if _, err := conns[name].Write([]byte(request)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.ReadFull(workloads[name], make([]byte, len(request))); err != nil {
+			t.Fatal(err)
+		}
+		go io.Copy(io.Discard, conns[name])
+	}
+	stopEvents := make(chan struct{})
+	var events, bodies sync.WaitGroup
+	send := func(name string, parts []string) {
+		defer bodies.Done()
+		for i, part := range parts {
+			if i > 0 {
+				time.Sleep(gap)
+			}
+			if _, err := workloads[name].Write([]byte(part)); err != nil {
+				return
+			}
+		}
+	}
+	events.Add(1)
+	bodies.Add(2)
+	go func() {
+		defer events.Done()
+		if _, err := workloads["sse"].Write([]byte("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n")); err != nil {
+			return
+		}
+		for {
+			select {
+			case <-stopEvents:
+				return
+			case <-time.After(gap):
+				if _, err := workloads["sse"].Write([]byte("data: tick\n\n")); err != nil {
+					return
+				}
+			}
+		}
+	}()
+	chunked := []string{"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"}
+	for i := 0; i < 4; i++ {
+		chunked = append(chunked, "5\r\nhello\r\n")
+	}
+	go send("chunked", append(chunked, "0\r\n\r\n"))
+	sized := []string{"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\n"}
+	for i := 0; i < 10; i++ {
+		sized = append(sized, strings.Repeat("x", 100))
+	}
+	go send("sized", sized)
+	all := func(*drainConn) bool { return true }
+
+	// While they stream only the finished keep-alive response goes.
+	busy := tunnels.drainWhere(all, 400*time.Millisecond, 10*time.Millisecond, true)
+	if busy != 3 || !cancelled["keepalive"] || cancelled["sse"] || cancelled["chunked"] || cancelled["sized"] {
+		t.Fatalf("while streaming: busy %d, cancelled %v", busy, cancelled)
+	}
+	// Once the chunked and sized bodies ended they are closed at the first quiet tick; the event stream never ends.
+	bodies.Wait()
+	busy = tunnels.drainWhere(all, 400*time.Millisecond, 10*time.Millisecond, true)
+	if busy != 1 || !cancelled["chunked"] || !cancelled["sized"] || cancelled["sse"] {
+		t.Fatalf("after the bodies ended: busy %d, cancelled %v", busy, cancelled)
+	}
+	// A daemon restart drains the event stream too once it is quiet.
+	close(stopEvents)
+	events.Wait()
+	if busy := tunnels.drainWhere(all, time.Second, 10*time.Millisecond, false); busy != 0 || !cancelled["sse"] {
+		t.Fatalf("restart drain: busy %d, cancelled %v", busy, cancelled)
 	}
 }
 

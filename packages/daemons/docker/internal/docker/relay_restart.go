@@ -174,31 +174,40 @@ func (s *proxyTunnelSet) drain(limit time.Duration) {
 
 // drainWhere drains the tunnels match selects like drain, and reports how
 // many were still busy when limit ran out. With keepHeld a held tunnel is not
-// closed when idle, nor is an upgraded HTTP connection: they count as busy
-// until they end.
+// closed when idle, nor is an upgraded HTTP connection or one in the middle of
+// a response: they count as busy until they end.
 func (s *proxyTunnelSet) drainWhere(match func(*drainConn) bool, limit, tick time.Duration, keepHeld bool) int {
+	busy, _ := s.drainCounted(match, limit, tick, keepHeld)
+	return busy
+}
+
+// drainCounted is drainWhere that also reports how many tunnels it closed.
+func (s *proxyTunnelSet) drainCounted(match func(*drainConn) bool, limit, tick time.Duration, keepHeld bool) (busy, closed int) {
 	deadline := time.Now().Add(limit)
 	for {
 		now := time.Now()
-		busy := 0
+		busy = 0
 		s.mu.Lock()
 		for connection, tunnel := range s.tunnels {
 			if !match(connection) {
 				continue
 			}
 			// An upgraded HTTP connection (websocket, h2c) is a session like a
-			// held one: idle between its messages is no point to end it at.
-			kept := keepHeld && (tunnel.held || connection.upgraded.Load())
+			// held one: idle between its messages is no point to end it at. Nor is a
+			// response still streaming (an event stream, a slow download): a pause
+			// between its parts is not the end of a request (stand rc.7 O-14).
+			kept := keepHeld && (tunnel.held || connection.upgraded.Load() || connection.midResponse.Load())
 			if !kept && connection.idle(now, restartIdleQuiet) {
 				tunnel.cancel()
 				delete(s.tunnels, connection)
+				closed++
 				continue
 			}
 			busy++
 		}
 		s.mu.Unlock()
 		if busy == 0 || !now.Before(deadline) {
-			return busy
+			return busy, closed
 		}
 		time.Sleep(tick)
 	}
@@ -228,6 +237,12 @@ type drainConn struct {
 	// upgraded: the workload answered "101 Switching Protocols" (websocket,
 	// h2c): from then on the connection is a session, not requests.
 	upgraded atomic.Bool
+	// midResponse: the workload's current HTTP/1.x response has not ended (trackResponse). A connection in the
+	// middle of a response is busy however long it pauses.
+	midResponse atomic.Bool
+	// headRequest: the request last written was HEAD, so its response has no body.
+	headRequest atomic.Bool
+	framing     framingState
 }
 
 func newDrainConn(connection net.Conn) *drainConn {
@@ -238,9 +253,7 @@ func (c *drainConn) Read(buffer []byte) (int, error) {
 	n, err := c.Conn.Read(buffer)
 	if n > 0 {
 		c.lastRead.Store(time.Now().UnixNano())
-		if !c.upgraded.Load() && switchingProtocols(buffer[:n]) {
-			c.upgraded.Store(true)
-		}
+		c.trackResponse(buffer[:n])
 	}
 	return n, err
 }
@@ -254,6 +267,10 @@ func (c *drainConn) Write(buffer []byte) (int, error) {
 	n, err := c.Conn.Write(buffer)
 	if n > 0 {
 		c.lastWrite.Store(time.Now().UnixNano())
+		// The method of a request that starts between responses decides whether its answer has a body.
+		if !c.midResponse.Load() && !c.upgraded.Load() {
+			c.headRequest.Store(len(buffer) >= 5 && string(buffer[:5]) == "HEAD ")
+		}
 	}
 	return n, err
 }
