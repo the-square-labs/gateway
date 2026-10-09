@@ -231,3 +231,49 @@ func TestUpdateWithoutHandoverReportsTheConnectionsTheDrainCloses(t *testing.T) 
 		t.Fatalf("report = %+v, want both connections cut as no_handover", report)
 	}
 }
+
+// A rollback after a live handover (O-13): the candidate took the stream over
+// and moved it to another relay, then its launcher stopped it on trial and
+// restored the previous daemon. The candidate hands the stream back, and the
+// restored process carries it on from where the candidate left it: every byte
+// arrives exactly once and the backend is never dialed again (an exit without
+// the handover cut it, and nothing the restored process started with could
+// resume it).
+func TestRollbackAfterHandoverKeepsTheMovedStream(t *testing.T) {
+	keeper := handovertest.NewKeeper()
+	useTestKeeper(t, keeper)
+	pair := newStreamPair(t, true, true)
+	app, tunnel := pair.open()
+	t.Cleanup(func() { _ = app.Close() })
+	waitFor(t, "the stream to open", func() bool { return tunnel.session.State() == relayresume.StateOpen })
+	sourceBundle, _ := testBundles(1, map[string]string{"relay-a": "active", "relay-b": "active"}, true, true)
+	var restored *DockerPlugin
+	echoThrough(t, app, 16<<20, func() {
+		candidate := pair.update(t, keeper, pair.source, sourceBundle)
+		// The candidate moves the stream: the lane of the relay it is on ends.
+		var session *relayresume.Session
+		waitFor(t, "the candidate to carry the stream", func() bool {
+			sessions := candidate.relayStreams().sources.Sessions()
+			if len(sessions) != 1 {
+				return false
+			}
+			session = sessions[0]
+			_, _, ok := session.CurrentPath()
+			return ok
+		})
+		from, _, _ := session.CurrentPath()
+		pair.cancels[candidate][from]()
+		waitFor(t, "the candidate to move the stream", func() bool {
+			relay, _, ok := session.CurrentPath()
+			return ok && relay != from
+		})
+		// Stopped on trial: it hands the stream to the daemon its launcher restores.
+		restored = pair.update(t, keeper, candidate, sourceBundle)
+	})
+	if pair.dials.Load() != 1 {
+		t.Fatalf("backend dialed %d times", pair.dials.Load())
+	}
+	if report := restored.updateConnections(); !report.GetHandoverAvailable() {
+		t.Fatalf("report %+v", report)
+	}
+}
