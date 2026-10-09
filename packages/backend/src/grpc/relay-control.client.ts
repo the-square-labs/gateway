@@ -82,6 +82,14 @@ interface RelayTunnelMessage {
   error?: { code: string; message: string };
 }
 
+/**
+ * A received frame's bytes as a Buffer without copying them: gRPC decodes every message into memory of its own, which
+ * nothing reuses. A copy per frame cost Gateway's storage downloads a few percent of the main thread plus its garbage.
+ */
+export function frameBytes(data: Uint8Array): Buffer {
+  return Buffer.isBuffer(data) ? data : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+}
+
 class RelayTunnelDuplex extends Duplex {
   private tunnelClosed = false;
   private inboundPaused = false;
@@ -93,7 +101,7 @@ class RelayTunnelDuplex extends Duplex {
     super();
     stream.on('data', (message) => {
       if (message.data) {
-        if (!this.push(Buffer.from(message.data.data))) {
+        if (!this.push(frameBytes(message.data.data))) {
           this.inboundPaused = true;
           stream.pause();
         }
@@ -177,7 +185,7 @@ class RelayResumePath implements AttachablePath {
   ) {
     stream.on('data', (message: RelayTunnelMessage) => {
       if (message.data) {
-        const frame = Buffer.from(message.data.data);
+        const frame = frameBytes(message.data.data);
         this.emit((sink) => sink.frame(frame));
       } else if (message.error) {
         // Before HELLO_ACK the session cuts on any path end; after it, the target's error ends only this path.
