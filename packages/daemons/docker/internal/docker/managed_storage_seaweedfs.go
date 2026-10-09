@@ -149,6 +149,15 @@ func seaweedfsCommand(record managedStorageRecord) []string {
 		"-volume.max=" + strconv.FormatInt(sizing.VolumeMax, 10),
 		"-volume.index=memory",
 		"-volume.minFreeSpace=" + strconv.FormatInt(sizing.MinFreeSpaceMiB, 10) + "MiB",
+		// 1 MiB chunks (the default is 4). SeaweedFS 4.47's S3 GET prefetches
+		// up to 256 chunks ahead into a reader cache capped at 256 MiB: with
+		// 4 MiB chunks the cap evicted prefetched chunks before they were sent
+		// and they were fetched again and again (80-120 times each), so a
+		// 1 GiB GET ran at 4-9 MB/s on the stand and in the CT 1138 harness.
+		// 1 MiB chunks keep the whole prefetch window within the cap: the same
+		// GET runs at 250+ MB/s with one CPU. Only objects uploaded from now on
+		// get the smaller chunks.
+		"-filer.maxMB=1",
 		"-volume.concurrentUploadLimitMB=" + strconv.FormatInt(seaweedfsTransferLimitMiB(record.MemoryBytes), 10),
 		"-volume.concurrentDownloadLimitMB=" + strconv.FormatInt(seaweedfsTransferLimitMiB(record.MemoryBytes), 10),
 		// Single node: there is no other volume server to drain writes to, so

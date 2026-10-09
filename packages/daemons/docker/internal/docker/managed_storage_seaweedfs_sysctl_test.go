@@ -33,7 +33,7 @@ func TestSeaweedFSMemoryBounds(t *testing.T) {
 		t.Fatalf("memory limit %s", got)
 	}
 	command := seaweedfsCommand(record)
-	for _, flag := range []string{"-volume.concurrentUploadLimitMB=96", "-volume.concurrentDownloadLimitMB=96"} {
+	for _, flag := range []string{"-volume.concurrentUploadLimitMB=96", "-volume.concurrentDownloadLimitMB=96", "-filer.maxMB=1"} {
 		if !slices.Contains(command, flag) {
 			t.Fatalf("command %v lacks %s", command, flag)
 		}
