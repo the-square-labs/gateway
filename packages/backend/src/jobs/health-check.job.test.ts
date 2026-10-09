@@ -179,6 +179,26 @@ describe('route health job: relayed routes while the local relay settles', () =>
     expect(t.host.healthStatus).toBe('degraded');
   });
 
+  it('does not judge a relayed route slow while a Relay Pool update moves its streams, nor within the grace after (stand rc.7, F-3)', async () => {
+    const t = setup();
+    relayed(t);
+    let run: { state: string; completedAt: Date | null } = { state: 'draining', completedAt: null };
+    (t.job as any).db.select = () => ({
+      from: () => ({ where: () => ({ orderBy: () => ({ limit: async () => [run] }) }) }),
+    });
+    t.checkHost.mockResolvedValue({ status: 'online', responseMs: 300 });
+    await t.job.run();
+    expect(t.host.healthStatus).toBe('online');
+    expect(t.host.healthHistory.at(-1)).not.toHaveProperty('slow');
+    run = { state: 'complete', completedAt: new Date(Date.now() - 30_000) };
+    await t.job.run();
+    expect(t.host.healthStatus).toBe('online');
+    // Two minutes after the update: a slow answer is the route's own again.
+    run = { state: 'complete', completedAt: new Date(Date.now() - 3 * 60_000) };
+    await t.job.run();
+    expect(t.host.healthStatus).toBe('degraded');
+  });
+
   it('defers a relayed probe that fails within the reconnect grace and judges it after', async () => {
     let outage = { since: Date.now() - 30_000, servingAgainAt: (Date.now() - 6_000) as number | null, planned: false };
     const dispatch = {

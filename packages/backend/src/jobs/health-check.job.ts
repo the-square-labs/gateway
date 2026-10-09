@@ -1,6 +1,6 @@
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { nodes, proxyHosts } from '@/db/schema/index.js';
+import { nodes, proxyHosts, relayPoolUpdateRuns } from '@/db/schema/index.js';
 import { compactHealthHistory } from '@/lib/health-history.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { ingressHealthOf } from '@/modules/ingress-groups/ingress-health.js';
@@ -25,7 +25,11 @@ import {
   SECURE_LINK_PROBE_BUSY_ERROR,
 } from '@/modules/proxy/proxy-secure-link-health-probe.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
-import { type LocalRelayOutageSignal, localRelayOutagePhase } from '@/services/local-relay-outage.js';
+import {
+  LOCAL_RELAY_RECONNECT_GRACE_MS,
+  type LocalRelayOutageSignal,
+  localRelayOutagePhase,
+} from '@/services/local-relay-outage.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 
 const logger = createChildLogger('HealthCheckJob');
@@ -104,6 +108,8 @@ export class HealthCheckJob {
   /** Routes whose last probe failed but were kept up as a transient failure; the next failure takes them down. */
   private readonly pendingFailures = new Set<string>();
   private localRelay?: Pick<LocalRelayOutageSignal, 'latestOutage'>;
+  /** A Relay Pool update moves relayed streams now or did within the reconnect grace (read at each run). */
+  private relayPoolUpdating = false;
 
   constructor(
     private readonly db: DrizzleClient,
@@ -136,7 +142,32 @@ export class HealthCheckJob {
    * again). Such samples are deferred, as for a node that reconnects.
    */
   private relayPathsSettling(): boolean {
-    return localRelayOutagePhase(this.localRelay?.latestOutage() ?? null) !== null;
+    return this.relayPoolUpdating || localRelayOutagePhase(this.localRelay?.latestOutage() ?? null) !== null;
+  }
+
+  /**
+   * Whether a Relay Pool update runs, or ended within LOCAL_RELAY_RECONNECT_GRACE_MS: it drains its relays one by one,
+   * the local relay too, so relayed routes run over a remote relay for a while and come back after it. A probe then
+   * measures the move, not the route (stand rc.7, F-3: routes went degraded while the update moved them to a far
+   * relay). Unknown counts as no update.
+   */
+  private async readRelayPoolUpdating(now = Date.now()): Promise<boolean> {
+    try {
+      const [run] = await this.db
+        .select({ state: relayPoolUpdateRuns.state, completedAt: relayPoolUpdateRuns.completedAt })
+        .from(relayPoolUpdateRuns)
+        .where(eq(relayPoolUpdateRuns.poolId, 'system'))
+        .orderBy(desc(relayPoolUpdateRuns.startedAt))
+        .limit(1);
+      if (!run) return false;
+      if (['draining', 'updating', 'verifying', 'rolling_back'].includes(run.state)) return true;
+      return Boolean(run.completedAt && now - run.completedAt.getTime() < LOCAL_RELAY_RECONNECT_GRACE_MS);
+    } catch (error) {
+      logger.debug('Relay Pool update state was not read for route health', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
   }
 
   async run(): Promise<void> {
@@ -156,6 +187,7 @@ export class HealthCheckJob {
     }
 
     logger.info(`Running health checks for ${hosts.length} host(s)`);
+    this.relayPoolUpdating = await this.readRelayPoolUpdating();
     const availabilityMembers = await loadAvailabilityRouteProbeLinks(
       this.db,
       hosts.filter(isRelayBacked).map((host) => host.id)
@@ -596,12 +628,15 @@ export class HealthCheckJob {
         return { status: 'deferred' };
       }
       if (!result.ok && this.relayPathsSettling()) {
-        logger.debug('Secure Link health probe waits for the relay paths to settle after a local relay outage', {
-          hostId: host.id,
-          nodeId: nodeId,
-          domain: host.domainNames?.[0],
-          error: result.failures.map((failure) => failure.error).join('; '),
-        });
+        logger.debug(
+          'Secure Link health probe waits for the relay paths to settle after a local relay outage or update',
+          {
+            hostId: host.id,
+            nodeId: nodeId,
+            domain: host.domainNames?.[0],
+            error: result.failures.map((failure) => failure.error).join('; '),
+          }
+        );
         return { status: 'deferred' };
       }
       if (!result.ok) {
