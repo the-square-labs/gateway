@@ -67,6 +67,8 @@ export interface RelayPoolWarning {
   message: string;
 }
 const AUTO_REBALANCE_SETTLE_MS = 30_000;
+/** How long a relay an update drained counts as restarting by plan when the update never resumes it. */
+const UPDATE_DRAIN_PLANNED_MS = 60 * 60_000;
 const AUTO_REBALANCE_RETRY_MS = 5 * 60_000;
 /**
  * A workload a transient condition deferred is retried after this long, doubling while the condition lasts, up to
@@ -223,6 +225,11 @@ export class RelayPoolService {
   private readonly plannedRoles = new Map<string, Array<{ relayInstanceId: string; role: string }>>();
   /** When placement last saw each relay not serving; a relay ready again since is held back for a while. */
   private readonly notServingAt = new Map<string, number>();
+  /**
+   * Relays a Relay Pool update drained, and when: their restart is planned, so they are not held back once the update
+   * resumes them (see placementView).
+   */
+  private readonly drainedForUpdate = new Map<string, number>();
   /** The relays last judged failing on their data plane, and when each one last entered or left that judgement. */
   private dataPlaneFailing = new Set<string>();
   private readonly dataPlaneChangedAt = new Map<string, number>();
@@ -396,6 +403,11 @@ export class RelayPoolService {
    * plane fails is out of placement whatever its control state. A relay serving again after it was not (offline
    * past its grace, or failing on its data plane) is held back for RELAY_RETURN_HOLD_MS: it fills free slots only.
    * The time the local relay does not serve does not count toward the grace (disconnectGraceStart).
+   *
+   * A drain is planned, not a failure: a relay that drains (an operator's drain or a Relay Pool update's), and a relay
+   * an update drained and restarts, is not held back once it is resumed. Held back, the relay an update had just
+   * finished stayed out of the primaries while the next relay drained, so the local relay's workloads went to the
+   * 300-ms relay, and the local relay itself stayed out of them for 2 minutes after the update (stand rc.7, F-3).
    */
   private placementView(instances: RelayInstanceRow[], failing: ReadonlySet<string>, now = Date.now()) {
     const outage = this.localRelayOutage?.latestOutage() ?? null;
@@ -406,8 +418,12 @@ export class RelayPoolService {
     for (const [id, at] of this.notServingAt) {
       if (!known.has(id) || now - at >= RELAY_RETURN_HOLD_MS) this.notServingAt.delete(id);
     }
+    for (const [id, at] of this.drainedForUpdate) {
+      if (!known.has(id) || now - at >= UPDATE_DRAIN_PLANNED_MS) this.drainedForUpdate.delete(id);
+    }
+    const planned = ({ id, state }: RelayInstanceRow) => state === 'draining' || this.drainedForUpdate.has(id);
     for (const instance of instances) {
-      if ((instance.state !== 'ready' && !grace.has(instance.id)) || failing.has(instance.id)) {
+      if ((instance.state !== 'ready' && !grace.has(instance.id) && !planned(instance)) || failing.has(instance.id)) {
         this.notServingAt.set(instance.id, now);
       }
     }
@@ -2018,6 +2034,9 @@ export class RelayPoolService {
   private async setInstanceDrain(instanceId: string, userId: string | null, enabled: boolean, manual: boolean) {
     const [instance] = await this.db.select().from(relayInstances).where(eq(relayInstances.id, instanceId)).limit(1);
     if (!instance) throw new AppError(404, 'RELAY_INSTANCE_NOT_FOUND', 'Relay instance not found');
+    // A drain is planned: its relay is not held back once resumed (placementView).
+    if (enabled && !manual) this.drainedForUpdate.set(instance.id, Date.now());
+    if (!enabled) this.forgetPlannedDrain(instance.id);
     if (instance.kind === 'local') {
       if (manual) throw new AppError(409, 'LOCAL_RELAY_DRAIN_UNSUPPORTED', 'Use pool maintenance for local relay');
       await setLocalRelayUpdateDrain(
@@ -2088,6 +2107,12 @@ export class RelayPoolService {
     if (connected) this.policy.migrateGatewayStreams?.(instance.id, deadlineAt);
     if (manual) await this.evacuateInstance(instance.id);
     else await this.evacuateUpdateDrainedInstance(instance.id);
+  }
+
+  /** A resumed relay serves as before its drain: no hold back, also after the update restarted it. */
+  private forgetPlannedDrain(instanceId: string): void {
+    this.drainedForUpdate.delete(instanceId);
+    this.notServingAt.delete(instanceId);
   }
 
   /** Raw streams the daemons report through this relay: they end only on their own or when cut. */

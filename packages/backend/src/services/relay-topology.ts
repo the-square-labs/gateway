@@ -125,7 +125,7 @@ function leavesPrimaryGroup(cost: number, anchor: number): boolean {
 
 /**
  * Places one endpoint on `desiredCount` relays. With latency data, the nearest relays form the
- * primary group and the remaining slots are standbys by rendezvous score. Without it, every relay
+ * primary group and the remaining slots are standbys, nearest first (chooseStandbys). Without it, every relay
  * is active by rendezvous score, as before latency placement existed.
  *
  * `reference` holds the roles the placement is judged against: the last plan for the endpoint, or
@@ -177,11 +177,73 @@ export function chooseRelayAssignments(
     });
   }
   primaries = primaries.slice(0, desiredCount);
-  const standbys = chooseByRendezvous(endpointId, instances, desiredCount, primaries, referenceIds, holdBack);
+  const standbys = chooseStandbys(endpointId, instances, desiredCount, primaries, costs, referenceIds, holdBack);
   return [
     ...primaries.map((instance) => ({ instance, role: 'primary' as const })),
     ...standbys.map((instance) => ({ instance, role: 'fallback' as const })),
   ];
+}
+
+/**
+ * The standbys of an endpoint: the slots left after its primaries, filled nearest first. A standby carries the
+ * endpoint's traffic whenever its primaries fail, drain or restart, and daemons and Gateway can only move to the
+ * relays the assignment lists, so a standby picked by hash alone sent every stream of the endpoint to a 300-ms relay
+ * while a 60-ms one served its neighbours (stand rc.7, F-3).
+ *
+ * Relays within the primary band of the nearest measured one count as equally near and share endpoints by rendezvous
+ * score; farther ones follow by cost, unmeasured ones last, and a relay that just came back (`holdBack`) only takes a
+ * slot no other relay takes. A current standby (`memberIds`) keeps its slot unless a challenger is clearly nearer
+ * (SWITCH_COST_RATIO and SWITCH_MIN_GAIN_MS, as for primaries), so jittery round trips never move a standby. Without
+ * any measurement the standbys are chosen by rendezvous score, as before latency placement existed.
+ */
+function chooseStandbys(
+  endpointId: string,
+  instances: RelayInstanceRow[],
+  desiredCount: number,
+  taken: RelayInstanceRow[],
+  costs: ReadonlyMap<string, number>,
+  memberIds: ReadonlySet<string>,
+  holdBack?: ReadonlySet<string>
+): RelayInstanceRow[] {
+  if (!costs.size) return chooseByRendezvous(endpointId, instances, desiredCount, taken, memberIds, holdBack);
+  const takenIds = new Set(taken.map(({ id }) => id));
+  const faultDomains = new Set(taken.map(({ faultDomainId }) => faultDomainId));
+  const held = (id: string) => (holdBack?.has(id) && !memberIds.has(id) ? 1 : 0);
+  const pool = instances.filter(({ state, id }) => state === 'ready' && !takenIds.has(id));
+  const measured = pool.filter(({ id }) => !held(id) && costs.has(id)).map(({ id }) => costs.get(id)!);
+  const nearest = measured.length ? Math.min(...measured) : undefined;
+  const bucket = (id: string) => {
+    const cost = costs.get(id);
+    if (cost === undefined) return { bucket: 2, cost: 0 };
+    return nearest === undefined || entersPrimaryGroup(cost, nearest) ? { bucket: 0, cost: 0 } : { bucket: 1, cost };
+  };
+  const rendezvous = byRendezvous(endpointId, memberIds);
+  const ranked = pool.sort((left, right) => {
+    const a = bucket(left.id);
+    const b = bucket(right.id);
+    return held(left.id) - held(right.id) || a.bucket - b.bucket || a.cost - b.cost || rendezvous(left, right);
+  });
+  const clearlyNearer = (challenger: number, current: number) =>
+    challenger < current * SWITCH_COST_RATIO && current - challenger >= SWITCH_MIN_GAIN_MS;
+  const selected: RelayInstanceRow[] = [];
+  while (taken.length + selected.length < desiredCount) {
+    const eligible = ranked.filter(
+      (instance) => !selected.includes(instance) && !faultDomains.has(instance.faultDomainId)
+    );
+    let next = eligible[0];
+    if (!next) break;
+    const nextCost = costs.get(next.id);
+    if (!memberIds.has(next.id) && nextCost !== undefined && !held(next.id)) {
+      const kept = eligible.find(({ id }) => {
+        const cost = costs.get(id);
+        return memberIds.has(id) && cost !== undefined && !clearlyNearer(nextCost, cost);
+      });
+      if (kept) next = kept;
+    }
+    faultDomains.add(next.faultDomainId);
+    selected.push(next);
+  }
+  return selected;
 }
 
 /**
