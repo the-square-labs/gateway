@@ -1,5 +1,5 @@
 import { Plus } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { ContentLoading } from "@/components/common/ContentLoading";
@@ -8,6 +8,7 @@ import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
+import { SearchFilterBar } from "@/components/common/SearchFilterBar";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { IngressGroupDialog } from "@/components/ingress-groups/IngressGroupDialog";
 import {
@@ -35,6 +36,7 @@ export function IngressGroups() {
   const [loading, setLoading] = useState(true);
   const initialLoading = useInitialLoading(loading);
   const [creating, setCreating] = useState(false);
+  const [search, setSearch] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -51,6 +53,19 @@ export function IngressGroups() {
   }, [load]);
   useRealtime("ingress_group.changed", () => void load());
   useRealtime("node.changed", () => void load());
+
+  // Client-side: the list is small and already loaded, and member node names are not searchable on the server.
+  const filteredGroups = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return groups;
+    return groups.filter((group) =>
+      [
+        group.name,
+        group.description ?? "",
+        ...group.members.flatMap((member) => [memberName(member), member.node?.hostname ?? ""]),
+      ].some((value) => value.toLowerCase().includes(query))
+    );
+  }, [groups, search]);
 
   const columns: SimpleTableColumn<IngressGroup>[] = [
     {
@@ -136,15 +151,32 @@ export function IngressGroups() {
         />
         <ContentLoading loading={initialLoading && groups.length === 0} />
         {initialLoading && groups.length === 0 ? null : groups.length > 0 ? (
-          <div className="border border-border bg-card">
-            <SimpleTable
-              columns={columns}
-              rows={groups}
-              getRowKey={(group) => group.id}
-              loading={loading}
-              onRowClick={(group) => navigate(ingressGroupRoute(group.id))}
+          <>
+            <SearchFilterBar
+              placeholder="Search by name, description or member node..."
+              search={search}
+              onSearchChange={setSearch}
+              hasActiveFilters={search !== ""}
+              onReset={() => setSearch("")}
             />
-          </div>
+            {filteredGroups.length > 0 ? (
+              <div className="border border-border bg-card">
+                <SimpleTable
+                  columns={columns}
+                  rows={filteredGroups}
+                  getRowKey={(group) => group.id}
+                  loading={loading}
+                  onRowClick={(group) => navigate(ingressGroupRoute(group.id))}
+                />
+              </div>
+            ) : (
+              <EmptyState
+                message="No ingress groups match your search."
+                hasActiveFilters
+                onReset={() => setSearch("")}
+              />
+            )}
+          </>
         ) : (
           <EmptyState
             message="No ingress groups. A group serves routes and domains from several nginx nodes."
