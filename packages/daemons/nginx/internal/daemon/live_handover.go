@@ -140,6 +140,9 @@ func (p *NginxPlugin) updateConnections() *pb.DaemonUpdateConnections {
 func (p *NginxPlugin) restoreHandover() {
 	p.handoverTracker = handover.NewTracker(p.baseCfg.StateDir, lifecycle.Version)
 	p.handover.Observe(p.handoverTracker)
+	if carried := handover.TakeStreamTotals(p.baseCfg.StateDir); carried.Cut > 0 && p.relayStreams != nil {
+		p.relayStreams.CarryCut(carried.Cut)
+	}
 	restored, err := handover.RestoreFrom(handoverKeeper, "nginx", p.logger)
 	if err != nil && p.logger != nil {
 		p.logger.Warn("could not take over the connections the previous daemon process handed over; they are cut", "error", err)
@@ -223,3 +226,14 @@ func (p *NginxPlugin) relayReadChunk() int {
 func (c *trackedConn) HandoverInner() net.Conn { return c.Conn }
 
 func (c *trackedConn) MarkHandedOver() { c.handedOver.Store(true) }
+
+// leaveStreamTotals leaves the cut total, the streams this exit cuts included, to the next process (Shutdown): a
+// restart that is no update (a launcher that crashed, stand rc.7 O-5) otherwise loses them from the node's counters.
+func (p *NginxPlugin) leaveStreamTotals() {
+	if p.relayStreams == nil || p.baseCfg == nil || p.baseCfg.StateDir == "" {
+		return
+	}
+	if err := handover.WriteStreamTotals(p.baseCfg.StateDir, handover.StreamTotals{Cut: p.relayStreams.ExitCut()}); err != nil && p.logger != nil {
+		p.logger.Warn("could not leave the relay stream counters to the next daemon process", "error", err)
+	}
+}

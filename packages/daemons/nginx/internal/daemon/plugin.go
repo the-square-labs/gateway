@@ -517,6 +517,7 @@ func (p *NginxPlugin) Shutdown() {
 			p.availabilityLease.close()
 		}
 		p.ingressHealth.close()
+		p.leaveStreamTotals()
 	})
 }
 

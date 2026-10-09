@@ -10,6 +10,7 @@ import (
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/daemon-shared/handover/handovertest"
 	"github.com/wiolett-industries/gateway/daemon-shared/relayresume"
+	"github.com/wiolett-industries/gateway/docker-daemon/internal/config"
 )
 
 // useTestKeeper makes handovers of this test go through keeper, as updates.
@@ -110,5 +111,30 @@ func TestLiveHandoverKeepsDatabaseLinkAcrossTargetUpdate(t *testing.T) {
 	})
 	if pair.dials.Load() != 1 {
 		t.Fatalf("backend dialed %d times", pair.dials.Load())
+	}
+}
+
+// A restart that is no update (a stop, a launcher that crashed and the unit started again) leaves the relay stream cut
+// total, the streams its exit cuts included, to the next process (stand rc.7 O-5: the counter started at zero again
+// and the cut was recorded nowhere).
+func TestRestartCarriesTheRelayStreamCutTotal(t *testing.T) {
+	useTestKeeper(t, handovertest.NewKeeper())
+	stateDir := t.TempDir()
+	previous := NewDockerPlugin(&config.Config{})
+	previous.cfg.StateDir = stateDir
+	previous.relayStreams().sources.CarryCut(4)
+	previous.beginStreamExit()
+	previous.Shutdown()
+	next := NewDockerPlugin(&config.Config{})
+	next.cfg.StateDir = stateDir
+	next.restoreHandover()
+	if cut := next.relayStreamStats().GetCutTotal(); cut != 4 {
+		t.Fatalf("cut total %d after the restart, want the previous process's 4", cut)
+	}
+	again := NewDockerPlugin(&config.Config{})
+	again.cfg.StateDir = stateDir
+	again.restoreHandover()
+	if stats := again.relayStreamStats(); stats.GetCutTotal() != 0 {
+		t.Fatalf("the totals were carried twice: %+v", stats)
 	}
 }

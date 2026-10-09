@@ -40,6 +40,7 @@ const (
 // (link_listener_handover.go); the link connections in the middle of a request finish with the Secure Link tunnels.
 func (p *DockerPlugin) AnnounceRestart() {
 	started := time.Now()
+	p.beginStreamExit()
 	if handed := p.suspendLinkListeners(); handed > 0 {
 		p.logger.Info("handing link sockets over to the next daemon process", "sockets", handed)
 	}

@@ -115,7 +115,11 @@ func (m *dockerSecureLinkManager) cutOldestRetirementLocked(ctx context.Context,
 // cutConnectorLocked removes the connector in slot to free the slot and returns how many sessions it still carried.
 func (m *dockerSecureLinkManager) cutConnectorLocked(ctx context.Context, inspect container.InspectResponse, slot int) (int, error) {
 	sessions := m.connectorSessions(inspect.ID, m.adoptedControlSocket(m.slotSocketPath(slot)))
-	return sessions, m.dropConnectorLocked(ctx, inspect.ID)
+	err := m.dropConnectorLocked(ctx, inspect.ID)
+	if err == nil {
+		m.plugin.recordConnectorCut(sessions)
+	}
+	return sessions, err
 }
 
 // dropConnectorLocked removes a connector container and forgets its retirement.

@@ -18,6 +18,7 @@ var _ lifecycle.ShutdownPlugin = (*DockerPlugin)(nil)
 // operation still writes the state directory while the process exits.
 func (p *DockerPlugin) Shutdown() {
 	p.stopAvailabilityLease(leaseShutdownWait)
+	p.leaveStreamTotals()
 }
 
 // stopAvailabilityLease stops the lease integration, waiting at most limit. It reports whether it stopped in time;

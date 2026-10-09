@@ -102,6 +102,8 @@ type Tracker struct {
 	tracked map[*relayresume.Session]bool
 	kept    int
 	cut     map[string]int
+	// later are the cuts CutAfter added before the counts were final.
+	later   map[string]int
 	last    *Report
 	settled chan struct{}
 }
@@ -182,6 +184,40 @@ func (t *Tracker) Cut(class string, n int) {
 	t.mu.Unlock()
 }
 
+// CutAfter counts n connections of class that a consequence of an update cut
+// after the update itself (a replaced connector removed at its retirement
+// limit): they join the last update's report, which becomes a new final
+// report (FinishedAt now) for Gateway to take again. It reports false when
+// there is no report to join: the daemon has not been updated since it
+// reports them.
+func (t *Tracker) CutAfter(class string, n int) bool {
+	if t == nil || n <= 0 || class == "" {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.pending != nil {
+		if t.later == nil {
+			t.later = map[string]int{}
+		}
+		t.later[class] += n
+		return true
+	}
+	if t.last == nil {
+		return false
+	}
+	report := *t.last
+	report.Cut = map[string]int{}
+	for existing, count := range t.last.Cut {
+		report.Cut[existing] = count
+	}
+	report.AddCut(class, n)
+	report.FinishedAt = time.Now()
+	t.last = &report
+	_ = writeReport(filepath.Join(t.stateDir, lastReportFile), report)
+	return true
+}
+
 // Settle waits until every stream taken over resumed or ended (at most
 // settleLimit), then keeps the final report. Run it once, after the
 // restore.
@@ -218,7 +254,7 @@ func (t *Tracker) Settle() {
 			// first writes to it: the counts become final a moment later.
 			settledAt = now
 		}
-		if (open == 0 && now.Sub(settledAt) >= settleProof) || now.After(deadline) {
+		if (open == 0 && (len(sessions) == 0 || now.Sub(settledAt) >= settleProof)) || now.After(deadline) {
 			t.finish(pending, sessions, failed+open)
 			return
 		}
@@ -262,6 +298,9 @@ func (t *Tracker) finish(pending *Report, sessions []*relayresume.Session, faile
 		accounted += n
 	}
 	report.AddCut(CutResumeFailed, report.HandedOver-accounted)
+	for class, n := range t.later {
+		report.AddCut(class, n)
+	}
 	if len(pauses) > 0 {
 		slices.Sort(pauses)
 		report.PauseP50 = pauses[len(pauses)/2]

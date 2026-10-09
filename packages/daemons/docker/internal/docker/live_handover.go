@@ -59,7 +59,22 @@ const (
 	cutPostgresTLS = "postgres_tls"
 	cutRegistry    = "registry"
 	cutBackup      = "backup"
+	// cutConnectorRetired: the sessions a replaced Secure Link connector still carried when it was removed at its
+	// retirement limit, or to free its slot. A connector is replaced by an update (of Gateway's connector image, with
+	// the Relay Pool), and its removal comes up to an hour later: the cut joins the node's last update report.
+	cutConnectorRetired = "connector_retired"
 )
+
+// recordConnectorCut counts the sessions a removed Secure Link connector still carried (stand rc.7 O-15: 35 and 40
+// connections cut an hour after the Relay Pool update, reported nowhere).
+func (p *DockerPlugin) recordConnectorCut(sessions int) {
+	if p == nil || sessions <= 0 {
+		return
+	}
+	if !p.handoverTracker.CutAfter(cutConnectorRetired, sessions) && p.logger != nil {
+		p.logger.Info("no update report to add the cut connector sessions to", "sessions", sessions)
+	}
+}
 
 // handoverKeeper keeps what a handover passes on (the launcher's keeper), and
 // exitingForUpdate tells an exit for an update; both are replaced in tests.
@@ -175,6 +190,9 @@ func (p *DockerPlugin) updateConnections() *pb.DaemonUpdateConnections {
 func (p *DockerPlugin) restoreHandover() {
 	p.handoverTracker = handover.NewTracker(p.cfg.StateDir, lifecycle.Version)
 	p.handover.Observe(p.handoverTracker)
+	if carried := handover.TakeStreamTotals(p.cfg.StateDir); carried.Cut > 0 {
+		p.relayStreams().sources.CarryCut(carried.Cut)
+	}
 	restored, err := handover.RestoreFrom(handoverKeeper, "docker", p.logger)
 	if err != nil {
 		p.logger.Warn("could not take over the connections the previous daemon process handed over; they are cut", "error", err)
@@ -416,5 +434,23 @@ func (m *managedDatabaseHostListenerManager) adoptRestoredLocked() {
 	m.plugin.restoredHostMu.Unlock()
 	for _, connection := range ended {
 		_ = connection.Close()
+	}
+}
+
+// beginStreamExit marks the exit of this process for its stream counters: what the exit cuts from now on is cut.
+func (p *DockerPlugin) beginStreamExit() {
+	if sides := p.relayStreamsIfAny(); sides != nil {
+		sides.sources.BeginExit()
+	}
+}
+
+// leaveStreamTotals leaves the cut total, the streams this exit cuts included, to the next process (Shutdown).
+func (p *DockerPlugin) leaveStreamTotals() {
+	sides := p.relayStreamsIfAny()
+	if sides == nil || p.cfg == nil || p.cfg.StateDir == "" {
+		return
+	}
+	if err := handover.WriteStreamTotals(p.cfg.StateDir, handover.StreamTotals{Cut: sides.sources.ExitCut()}); err != nil && p.logger != nil {
+		p.logger.Warn("could not leave the relay stream counters to the next daemon process", "error", err)
 	}
 }

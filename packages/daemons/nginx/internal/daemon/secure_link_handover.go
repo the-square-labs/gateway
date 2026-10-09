@@ -332,6 +332,10 @@ func (m *sourceLinkManager) opening() int {
 // Secure Link sockets go to the next daemon process. Without a listener keeper
 // nothing changes: the sockets close with the process.
 func (p *NginxPlugin) HandOverSecureLinks() {
+	if p.relayStreams != nil {
+		// What the stop or update ends from here on is its cut.
+		p.relayStreams.BeginExit()
+	}
 	p.handoverOnce.Do(func() {
 		if p.secureLinks.keptListeners()+p.registryLinks.keptListeners() == 0 {
 			return

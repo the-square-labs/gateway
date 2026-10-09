@@ -104,6 +104,9 @@ type Manager struct {
 	migrationsFailed atomic.Uint64
 	cut              atomic.Uint64
 	retransmitted    atomic.Uint64
+	// exiting: the process exits (BeginExit); a stream it ends from now on
+	// is cut by the exit.
+	exiting atomic.Bool
 }
 
 // NewManager creates the source side of a process.
@@ -323,7 +326,7 @@ func (m *Manager) ended(s *Session, err error, retransmitted uint64) {
 	delete(m.sessions, s)
 	m.mu.Unlock()
 	m.retransmitted.Add(retransmitted)
-	if err != nil && isCut(err) {
+	if err != nil && (isCut(err) || (m.exiting.Load() && endedByThisSide(err))) {
 		m.cut.Add(1)
 	}
 	if errors.Is(err, ErrLegacyPeer) {
@@ -335,6 +338,34 @@ func (m *Manager) ended(s *Session, err error, retransmitted uint64) {
 	if m.OnEnd != nil {
 		m.OnEnd(s, err)
 	}
+}
+
+// BeginExit marks the process's exit (a stop, a restart of its unit, an
+// update): the streams it ends from now on (its drain) and the ones it still
+// carries when it exits (ExitCut) are cut by the exit, unless the next process
+// took them over.
+func (m *Manager) BeginExit() { m.exiting.Store(true) }
+
+// ExitCut is the cut total once the process exits now: what it counted, and
+// every stream it still carries, which the exit ends.
+func (m *Manager) ExitCut() uint64 {
+	m.mu.Lock()
+	live := len(m.sessions)
+	m.mu.Unlock()
+	return m.cut.Load() + uint64(live)
+}
+
+// CarryCut adds the cut total of the daemon's previous process (ExitCut) to
+// this one's: the total counts the streams the daemon lost across its
+// restarts, a launcher crash's included (stand rc.7 O-5), not since this
+// process started.
+func (m *Manager) CarryCut(n uint64) { m.cut.Add(n) }
+
+// endedByThisSide reports a stream this process reset itself (its socket
+// closed, its drain): during the exit, that is the exit's cut.
+func endedByThisSide(err error) bool {
+	var reset *ResetError
+	return errors.As(err, &reset) && !reset.Remote && !errors.Is(err, ErrHandedOver)
 }
 
 // isCut reports a resumable stream that ended because it could not move:

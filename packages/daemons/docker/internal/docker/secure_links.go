@@ -1000,6 +1000,9 @@ func (m *dockerSecureLinkManager) retireConnectorUntil(previous connectorRuntime
 		defer cancel()
 		err := m.removeConnectorContainer(ctx, previous.id)
 		kept := err != nil
+		if !kept && !stopped {
+			m.plugin.recordConnectorCut(max(carried, busy))
+		}
 		if kept && m.plugin.logger != nil {
 			// The next daemon start removes it.
 			m.plugin.logger.Warn("could not remove the replaced secure-link connector", "error", err)

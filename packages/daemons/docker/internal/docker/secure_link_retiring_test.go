@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wiolett-industries/gateway/daemon-shared/handover"
 	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
 )
 
@@ -196,6 +197,13 @@ func TestDaemonStartKeepsTheRetirementDeadline(t *testing.T) {
 	engine.serveControl(draining)
 	engine.serveControl(serving)
 	retiringFile := filepath.Join(t.TempDir(), secureLinkRetiringFile)
+	// The node's last update, whose report the cut joins (stand rc.7 O-15).
+	stateDir := t.TempDir()
+	if err := handover.WritePending(stateDir, handover.Report{FromVersion: "v1", StartedAt: time.Now(), Handover: true}); err != nil {
+		t.Fatal(err)
+	}
+	tracker := handover.NewTracker(stateDir, "v2")
+	tracker.Settle()
 	// Recorded by the process that replaced it almost an hour before the restart.
 	until := time.Now().Add(time.Second)
 	recorded := retiringConnectors{file: retiringFile}
@@ -205,7 +213,8 @@ func TestDaemonStartKeepsTheRetirementDeadline(t *testing.T) {
 
 	logs := &lockedBuffer{}
 	manager := &dockerSecureLinkManager{
-		plugin:     &DockerPlugin{client: engine.client(), logger: slog.New(slog.NewTextHandler(logs, nil))},
+		plugin: &DockerPlugin{client: engine.client(), logger: slog.New(slog.NewTextHandler(logs, nil)),
+			handoverTracker: tracker},
 		controlDir: engine.controlDir,
 		socketPath: filepath.Join(engine.controlDir, secureLinkConnectorSlots[0].socket),
 		bindings:   map[string]dockerSecureLinkBinding{}, attached: map[string]struct{}{},
@@ -221,6 +230,13 @@ func TestDaemonStartKeepsTheRetirementDeadline(t *testing.T) {
 	waitRemoved(t, engine, draining.id)
 	if logs.count("reached its retirement limit") != 1 || logs.count("connector="+draining.id+" sessions_cut=2") != 1 {
 		t.Fatalf("the cut at the recorded deadline was not logged with its sessions: %s", logs.String())
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for tracker.Last().Cut[cutConnectorRetired] != 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the update report does not count the cut sessions: %+v", tracker.Last())
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
