@@ -244,7 +244,7 @@ describe("Gateway's own relayed streams return to the nearest relay, paced (O-1)
     expect(gatewayReturnTarget([local, uk], place, 'relay-nl')).toBeNull();
   });
 
-  it('moves streams back to the local relay only after it served for a minute, a batch a pass, spread over the pass', async () => {
+  it('moves streams back to the local relay only after it served for a while, a batch a pass, spread over the pass', async () => {
     let now = T0;
     const outage: LocalRelayOutage = { since: T0, servingAgainAt: null, planned: false };
     const t = paths(
@@ -261,7 +261,7 @@ describe("Gateway's own relayed streams return to the nearest relay, paced (O-1)
       migrate: vi.fn(async () => undefined),
       id,
     });
-    const sessions = Array.from({ length: 10 }, (_, index) => session(index, T0));
+    const sessions = Array.from({ length: 40 }, (_, index) => session(index, T0));
     sessions.push({ ...session(10, T0), relayId: null as never });
     t.registry.liveSessions.mockReturnValue(sessions);
     const delays: number[] = [];
@@ -274,13 +274,14 @@ describe("Gateway's own relayed streams return to the nearest relay, paced (O-1)
     // The local relay does not serve: the streams stay on UK.
     now = T0 + 2 * 60_000;
     expect(await t.instance.returnPass()).toBe(0);
-    // It serves again, but not for a minute yet.
+    // It serves again, but not for GATEWAY_RETURN_STABLE_MS yet.
     outage.servingAgainAt = now;
     now += GATEWAY_RETURN_STABLE_MS - 1_000;
     expect(await t.instance.returnPass()).toBe(0);
     now += 1_000;
-    expect(await t.instance.returnPass()).toBe(8);
-    expect(sessions.filter((s) => s.migrate.mock.calls.length > 0)).toHaveLength(8);
+    // A node's worth of streams comes back within two passes (stand rc.7, F-3: 8 a pass took over a minute).
+    expect(await t.instance.returnPass()).toBe(32);
+    expect(sessions.filter((s) => s.migrate.mock.calls.length > 0)).toHaveLength(32);
     for (const s of sessions) for (const call of s.migrate.mock.calls) expect(call).toEqual(['return']);
     expect(Math.max(...delays)).toBeLessThan(GATEWAY_RETURN_INTERVAL_MS);
     // Judged again on a fresh assignment once the candidates it dialed are old.
@@ -288,7 +289,7 @@ describe("Gateway's own relayed streams return to the nearest relay, paced (O-1)
     t.instance.stop();
   });
 
-  it('leaves a stream that moved within the last minute where it is', async () => {
+  it('leaves a stream that moved within the cooldown where it is', async () => {
     let now = T0 + 10 * 60_000;
     const t = paths(
       () => ({ since: T0, servingAgainAt: T0 + 60_000, planned: false }),
@@ -312,6 +313,31 @@ describe("Gateway's own relayed streams return to the nearest relay, paced (O-1)
     t.registry.timers.setTimeout.mockImplementation((task: () => void) => task());
     t.registry.schedule.mockImplementation((task: () => Promise<unknown>) => void task());
     expect(await t.instance.returnPass()).toBe(1);
+    expect(migrate).toHaveBeenCalledWith('return');
+    t.instance.stop();
+  });
+
+  it('returns a stream to the relay a later placement put back, judged on the current assignment (stand rc.7, F-3)', async () => {
+    // The stream moved to UK while the local relay drained in a Relay Pool update and dialed that generation's
+    // relays, UK and NL. The placement after the update put the local relay back as the primary.
+    let now = T0;
+    const t = paths(
+      () => ({ since: T0 - 10 * 60_000, servingAgainAt: T0 - 9 * 60_000, planned: true }),
+      () => now
+    );
+    t.instance.observe('relay-uk', 60);
+    t.instance.observe('relay-nl', 300);
+    t.instance.note('route-1', [{ ...uk, topology: { role: 'primary' } }, nl]);
+    t.fetchCandidates.mockResolvedValue([local, uk]);
+    const migrate = vi.fn(async () => undefined);
+    t.registry.liveSessions.mockReturnValue([
+      { relayId: 'relay-uk', routeId: 'route-1', movable: true, lastMoveAt: T0, migrate },
+    ]);
+    t.registry.timers.setTimeout.mockImplementation((task: () => void) => task());
+    t.registry.schedule.mockImplementation((task: () => Promise<unknown>) => void task());
+    now += 31_000;
+    expect(await t.instance.returnPass()).toBe(1);
+    expect(t.fetchCandidates).toHaveBeenCalledWith('route-1');
     expect(migrate).toHaveBeenCalledWith('return');
     t.instance.stop();
   });

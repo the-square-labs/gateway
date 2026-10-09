@@ -33,13 +33,13 @@ const TARGET_TTL_MS = 10 * 60_000;
 /** How long a new stream waits for the first round trip of a relay never measured before it orders its relays. */
 export const GATEWAY_FIRST_SAMPLE_WAIT_MS = 1_000;
 /** A relay must have been reached without a break this long before streams return to it (ReturnStableFor). */
-export const GATEWAY_RETURN_STABLE_MS = 60_000;
+export const GATEWAY_RETURN_STABLE_MS = 20_000;
 /** A route's candidates are fetched again for a return judgement once they are this old. */
 const ROUTE_CANDIDATES_FRESH_MS = 30_000;
-/** Returner pacing, as relayresume: a pass every 10 s, at most 8 moves a pass, none for a stream moved within 1 min. */
+/** Returner pacing, as relayresume: a pass every 10 s, at most 32 moves a pass, none for a stream moved within 20 s. */
 export const GATEWAY_RETURN_INTERVAL_MS = 10_000;
-const GATEWAY_RETURN_BATCH = 8;
-export const GATEWAY_RETURN_COOLDOWN_MS = 60_000;
+const GATEWAY_RETURN_BATCH = 32;
+export const GATEWAY_RETURN_COOLDOWN_MS = 20_000;
 
 /** Relays of one role within this band of the nearest are equally near (relaybridge costBand). */
 const COST_BAND_RATIO = 1.2;
@@ -381,12 +381,16 @@ export class GatewayRelayPaths {
     return moved;
   }
 
+  /**
+   * Judged on the route's current candidates, looked up again once they are ROUTE_CANDIDATES_FRESH_MS old. The
+   * candidates the stream last dialed are not enough: after a placement change the nearest relay is often not among
+   * them (a stream that moved to UK while the local relay drained had dialed {UK, NL}; the assignment that put the
+   * local relay back was never looked at), so the stream stayed on the farther relay for hours (stand rc.7, F-3).
+   */
   private async nearerRelay(session: ResumableRelayDuplex, relayId: string): Promise<boolean> {
     const place = (candidate: GatewayRelayCandidate) => this.place(candidate);
     let route = this.routes.get(session.routeId);
     if (!route) return false;
-    // Judged on the candidates the stream last dialed; a target found there is checked on a fresh assignment.
-    if (!gatewayReturnTarget(route.candidates, place, relayId)) return false;
     if (this.now() - route.at > ROUTE_CANDIDATES_FRESH_MS) {
       try {
         this.note(session.routeId, await this.fetchCandidates(session.routeId));
