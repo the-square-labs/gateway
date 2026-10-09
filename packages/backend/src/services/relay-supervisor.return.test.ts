@@ -20,7 +20,7 @@ function relayHealth() {
  * A local relay behind a gRPC channel that, once it failed, keeps failing until it is replaced: grpc-js waits out its
  * reconnect backoff and keeps the address it resolved, while the relay may come back elsewhere.
  */
-function setup(persisted: unknown = null) {
+function setup(persisted: unknown = null, options: { lookup?: () => Promise<void> } = {}) {
   let relayUp = true;
   let channelFailed = false;
   const published: Array<Record<string, unknown>> = [];
@@ -38,7 +38,16 @@ function setup(persisted: unknown = null) {
   const supervisor = new RelaySupervisorService(
     {
       update: () => updateChain,
-      select: () => ({ from: () => ({ where: () => ({ limit: async () => [] }) }) }),
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: async () => {
+              await options.lookup?.();
+              return [];
+            },
+          }),
+        }),
+      }),
     } as never,
     { get: async () => persisted, set: async () => undefined } as never,
     { getHealth, reconnectIfDown } as never,
@@ -126,6 +135,65 @@ describe('relay supervisor: a local relay that comes back', () => {
     await t.supervisor.watchReturn();
     expect(t.getHealth).toHaveBeenCalledTimes(1);
     expect(t.reconnectIfDown).not.toHaveBeenCalled();
+  });
+});
+
+describe('relay supervisor: an answer from before the relay went down (stand rc.7, O-1)', () => {
+  it('does not end the outage with a probe that was under way when a hard stop was recorded', async () => {
+    const info = vi.spyOn(logger, 'info').mockImplementation(() => logger);
+    let release: () => void = () => undefined;
+    let held: Promise<void> | null = null;
+    const t = setup(null, { lookup: () => held ?? Promise.resolve() });
+    await t.supervisor.probeNow();
+    // The regular probe gets its healthy answer, then writes the relay's health report (held here)...
+    held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const probe = t.supervisor.probeNow();
+    await vi.waitFor(() => expect(t.getHealth).toHaveBeenCalledTimes(2));
+    // ...while the relay is killed: a node's control stream ends and its on-demand check finds the relay down.
+    t.relay(false);
+    await t.supervisor.confirmLocalRelay();
+    const outage = t.supervisor.latestOutage();
+    expect(outage?.servingAgainAt).toBeNull();
+    held = null;
+    release();
+    await probe;
+    expect(t.supervisor.latestOutage()).toEqual(outage);
+    const lines = (info.mock.calls as unknown as Array<[unknown]>).map(([message]) => message);
+    expect(lines).not.toContain('Gateway relay serves again; nodes and relays get a reconnect grace');
+    expect(lines).not.toContain('Gateway reconnected its channels to the local relay');
+
+    // The relay really comes back: a check started after the outage ends it.
+    t.relay(true);
+    await t.supervisor.watchReturn();
+    expect(t.supervisor.latestOutage()?.servingAgainAt).not.toBeNull();
+    expect(t.supervisor.latestOutage()?.since).toBe(outage?.since);
+  });
+
+  it('does not open an outage again with a failed check that started before the relay served again', async () => {
+    const t = setup();
+    await t.supervisor.probeNow();
+    t.relay(false);
+    await t.supervisor.probeNow();
+    await t.supervisor.probeNow();
+    expect(t.supervisor.latestOutage()?.servingAgainAt).toBeNull();
+    // An on-demand check fails while the relay is down; its answer arrives after the relay serves again.
+    let failCheck: (error: Error) => void = () => undefined;
+    t.getHealth.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          failCheck = reject;
+        })
+    );
+    const late = t.supervisor.confirmLocalRelay();
+    t.relay(true);
+    await t.supervisor.watchReturn();
+    const ended = t.supervisor.latestOutage();
+    expect(ended?.servingAgainAt).not.toBeNull();
+    failCheck(Object.assign(new Error('14 UNAVAILABLE: No connection established'), { code: 14 }));
+    await late;
+    expect(t.supervisor.latestOutage()).toEqual(ended);
   });
 });
 

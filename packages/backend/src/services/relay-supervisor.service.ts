@@ -166,6 +166,15 @@ export class RelaySupervisorService implements LocalRelayOutageSignal {
   private manualRetryStarting = false;
   /** The persisted state was loaded (restore). */
   private restored = false;
+  /**
+   * Checks of the relay are numbered as they start. An outage is closed only by a check that started after it was
+   * opened, and opened again only by one that started after it was closed: a check that was under way while the
+   * relay went down (its answer, or the write after it, was still pending) said nothing about the relay since (stand
+   * rc.7, O-1: a probe's healthy answer, persisted 30 ms after a hard stop was recorded, logged "serves again").
+   */
+  private checksStarted = 0;
+  private outageOpenedAfterCheck = 0;
+  private outageClosedAfterCheck = 0;
   /** The on-demand check of confirmLocalRelay in flight. */
   private confirming: Promise<void> | null = null;
   private stopping = false;
@@ -356,22 +365,25 @@ export class RelaySupervisorService implements LocalRelayOutageSignal {
         if (this.state.state === 'healthy') {
           this.state = { ...this.state, ...healthyUpdate };
           // A relay found down by an on-demand check while this probe saw it healthy throughout.
-          await this.recordServing(true);
+          await this.recordServing(true, result.check);
           return;
         }
-        await this.transition({
-          state: 'healthy',
-          reason: null,
-          recoveryBlocked: null,
-          attempt: 0,
-          attemptHistory: [],
-          ...healthyUpdate,
-        });
+        await this.transition(
+          {
+            state: 'healthy',
+            reason: null,
+            recoveryBlocked: null,
+            attempt: 0,
+            attemptHistory: [],
+            ...healthyUpdate,
+          },
+          result.check
+        );
         return;
       }
       this.failureCount += 1;
       // From the first failed probe: the nodes' control streams end with the relay, whatever recovery does.
-      if (OFFLINE_REASONS.includes(result.reason)) await this.recordServing(false);
+      if (OFFLINE_REASONS.includes(result.reason)) await this.recordServing(false, result.check);
       if (this.failureCount === 1) {
         if (this.state.state !== 'critical' && this.state.state !== 'recovering') {
           await this.transition({ state: 'suspect', reason: result.reason });
@@ -517,8 +529,8 @@ export class RelaySupervisorService implements LocalRelayOutageSignal {
       this.checkRelay()
         .then(async (result) => {
           if (this.stopping || this.inMaintenance()) return;
-          if (result.healthy) await this.recordServing(true);
-          else if (OFFLINE_REASONS.includes(result.reason)) await this.recordServing(false);
+          if (result.healthy) await this.recordServing(true, result.check);
+          else if (OFFLINE_REASONS.includes(result.reason)) await this.recordServing(false, result.check);
         })
         .catch((error) => {
           logger.debug('Local relay check failed', { error: error instanceof Error ? error.message : String(error) });
@@ -572,17 +584,26 @@ export class RelaySupervisorService implements LocalRelayOutageSignal {
    * The outage record after the relay was seen serving or not: a relay that stops serving opens an outage unless one
    * is open already (a new one starts when the last one had ended), and the first time it serves again closes it.
    */
-  private outageChange(serving: boolean, planned = false): Partial<Pick<RelaySupervisorState, 'outage'>> {
+  private outageChange(
+    serving: boolean,
+    planned = false,
+    check = Number.POSITIVE_INFINITY
+  ): Partial<Pick<RelaySupervisorState, 'outage'>> {
     const outage = this.state.outage ?? null;
     const now = new Date(this.now()).toISOString();
     if (serving) {
-      return outage && outage.servingAgainAt === null ? { outage: { ...outage, servingAgainAt: now } } : {};
+      if (!outage || outage.servingAgainAt !== null || check <= this.outageOpenedAfterCheck) return {};
+      this.outageClosedAfterCheck = this.checksStarted;
+      return { outage: { ...outage, servingAgainAt: now } };
     }
-    return !outage || outage.servingAgainAt !== null ? { outage: { since: now, servingAgainAt: null, planned } } : {};
+    if ((outage && outage.servingAgainAt === null) || check <= this.outageClosedAfterCheck) return {};
+    this.outageOpenedAfterCheck = this.checksStarted;
+    return { outage: { since: now, servingAgainAt: null, planned } };
   }
 
-  private async recordServing(serving: boolean): Promise<void> {
-    const change = this.outageChange(serving);
+  /** `check`: the number of the check that saw it (checksStarted); omitted, the observation is current. */
+  private async recordServing(serving: boolean, check?: number): Promise<void> {
+    const change = this.outageChange(serving, false, check);
     if (change.outage === undefined) return;
     this.state = { ...this.state, ...change };
     if (serving) this.reconnectChannels();
@@ -859,7 +880,13 @@ export class RelaySupervisorService implements LocalRelayOutageSignal {
     });
   }
 
-  private async checkRelay(): Promise<ProbeResult> {
+  /** One check of the relay, numbered as it starts (see checksStarted). */
+  private async checkRelay(): Promise<ProbeResult & { check: number }> {
+    const check = ++this.checksStarted;
+    return { ...(await this.checkRelayOnce()), check };
+  }
+
+  private async checkRelayOnce(): Promise<ProbeResult> {
     if (!this.relayClient) return { healthy: false, reason: 'unreachable' };
     try {
       const response = await this.relayClient.getHealth(2_000);
@@ -979,9 +1006,10 @@ export class RelaySupervisorService implements LocalRelayOutageSignal {
     return reason === 'unreachable' || reason === 'listener_unavailable';
   }
 
-  private async transition(update: Partial<RelaySupervisorState>): Promise<void> {
+  /** `check`: the check that saw the relay healthy, when a probe's (see checksStarted). */
+  private async transition(update: Partial<RelaySupervisorState>, check?: number): Promise<void> {
     if (update.state === 'healthy') {
-      const change = this.outageChange(true);
+      const change = this.outageChange(true, false, check);
       update = { ...update, ...change };
       if (change.outage) this.reconnectChannels();
     }
