@@ -497,3 +497,40 @@ func TestCoreRefusedAfterBothFinsFinishes(t *testing.T) {
 		}
 	}
 }
+
+// The source takes the window extension from the target's HELLO_ACK, as the
+// TS port and the protocol notes do, and a target before the extension (an
+// even window) keeps it within MaxWindow.
+func TestCoreSourceTakesTheExtensionFromHelloAck(t *testing.T) {
+	for _, extended := range []bool{true, false} {
+		key := bytes.Repeat([]byte{7}, KeyLen)
+		now := time.Unix(1_700_000_000, 0)
+		srcPath := NewPath(nil, "relay-a", MaxFrameBytes)
+		src := NewSource(Config{RouteID: "route-1", KeyID: "v1", Key: key, SessionID: [16]byte{1, 2, 3}}, srcPath, now)
+		out := src.TakeOutputs()
+		hello, rest, err := ParseRecord(out[0].Frame)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tgtPath := NewPath(nil, "relay-a", MaxFrameBytes)
+		tgt := NewTarget(Config{RouteID: "route-1", Keys: func(string) []byte { return key }, TargetNonce: [16]byte{9},
+			Authorize: func() error { return nil }}, tgtPath, &hello, hello.KeyID, key, rest, now)
+		var ack Record
+		for _, output := range tgt.TakeOutputs() {
+			if record, _, err := ParseRecord(output.Frame); err == nil && record.Type == TypeHelloAck {
+				ack = record
+			}
+		}
+		if ack.Wnd&WindowExtension == 0 {
+			t.Fatalf("HELLO_ACK window %d without the extension bit", ack.Wnd)
+		}
+		if !extended {
+			ack.Wnd &^= WindowExtension
+			ack.MAC = ComputeMAC(key, tgtPath.mac.HelloAckTranscript(ack.Nonce, ack.Wnd))
+		}
+		src.PathFrame(srcPath, mustRecord(&ack), now)
+		if src.State() != StateOpen || src.PeerExtended() != extended {
+			t.Fatalf("extended HELLO_ACK %v: source %s, extended peer %v", extended, src.State(), src.PeerExtended())
+		}
+	}
+}

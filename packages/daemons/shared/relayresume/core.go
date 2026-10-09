@@ -729,7 +729,7 @@ func (c *Core) PathFrame(p *Path, frame []byte, now time.Time) {
 			}
 			c.nonce = record.Nonce
 			p.mac.TargetNonce = record.Nonce
-			c.peerWnd = clampPeerWindow(record.Wnd)
+			c.notePeerWindow(record.Wnd)
 			p.awaiting = 0
 			c.handshakeDeadine = time.Time{}
 			c.state = StateOpen
