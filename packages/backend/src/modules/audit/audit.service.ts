@@ -195,12 +195,17 @@ export class AuditService {
         entry.resourceId ?? null,
         ipAddress
       );
-      await this.inTransaction(async (writer) => {
-        await writer.insert(auditLog).values(values);
-        if (siemEvent && this.siemOutboxService) {
-          await this.siemOutboxService.enqueue(writer, id, siemEvent, createdAt);
-        }
-      });
+      const siemOutbox = siemEvent ? this.siemOutboxService : undefined;
+      if (siemEvent && siemOutbox) {
+        // The row and its SIEM event commit together.
+        await this.inTransaction(async (writer) => {
+          await writer.insert(auditLog).values(values);
+          await siemOutbox.enqueue(writer, id, siemEvent, createdAt);
+        });
+      } else {
+        // A single insert is atomic on its own: no BEGIN/COMMIT round trips on every audited request.
+        await this.db.insert(auditLog).values(values);
+      }
       this.eventBus?.publish('audit.changed', {});
       if (options.markRequest ?? true) {
         markAuditEmitted();
