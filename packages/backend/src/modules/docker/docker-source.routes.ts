@@ -133,12 +133,15 @@ export function registerDockerSourceRoutes(router: OpenAPIHonoType<AppEnv>) {
   });
 
   // `search` finds repositories past the GitHub listing bound; `truncated` asks the caller to refine it.
+  // `refreshing`: the last list was returned while it reloads; `awaitRefresh=true` returns the reloaded one.
   router.get('/sources/connectors/:connectorId/repositories', requireSourcePicker(canPickDockerSource), async (c) => {
     const search = sourceRepositorySearch(c.req.query('search'));
-    const { repositories, truncated } = await container
+    const { repositories, truncated, refreshing } = await container
       .resolve(IntegrationsService)
-      .findDockerBuildSourceRepositories(actorFor(c), c.req.param('connectorId'), search);
-    return c.json({ data: repositories, ...(truncated ? { truncated } : {}) });
+      .findDockerBuildSourceRepositories(actorFor(c), c.req.param('connectorId'), search, {
+        awaitRefresh: c.req.query('awaitRefresh') === 'true',
+      });
+    return c.json({ data: repositories, ...(truncated ? { truncated } : {}), ...(refreshing ? { refreshing } : {}) });
   });
 
   router.openapi(

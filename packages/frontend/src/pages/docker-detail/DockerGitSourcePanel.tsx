@@ -253,6 +253,7 @@ export function DockerGitSourcePanel({
     connectorOptions,
     connectorsLoading,
     repositories,
+    repositoriesLoading,
     loadErrors,
     repositoriesHint,
     onRepositorySearch,
@@ -735,6 +736,7 @@ export function DockerGitSourcePanel({
       <RepositorySourceFields
         loading={connectorsLoading}
         loadErrors={loadErrors}
+        repositoriesLoading={repositoriesLoading}
         repositoriesHint={repositoriesHint}
         onRepositorySearch={onRepositorySearch}
         connectorId={connectorId}

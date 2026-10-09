@@ -847,25 +847,37 @@ export function withDockerResourceApi<TBase extends ApiClientBaseConstructor>(Ba
     /**
      * Repositories a source can be built from. `search` finds repositories past the GitHub
      * listing bound; `truncated` says the list is cut and the search should be refined.
+     * `refreshing` says the server answered with its last list while it reloads it;
+     * `awaitRefresh` asks for the reloaded list.
      */
     async listDockerBuildRepositories(
       connectorId: string,
       target?: DockerSourceTarget,
-      search?: string
+      search?: string,
+      options?: { awaitRefresh?: boolean }
     ): Promise<{
       repositories: DockerBuildSourceRepository[];
       truncated?: GitScopeTargetTruncation;
+      refreshing?: boolean;
     }> {
       const base =
         target?.kind === "pages_project"
           ? `/pages/projects/${target.pageProjectId}/source/connectors/${connectorId}/repositories`
           : `/docker/sources/connectors/${connectorId}/repositories`;
-      const query = search?.trim() ? `?${new URLSearchParams({ search: search.trim() })}` : "";
+      const params = new URLSearchParams();
+      if (search?.trim()) params.set("search", search.trim());
+      if (options?.awaitRefresh) params.set("awaitRefresh", "true");
+      const query = params.size ? `?${params.toString()}` : "";
       const response = await this.request<{
         data: DockerBuildSourceRepository[];
         truncated?: GitScopeTargetTruncation;
+        refreshing?: boolean;
       }>(`${base}${query}`);
-      return { repositories: response?.data ?? [], truncated: response?.truncated };
+      return {
+        repositories: response?.data ?? [],
+        truncated: response?.truncated,
+        refreshing: response?.refreshing === true,
+      };
     }
 
     async discoverPagesBuild(

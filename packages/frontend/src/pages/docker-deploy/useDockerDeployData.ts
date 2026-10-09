@@ -44,6 +44,7 @@ export function useDockerDeployData({
     connectorOptions: sourceConnectorOptions,
     repositories: sourceRepositories,
     loadErrors: sourceLoadErrors,
+    repositoriesLoading: sourceRepositoriesLoading,
     repositoriesHint: sourceRepositoriesHint,
     onRepositorySearch: onSourceRepositorySearch,
   } = useDockerSourceRepositories(open && sourceMode === "repository", sourceConnectorId);
@@ -177,6 +178,7 @@ export function useDockerDeployData({
     sourceConnectorOptions,
     sourceLoadErrors,
     sourceRepositories,
+    sourceRepositoriesLoading,
     sourceRepositoriesHint,
     onSourceRepositorySearch,
   };

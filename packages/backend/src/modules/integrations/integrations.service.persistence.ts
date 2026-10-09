@@ -25,6 +25,7 @@ import {
   type SafeIntegrationConnector,
   UUID_RE,
 } from './integrations.service.core.js';
+import { invalidateSourceRepositoryLists } from './source-repository-lists.js';
 
 export abstract class IntegrationsPersistenceService extends IntegrationsCoreService {
   abstract syncGitLabConnector(id: string, userId: string | null, options?: { scheduled?: boolean }): Promise<unknown>;
@@ -83,6 +84,7 @@ export abstract class IntegrationsPersistenceService extends IntegrationsCoreSer
   }
 
   protected async replaceAllowlistEntries(connectorId: string, entries: GitLabAllowlistEntryInput[]) {
+    invalidateSourceRepositoryLists(connectorId);
     await this.db
       .delete(integrationConnectorAllowlistEntries)
       .where(eq(integrationConnectorAllowlistEntries.connectorId, connectorId));

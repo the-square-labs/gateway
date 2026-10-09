@@ -168,6 +168,7 @@ export function DockerDeployDialog({
     sourceConnectorOptions,
     sourceLoadErrors,
     sourceRepositories,
+    sourceRepositoriesLoading,
     sourceRepositoriesHint,
     onSourceRepositorySearch,
   } = useDockerDeployData({
@@ -436,6 +437,7 @@ export function DockerDeployDialog({
           sourceContextPath={sourceContextPath}
           sourceDockerfilePath={sourceDockerfilePath}
           sourceLoadErrors={sourceLoadErrors}
+          sourceRepositoriesLoading={sourceRepositoriesLoading}
           sourceRepositoriesHint={sourceRepositoriesHint}
           onSourceRepositorySearch={onSourceRepositorySearch}
           sourceMode={sourceMode}

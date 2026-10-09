@@ -6,6 +6,7 @@ import {
 } from '@/db/schema/index.js';
 import { commercialModuleUnavailable } from '@/edition/unavailable.js';
 import {
+  type GitConnectorGrant,
   type GitRepositoryScopeTarget,
   gitGrantsConnectorWide,
   gitGrantsCover,
@@ -15,7 +16,7 @@ import {
 } from '@/lib/git-scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { User } from '@/types.js';
-import { matchesScopeTargetSearch, type ScopeTargetTruncation, scopeTargetTruncation } from './git-scope-targets.js';
+import { matchesScopeTargetSearch, scopeTargetTruncation } from './git-scope-targets.js';
 import type { ResolvedGitLabUserCredential } from './gitlab-user-credentials.service.js';
 import { assertConnectorOperationAccess } from './integration-permissions.js';
 import type { VcsConnectorProvider } from './integration-provider.types.js';
@@ -29,6 +30,11 @@ import {
   type ProjectRow,
 } from './integrations.service.core.js';
 import { IntegrationsGitLabSupportService } from './integrations.service.gitlab-support.js';
+import {
+  cachedSourceRepositoryList,
+  type SourceRepositoryList,
+  sourceRepositoryListCached,
+} from './source-repository-lists.js';
 
 interface GitHubRepositorySummary {
   id: number | null;
@@ -192,15 +198,18 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
    * synced or allowlisted repository; GitHub reads the credential's repositories up to a page bound and, for a
    * search past it, GitHub's search API and the exact `owner/name`. `truncated` is present when the listing
    * was cut, so the caller should refine the search.
+   *
+   * A list without a search that calls the provider (GitHub, or GitLab for a caller limited to groups) answers
+   * from the last list while it reloads in the background; `refreshing` is then set, and a second call with
+   * `awaitRefresh` returns the reloaded list.
    */
   async findDockerBuildSourceRepositories(
     user: User,
     connectorId: string,
-    search?: string
-  ): Promise<{ repositories: DockerBuildSourceRepository[]; truncated?: ScopeTargetTruncation }> {
+    search?: string,
+    options: { awaitRefresh?: boolean } = {}
+  ): Promise<SourceRepositoryList & { refreshing?: true }> {
     const needle = search?.trim() ?? '';
-    const matches = (repository: DockerBuildSourceRepository) =>
-      matchesScopeTargetSearch(needle, repository.fullPath, repository.name);
     const connector = await this.getConnectorRow(connectorId);
     if (!['gitlab', 'github', 'git'].includes(connector.provider)) {
       throw new AppError(400, 'UNSUPPORTED_SOURCE_CONNECTOR', 'Connector does not provide a Git repository');
@@ -209,6 +218,27 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
     const provider = connector.provider as SourceProvider;
     const usable = principalGitConnectorGrants(user, `integrations:${provider}:use`, connector.id);
     if (!hasGitGrants(usable)) return { repositories: [] };
+    if (needle || !sourceRepositoryListCached(provider, usable)) {
+      return this.listSourceRepositories(user, connector, provider, usable, needle);
+    }
+    return cachedSourceRepositoryList(
+      connector.id,
+      user.id,
+      usable,
+      () => this.listSourceRepositories(user, connector, provider, usable, ''),
+      options
+    );
+  }
+
+  private async listSourceRepositories(
+    user: User,
+    connector: ConnectorRow,
+    provider: SourceProvider,
+    usable: GitConnectorGrant[],
+    needle: string
+  ): Promise<SourceRepositoryList> {
+    const matches = (repository: DockerBuildSourceRepository) =>
+      matchesScopeTargetSearch(needle, repository.fullPath, repository.name);
     // Repository discovery uses the connector credential, never the caller's personal one.
     const sourceActor: User = {
       ...user,

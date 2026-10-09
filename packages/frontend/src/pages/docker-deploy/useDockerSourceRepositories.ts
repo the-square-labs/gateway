@@ -3,10 +3,68 @@ import type { ComboboxOption } from "@/components/common/Combobox";
 import { gitScopeTruncationHint } from "@/components/common/git-scope-targets";
 import { pickerLoadError } from "@/lib/picker-load-error";
 import { api } from "@/services/api";
+import { useAuthStore } from "@/stores/auth";
 import type { DockerBuildSourceRepository, DockerSourceTarget } from "@/types";
 import type { GitScopeTargetTruncation } from "@/types/integrations";
 
 const SEARCH_DEBOUNCE_MS = 300;
+/** How long a loaded repository list is reused when a picker opens again. */
+const REPOSITORY_LIST_TTL_MS = 60_000;
+/** Integrations whose repositories load as soon as the integration list arrives. */
+const REPOSITORY_PREFETCH_LIMIT = 5;
+
+interface RepositoryList {
+  repositories: DockerBuildSourceRepository[];
+  truncated?: GitScopeTargetTruncation;
+  /** The server answered with its last list while it reloads it. */
+  refreshing?: boolean;
+}
+
+/** Repository lists by integration and picker endpoint, shared by every picker for a minute. */
+const repositoryLists = new Map<
+  string,
+  { request: Promise<RepositoryList>; list?: RepositoryList; loadedAt: number }
+>();
+
+function repositoryListKey(connectorId: string, target?: DockerSourceTarget): string {
+  // The list depends on the caller's grants; Pages Projects list through their own endpoint (and
+  // permission), every Docker target shares one.
+  const userId = useAuthStore.getState().user?.id ?? "";
+  const endpoint = target?.kind === "pages_project" ? `pages:${target.pageProjectId}` : "docker";
+  return `${userId}:${connectorId}:${endpoint}`;
+}
+
+function freshRepositoryListEntry(key: string) {
+  const entry = repositoryLists.get(key);
+  return entry && Date.now() - entry.loadedAt < REPOSITORY_LIST_TTL_MS ? entry : undefined;
+}
+
+function storeRepositoryList(key: string, list: RepositoryList) {
+  repositoryLists.set(key, { request: Promise.resolve(list), list, loadedAt: Date.now() });
+}
+
+/** The integration's repository list: a recent one, the one already loading, or a new request. */
+function loadRepositoryList(connectorId: string, target?: DockerSourceTarget) {
+  const key = repositoryListKey(connectorId, target);
+  const cached = freshRepositoryListEntry(key);
+  if (cached) return cached.request;
+  const request = api.listDockerBuildRepositories(connectorId, target);
+  const entry: { request: Promise<RepositoryList>; list?: RepositoryList; loadedAt: number } = {
+    request,
+    loadedAt: Date.now(),
+  };
+  repositoryLists.set(key, entry);
+  request.then(
+    (list) => {
+      entry.list = list;
+    },
+    () => {
+      // A failed list is not reused: the next picker asks again.
+      if (repositoryLists.get(key) === entry) repositoryLists.delete(key);
+    }
+  );
+  return request;
+}
 
 /** Why the integration or repository picker is empty, when its list could not be loaded. */
 export interface SourcePickerErrors {
@@ -22,6 +80,7 @@ export function useDockerSourceRepositories(
   const [connectorOptions, setConnectorOptions] = useState<ComboboxOption[]>([]);
   const [connectorsLoaded, setConnectorsLoaded] = useState(false);
   const [repositories, setRepositories] = useState<DockerBuildSourceRepository[]>([]);
+  const [repositoriesLoading, setRepositoriesLoading] = useState(false);
   const [connectorsError, setConnectorsError] = useState<string | null>(null);
   const [repositoriesError, setRepositoriesError] = useState<string | null>(null);
   const [listTruncation, setListTruncation] = useState<GitScopeTargetTruncation>();
@@ -40,6 +99,10 @@ export function useDockerSourceRepositories(
       .listDockerSourceConnectors()
       .then((connectors) => {
         if (cancelled) return;
+        // Load the repositories while the user picks an integration, so the picker opens filled.
+        for (const connector of connectors.slice(0, REPOSITORY_PREFETCH_LIMIT)) {
+          loadRepositoryList(connector.id, target).catch(() => undefined);
+        }
         setConnectorsError(null);
         setConnectorOptions(
           connectors.map((connector) => ({
@@ -60,30 +123,59 @@ export function useDockerSourceRepositories(
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, target]);
 
   useEffect(() => {
     setListTruncation(undefined);
     setSearch("");
+    setRepositoriesError(null);
     if (!open || !connectorId) {
       setRepositories([]);
-      setRepositoriesError(null);
+      setRepositoriesLoading(false);
       return;
     }
     let cancelled = false;
-    void api
-      .listDockerBuildRepositories(connectorId, target)
-      .then(({ repositories: items, truncated }) => {
-        if (cancelled) return;
-        setRepositoriesError(null);
-        setListTruncation(truncated);
-        setRepositories(items.filter((repository) => !repository.archived));
-      })
-      .catch((error: unknown) => {
-        if (cancelled) return;
-        setRepositories([]);
-        setRepositoriesError(pickerLoadError(error, "repositories"));
-      });
+    const key = repositoryListKey(connectorId, target);
+    const show = (list: RepositoryList) => {
+      setListTruncation(list.truncated);
+      setRepositories(list.repositories.filter((repository) => !repository.archived));
+    };
+    // The server answered with its last list while it reloads it: the reloaded list replaces it.
+    const followRefresh = (list: RepositoryList) => {
+      if (!list.refreshing) return;
+      void api
+        .listDockerBuildRepositories(connectorId, target, undefined, { awaitRefresh: true })
+        .then((reloaded) => {
+          storeRepositoryList(key, reloaded);
+          if (!cancelled) show(reloaded);
+        })
+        .catch(() => {
+          // The shown list stays; the next picker asks again.
+        });
+    };
+    const cached = freshRepositoryListEntry(key)?.list;
+    if (cached) {
+      show(cached);
+      setRepositoriesLoading(false);
+      followRefresh(cached);
+    } else {
+      // Never offer the previous integration's repositories while this one loads.
+      setRepositories([]);
+      setRepositoriesLoading(true);
+      loadRepositoryList(connectorId, target)
+        .then((list) => {
+          if (cancelled) return;
+          show(list);
+          setRepositoriesLoading(false);
+          followRefresh(list);
+        })
+        .catch((error: unknown) => {
+          if (cancelled) return;
+          setRepositories([]);
+          setRepositoriesLoading(false);
+          setRepositoriesError(pickerLoadError(error, "repositories"));
+        });
+    }
     return () => {
       cancelled = true;
     };
@@ -132,6 +224,8 @@ export function useDockerSourceRepositories(
     connectorOptions,
     connectorsLoading: open && !connectorsLoaded,
     repositories,
+    /** The selected integration's repositories are loading (no list to show yet). */
+    repositoriesLoading: open && !!connectorId && repositoriesLoading,
     loadErrors,
     /** "More may exist, refine the search." while the list or the current search is cut. */
     repositoriesHint: gitScopeTruncationHint(query ? searchTruncation : listTruncation),

@@ -10,6 +10,8 @@ interface RepositorySourceFieldsProps {
   loading?: boolean;
   /** Why the integration or repository list could not be loaded (a missing permission, say). */
   loadErrors?: SourcePickerErrors;
+  /** The selected integration's repositories are still loading. */
+  repositoriesLoading?: boolean;
   /** Shown under the repository picker while its list is cut ("refine the search"). */
   repositoriesHint?: string | null;
   /** Receives the typed repository search, so a cut list can be searched on the server. */
@@ -38,6 +40,7 @@ interface RepositorySourceFieldsProps {
 
 export function RepositorySourceFields({
   loading = false,
+  repositoriesLoading = false,
   loadErrors,
   repositoriesHint,
   onRepositorySearch,
@@ -103,13 +106,19 @@ export function RepositorySourceFields({
               const repository = repositories.find((candidate) => candidate.projectId === value);
               if (repository?.defaultBranch) onBranchChange(repository.defaultBranch);
             }}
-            placeholder={connectorId ? "Select allowlisted repository" : "Select integration first"}
+            placeholder={
+              !connectorId
+                ? "Select integration first"
+                : repositoriesLoading
+                  ? "Loading repositories…"
+                  : "Select allowlisted repository"
+            }
             searchPlaceholder="Search repositories..."
             emptyMessage={
               loadErrors?.repositories ??
               "No allowlisted repositories you may connect (needs integrations:<provider>:use on them)."
             }
-            disabled={!connectorId}
+            disabled={!connectorId || repositoriesLoading}
             onQueryChange={onRepositorySearch}
           />
           {loadErrors?.repositories ? (

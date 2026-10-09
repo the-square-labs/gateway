@@ -15,6 +15,7 @@ import {
   IntegrationsGitHubScopeTargetService,
   invalidateGitHubScopeTargets,
 } from './integrations.service.github-scope-targets.js';
+import { invalidateSourceRepositoryLists } from './source-repository-lists.js';
 
 /**
  * A path inside a GitHub repository for the contents API. The path is joined into the API URL, and URL parsing
@@ -424,6 +425,7 @@ export abstract class IntegrationsGitRepositoryService extends IntegrationsGitHu
    * source webhook arrives, so a moved, transferred or renamed repository is read again.
    */
   invalidateRepositoryScopeCache(provider: string, connectorId: string, repositoryId?: string | null): void {
+    if (!repositoryId) invalidateSourceRepositoryLists(connectorId);
     if (provider === 'github') {
       invalidateGitHubRepositoryOwners(connectorId, repositoryId);
       if (!repositoryId) invalidateGitHubScopeTargets(connectorId);
