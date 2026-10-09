@@ -57,6 +57,12 @@ type managedStorageManager struct {
 	runHostCommand func(ctx context.Context, name string, args ...string) ([]byte, error)
 	// execEngine overrides commands run in an engine container (tests).
 	execEngine func(ctx context.Context, containerID string, command []string, stdin string) ([]byte, error)
+	// runFsck overrides e2fsck (tests).
+	runFsck func(ctx context.Context, image string) (int, string, error)
+	// repairs are the disk repairs running now; incidents the engine stops
+	// nobody asked for.
+	repairs   diskRepairs
+	incidents *engineIncidents
 }
 
 func (m *managedStorageManager) loopHost() *loopHost {
@@ -98,16 +104,11 @@ func (m *managedStorageManager) stageSFTPHostKey(record managedStorageRecord, ho
 	return path, nil
 }
 
-func (m *managedStorageManager) ensureCapacity(bytes int64) error {
-	var stat unix.Statfs_t
-	if err := m.filesystemStats(m.root, &stat); err != nil {
-		return fmt.Errorf("stat storage root: %w", err)
-	}
-	free := int64(stat.Bavail) * int64(stat.Bsize)
-	if free < bytes || free-bytes < m.reserve {
-		return errors.New("insufficient managed storage capacity after reserve")
-	}
-	return nil
+// reserveCapacity holds bytes more of the node's disk for a create or a grow
+// of a storage image, counted against the full sizes of every image already
+// there (see managedDiskReservations); release once the image has its size.
+func (m *managedStorageManager) reserveCapacity(bytes int64) (func(), error) {
+	return managedDiskCapacity.reserve(m.root, bytes, m.reserve, m.statFilesystem, "insufficient managed storage capacity after reserve")
 }
 
 func (m *managedStorageManager) filesystemStats(path string, stat *unix.Statfs_t) error {
@@ -118,17 +119,16 @@ func (m *managedStorageManager) filesystemStats(path string, stat *unix.Statfs_t
 }
 
 func (m *managedStorageManager) storageRootHealthMount() (*pb.DiskMount, error) {
-	var stat unix.Statfs_t
-	if err := m.filesystemStats(m.root, &stat); err != nil {
+	usage, err := managedDiskCapacity.usage(m.root, m.statFilesystem)
+	if err != nil {
 		return nil, fmt.Errorf("stat managed storage root for health: %w", err)
 	}
-	blockSize := int64(stat.Bsize)
-	total := int64(stat.Blocks) * blockSize
-	free := int64(stat.Bavail) * blockSize
+	total := usage.Total
 	// The wizard must not advertise bytes reserved for recovery and other
-	// storage-manager work. This marker is explicitly allocatable capacity;
-	// managed workload mounts below remain raw ext4 filesystem metrics.
-	allocatable := max(int64(0), free-m.reserve)
+	// storage-manager work, nor space the existing images may still take as
+	// they fill up. This marker is explicitly allocatable capacity; managed
+	// workload mounts below remain raw ext4 filesystem metrics.
+	allocatable := max(int64(0), usage.Available(m.reserve))
 	used := total - allocatable
 	usagePercent := 0.0
 	if total > 0 {
@@ -211,9 +211,11 @@ func (m *managedStorageManager) ensureStorageSize(ctx context.Context, record *m
 		return nil
 	}
 	if target > info.Size() {
-		if err := m.ensureCapacity(target - info.Size()); err != nil {
+		release, err := m.reserveCapacity(target - info.Size())
+		if err != nil {
 			return err
 		}
+		defer release()
 		if output, err := m.hostCommand(ctx, "fallocate", "-l", fmt.Sprintf("%d", target), record.ImagePath); err != nil {
 			return fmt.Errorf("grow managed storage image: %w: %s", err, strings.TrimSpace(string(output)))
 		}
@@ -518,6 +520,10 @@ func (m *managedStorageManager) storageStatus(ctx context.Context, record manage
 	if record.Removed {
 		return "deleted"
 	}
+	// An engine whose disk is being repaired, or failed its repair, is down.
+	if m.repairs.running(record.ID) || record.DiskRepair.blocksEngine() {
+		return "stopped"
+	}
 	inspect, err := m.client.cli.ContainerInspect(ctx, record.ContainerID, mobyclient.ContainerInspectOptions{})
 	if err != nil || inspect.Container.State == nil {
 		return "stopped"
@@ -679,6 +685,15 @@ func (m *managedStorageManager) marshalManagedStorageDetail(ctx context.Context,
 			if full, ok := m.seaweedfsStorageFull(record); ok && full {
 				detail["storageFull"] = true
 			}
+		}
+		if repair := diskRepairDetail(record.DiskRepair, m.repairs.running(record.ID)); repair != nil {
+			detail["diskRepair"] = repair
+		}
+		if incidents := m.incidents.detail(record.ID); incidents != nil {
+			detail["engineIncidents"] = incidents
+		}
+		if oversubscribed := managedDiskOversubscription(m.root, m.reserve, m.statFilesystem); oversubscribed != nil {
+			detail["nodeDiskOversubscribed"] = oversubscribed
 		}
 	}
 	return jsonString(detail)

@@ -119,8 +119,8 @@ func (e *engineEvents) send(action events.Action, attributes map[string]string) 
 	maps.Copy(labels, attributes)
 	message := events.Message{Type: events.ContainerEventType, Action: action, TimeNano: e.now.UnixNano(),
 		Actor: events.Actor{ID: "s1", Attributes: labels}}
-	if requested, died := e.stops.observe(message); died {
-		e.plugin.handleEngineStop(context.Background(), e.restart, message, requested)
+	if requested, oom, died := e.stops.observe(message); died {
+		e.plugin.handleEngineStop(context.Background(), e.restart, message, requested, oom)
 	}
 }
 
@@ -246,17 +246,17 @@ func TestEngineStopsTellARequestedStopFromACrash(t *testing.T) {
 	} {
 		stops := newEngineStops()
 		for _, message := range tc.before {
-			if _, died := stops.observe(message); died {
+			if _, _, died := stops.observe(message); died {
 				t.Fatalf("%s: %s is not a die", tc.name, message.Action)
 			}
 		}
-		requested, died := stops.observe(event(events.ActionDie, 0, nil))
+		requested, _, died := stops.observe(event(events.ActionDie, 0, nil))
 		if !died || requested != tc.want {
 			t.Fatalf("%s: requested %v died %v, want requested %v", tc.name, requested, died, tc.want)
 		}
 	}
 	other := events.Message{Action: events.ActionDie, Actor: events.Actor{ID: "x", Attributes: map[string]string{}}}
-	if _, died := newEngineStops().observe(other); died {
+	if _, _, died := newEngineStops().observe(other); died {
 		t.Fatal("a container that is no engine is not followed")
 	}
 }

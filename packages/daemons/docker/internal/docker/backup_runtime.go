@@ -853,9 +853,11 @@ func (r *backupRuntime) allocateWorkspace(ctx context.Context, runID, mountPath 
 	if err := os.MkdirAll(imageDir, 0700); err != nil {
 		return nil, fmt.Errorf("create backup workspace image directory: %w", err)
 	}
-	if err := manager.ensureCapacity(bytes); err != nil {
+	release, err := manager.reserveCapacity(bytes)
+	if err != nil {
 		return nil, fmt.Errorf("reserve backup workspace: %w", err)
 	}
+	defer release()
 	imagePath := filepath.Join(imageDir, runID+".img")
 	image, err := os.OpenFile(imagePath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
 	if err != nil {

@@ -134,6 +134,11 @@ func reclaimTestStorage(t *testing.T, free int64, status string) (*managedStorag
 		t.Fatal(err)
 	}
 	m.statFilesystem = func(path string, stat *unix.Statfs_t) error {
+		if path == m.root {
+			// The node's disk for managed instances, with room.
+			stat.Bsize, stat.Blocks, stat.Bavail = 1, 64*gibibyte, 32*gibibyte
+			return nil
+		}
 		if path != record.MountPath {
 			t.Errorf("stat of %s, want the storage disk", path)
 		}
@@ -252,5 +257,19 @@ func TestInspectReportsAFullSeaweedFSStorage(t *testing.T) {
 		if !tc.full && strings.Contains(detail, "storageFull") {
 			t.Fatalf("a storage with room reports storageFull: %s", detail)
 		}
+	}
+}
+
+// A storage whose disk went read-only is not compacted (the disk watch
+// repairs it first).
+func TestReclaimSkipsAReadOnlyDisk(t *testing.T) {
+	m, id, calls, _ := reclaimTestStorage(t, 200*mebibyte, volumeStatus(t, volumeOf(11, 130, 130, true)))
+	record, _ := m.loadRecord(id)
+	loops := newFakeLoops(t)
+	loops.mounts = []mountEntry{{MountPoint: canonicalLoopPath(record.MountPath), Number: "7:7", FSType: "ext4", Options: "rw,noatime", SuperOptions: "rw,emergency_ro"}}
+	m.loops = loops.host()
+	m.reclaimSpace(context.Background())
+	if len(*calls) != 0 {
+		t.Fatalf("engine commands on a read-only disk: %+v", *calls)
 	}
 }

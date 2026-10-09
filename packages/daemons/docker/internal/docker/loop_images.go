@@ -53,6 +53,10 @@ type mountEntry struct {
 	Number     string // major:minor of the mounted device
 	FSType     string
 	Source     string
+	// Options are the per-mount options ("rw,noatime"); SuperOptions those of
+	// the filesystem ("rw,emergency_ro" for an ext4 that stopped writing).
+	Options      string
+	SuperOptions string
 }
 
 // loopHost is the kernel surface of loop-backed images (managed databases,
@@ -172,10 +176,17 @@ func parseMountInfo(r io.Reader) ([]mountEntry, error) {
 			continue
 		}
 		entry := mountEntry{MountPoint: unescapeMountInfo(fields[4]), Number: fields[2]}
-		// Optional fields end at "-", followed by the type and the source.
+		if len(fields) > 5 {
+			entry.Options = fields[5]
+		}
+		// Optional fields end at "-", followed by the type, the source and
+		// the filesystem's options.
 		if separator := slices.Index(fields[5:], "-"); separator >= 0 && 5+separator+2 < len(fields) {
 			entry.FSType = fields[5+separator+1]
 			entry.Source = unescapeMountInfo(fields[5+separator+2])
+			if 5+separator+3 < len(fields) {
+				entry.SuperOptions = fields[5+separator+3]
+			}
 		}
 		result = append(result, entry)
 	}

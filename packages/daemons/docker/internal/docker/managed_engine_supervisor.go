@@ -84,11 +84,22 @@ func (m *managedDatabaseManager) startStoppedEngine(ctx context.Context, id, con
 	if !record.DesiredRunning || record.Deleting || record.ContainerID == "" || (containerID != "" && containerID != record.ContainerID) {
 		return nil
 	}
+	// A disk being repaired (or whose repair failed) keeps its engine stopped;
+	// the disk watch starts it once the disk is repaired.
+	if m.repairs.running(id) || record.DiskRepair.blocksEngine() {
+		return nil
+	}
 	if stopped, err := engineStopped(ctx, m.client, record.ContainerID); err != nil || !stopped {
 		return err
 	}
 	if err := m.ensureMounted(ctx, &record); err != nil {
 		return err
+	}
+	// An engine on a read-only disk only fails again: the disk is repaired
+	// instead, which starts the engine afterwards.
+	if readOnly, reason := m.loopHost().readOnlyMount(record.MountPath); readOnly {
+		go m.repairDisk(context.WithoutCancel(ctx), id, reason)
+		return nil
 	}
 	if missing := m.missingRuntimeFiles(record); len(missing) > 0 {
 		if err := m.saveRecord(record); err != nil {
@@ -118,6 +129,9 @@ func (m *managedStorageManager) startStoppedEngine(ctx context.Context, id, cont
 	if !record.DesiredRunning || record.Removed || record.ContainerID == "" || (containerID != "" && containerID != record.ContainerID) {
 		return nil
 	}
+	if m.repairs.running(id) || record.DiskRepair.blocksEngine() {
+		return nil
+	}
 	if stopped, err := engineStopped(ctx, m.client, record.ContainerID); err != nil || !stopped {
 		return err
 	}
@@ -127,6 +141,10 @@ func (m *managedStorageManager) startStoppedEngine(ctx context.Context, id, cont
 	m.setEngineRun(record.ContainerID, engineRun{exited: run.exited, restartedAt: run.restartedAt})
 	if err := m.ensureMounted(ctx, &record); err != nil {
 		return err
+	}
+	if readOnly, reason := m.loopHost().readOnlyMount(record.MountPath); readOnly {
+		go m.repairDisk(context.WithoutCancel(ctx), id, reason)
+		return nil
 	}
 	if missing := m.missingRuntimeFiles(record); len(missing) > 0 {
 		if err := m.saveRecord(record); err != nil {
@@ -193,6 +211,9 @@ func (p *DockerPlugin) runManagedEngineSupervisor(ctx context.Context) {
 		// up with deleted objects alongside.
 		go p.storageManager.runSpaceReclaim(ctx)
 	}
+	// So are their disks: one that went read-only is repaired, and the space
+	// of deleted data goes back to the node.
+	go p.runManagedDiskWatch(ctx)
 	restarts := newEngineRestarts()
 	for {
 		p.watchEngineEvents(ctx, restarts)
@@ -232,8 +253,8 @@ func (p *DockerPlugin) watchEngineEvents(ctx context.Context, restarts *engineRe
 			}
 			return
 		case message := <-stream.Messages:
-			if requested, died := stops.observe(message); died {
-				p.handleEngineStop(ctx, restarts, message, requested)
+			if requested, oom, died := stops.observe(message); died {
+				p.handleEngineStop(ctx, restarts, message, requested, oom)
 			}
 		}
 	}
@@ -241,9 +262,13 @@ func (p *DockerPlugin) watchEngineEvents(ctx context.Context, restarts *engineRe
 
 // handleEngineStop starts an engine that died while it should run.
 // requested is a stop asked for through Docker's API (see engineStops).
-func (p *DockerPlugin) handleEngineStop(ctx context.Context, restarts *engineRestarts, message events.Message, requested bool) {
+func (p *DockerPlugin) handleEngineStop(ctx context.Context, restarts *engineRestarts, message events.Message, requested, oom bool) {
 	containerID := message.Actor.ID
 	if id := message.Actor.Attributes[managedDatabaseLabel]; id != "" && p.databaseManager != nil {
+		if !requested {
+			p.databaseManager.incidents.record(id, oom)
+			p.logger.Warn("managed database engine stopped on its own; starting it again", "id", id, "outOfMemory", oom)
+		}
 		restarts.schedule("database/"+id, func() {
 			restartCtx, cancel := context.WithTimeout(ctx, engineRestartTimeout)
 			defer cancel()
@@ -254,6 +279,10 @@ func (p *DockerPlugin) handleEngineStop(ctx context.Context, restarts *engineRes
 	}
 	if id := message.Actor.Attributes[managedStorageLabel]; id != "" && p.storageManager != nil {
 		p.storageManager.recordEngineStop(containerID, requested)
+		if !requested {
+			p.storageManager.incidents.record(id, oom)
+			p.logger.Warn("managed storage engine stopped on its own; starting it again", "id", id, "outOfMemory", oom)
+		}
 		restarts.schedule("storage/"+id, func() {
 			restartCtx, cancel := context.WithTimeout(ctx, engineRestartTimeout)
 			defer cancel()
@@ -284,12 +313,13 @@ func newEngineStops() *engineStops {
 }
 
 // observe follows one container event. For a die of an engine container it
-// reports died and whether the stop was asked for: a stop signal within
-// engineStopRequestWindow before it and no OOM kill since the engine started.
-func (s *engineStops) observe(message events.Message) (requested, died bool) {
+// reports died, whether the stop was asked for (a stop signal within
+// engineStopRequestWindow before it and no OOM kill since the engine
+// started) and whether the kernel killed it for memory.
+func (s *engineStops) observe(message events.Message) (requested, oom, died bool) {
 	attributes := message.Actor.Attributes
 	if attributes[managedDatabaseLabel] == "" && attributes[managedStorageLabel] == "" {
-		return false, false
+		return false, false, false
 	}
 	containerID := message.Actor.ID
 	at := time.Unix(0, message.TimeNano)
@@ -305,12 +335,13 @@ func (s *engineStops) observe(message events.Message) (requested, died bool) {
 		delete(s.oom, containerID)
 	case events.ActionDie:
 		signalled, ok := s.signalled[containerID]
+		oom = s.oom[containerID] || attributes["exitCode"] == "137" && !ok
 		requested = ok && !s.oom[containerID] && at.Sub(signalled) <= engineStopRequestWindow
 		delete(s.signalled, containerID)
 		delete(s.oom, containerID)
-		return requested, true
+		return requested, oom, true
 	}
-	return false, false
+	return false, false, false
 }
 
 // engineStopSignals are the signals that stop an engine, as Docker logs them

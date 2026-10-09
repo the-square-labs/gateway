@@ -151,6 +151,9 @@ type managedStorageRecord struct {
 	// DeleteData marks a removal that also deletes the data image; one that
 	// could not finish is completed by a repeated command or the repair pass.
 	DeleteData bool `json:"deleteData,omitempty"`
+	// DiskRepair is the last repair of the image's filesystem after it went
+	// read-only (see managed_disk_repair.go).
+	DiskRepair *managedDiskRepair `json:"diskRepair,omitempty"`
 }
 
 func newManagedStorageManager(cfg *config.Config, client *Client, logger *slog.Logger) (*managedStorageManager, error) {
@@ -166,7 +169,7 @@ func newManagedStorageManager(cfg *config.Config, client *Client, logger *slog.L
 	if cfg.Docker.Database.ReserveBytes < 0 {
 		return nil, errors.New("storage reserve bytes cannot be negative")
 	}
-	return &managedStorageManager{client: client, logger: logger, root: root, reserve: cfg.Docker.Database.ReserveBytes}, nil
+	return &managedStorageManager{client: client, logger: logger, root: root, reserve: cfg.Docker.Database.ReserveBytes, incidents: newEngineIncidents()}, nil
 }
 
 func (p *DockerPlugin) handleManagedStorageCommand(cmd *pb.DockerStorageCommand, result *pb.CommandResult) {
@@ -232,6 +235,11 @@ func (m *managedStorageManager) handle(ctx context.Context, action, id, configJS
 		if input.Engine != record.engine() {
 			return "", fmt.Errorf("managed storage engine mismatch: record is %s, update is %s", record.engine(), input.Engine)
 		}
+		if input.OperationID == "" || input.OperationID != record.OperationID {
+			if err := m.diskBlocksCommand(&record, false); err != nil {
+				return "", err
+			}
+		}
 		if err := m.update(ctx, &record, input); err != nil {
 			return "", err
 		}
@@ -259,6 +267,11 @@ func (m *managedStorageManager) handle(ctx context.Context, action, id, configJS
 				return "", fmt.Errorf("managed storage engine mismatch: record is %s, restart is %s", record.engine(), parsed.Engine)
 			}
 			input = &parsed
+		}
+		if input == nil || input.OperationID == "" || input.OperationID != record.OperationID {
+			if err := m.diskBlocksCommand(&record, true); err != nil {
+				return "", err
+			}
 		}
 		if err := m.ensureMounted(ctx, &record); err != nil {
 			return "", err
@@ -295,6 +308,9 @@ func (m *managedStorageManager) handle(ctx context.Context, action, id, configJS
 		record, err := m.loadRecord(id)
 		if err != nil {
 			return "", err
+		}
+		if m.repairs.running(id) {
+			return "", errDiskBeingRepaired("managed storage")
 		}
 		if err := m.client.StopContainer(ctx, record.ContainerID, 20); err != nil {
 			return "", err
@@ -547,9 +563,11 @@ func (m *managedStorageManager) create(ctx context.Context, id string, input man
 	} else if containerID != "" {
 		return m.adoptLostRecord(ctx, m.newRecord(id, input, ""), containerID, input)
 	}
-	if err := m.ensureCapacity(input.Resources.StorageBytes); err != nil {
+	release, err := m.reserveCapacity(input.Resources.StorageBytes)
+	if err != nil {
 		return managedStorageRecord{}, err
 	}
+	defer release()
 	// Resolve the runtime image before allocating anything: a node that cannot
 	// obtain it must fail with a typed error and leave no disk image behind.
 	image, err := m.ensureEngineImage(ctx, input.Engine)

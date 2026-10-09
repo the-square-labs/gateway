@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -862,14 +863,56 @@ func marshalManagedDatabaseDetail(record managedDatabaseRecord, status string) (
 	return marshalManagedDatabaseInspect(record, status, nil)
 }
 
+// inspectDetail answers inspect. An engine whose disk is being repaired (or
+// failed its repair) is stopped; so is one that keeps failing, even in the
+// seconds it runs between two restarts by the supervisor (engineExited).
+// The detail carries the disk repair, the engine's unrequested stops of the
+// last day (out-of-memory kills among them) and an oversubscribed node disk.
+func (m *managedDatabaseManager) inspectDetail(ctx context.Context, record managedDatabaseRecord) (string, error) {
+	inspect, inspectErr := m.client.cli.ContainerInspect(ctx, record.ContainerID, mobyclient.ContainerInspectOptions{})
+	status := "stopped"
+	var startedAt time.Time
+	if inspectErr == nil {
+		state := inspect.Container.State
+		status = managedDatabaseContainerStatus(state)
+		if state != nil && state.Running {
+			startedAt, _ = time.Parse(time.RFC3339Nano, state.StartedAt)
+		}
+	}
+	extras := map[string]any{}
+	repairing := m.repairs.running(record.ID)
+	if repair := diskRepairDetail(record.DiskRepair, repairing); repair != nil {
+		extras["diskRepair"] = repair
+	}
+	switch {
+	case repairing || record.DiskRepair.blocksEngine():
+		if status != "paused" {
+			status = "stopped"
+		}
+	case status != "paused" && record.DesiredRunning && m.incidents.crashLooping(record.ID, startedAt):
+		status = "stopped"
+		extras["engineExited"] = true
+	}
+	if incidents := m.incidents.detail(record.ID); incidents != nil {
+		extras["engineIncidents"] = incidents
+	}
+	if oversubscribed := managedDiskOversubscription(m.root, m.reserve, m.statFilesystem); oversubscribed != nil {
+		extras["nodeDiskOversubscribed"] = oversubscribed
+	}
+	return marshalManagedDatabaseInspect(record, status, m.missingRuntimeFiles(record), extras)
+}
+
 // marshalManagedDatabaseInspect is the inspect detail; runtimeMissing names the
 // runtime files the node lost (see managed_runtime_files.go).
-func marshalManagedDatabaseInspect(record managedDatabaseRecord, status string, runtimeMissing []string) (string, error) {
+func marshalManagedDatabaseInspect(record managedDatabaseRecord, status string, runtimeMissing []string, extras ...map[string]any) (string, error) {
 	detail := map[string]any{
 		"id": record.ID, "containerId": record.ContainerID, "status": status, "publishedPort": record.PublishedPort, "publishedNativePort": record.PublishedNativePort, "tlsEnabled": record.TLSEnabled, "operationId": record.OperationID,
 	}
 	if len(runtimeMissing) > 0 {
 		detail["runtimeMissing"] = runtimeMissing
+	}
+	for _, extra := range extras {
+		maps.Copy(detail, extra)
 	}
 	value, err := json.Marshal(detail)
 	if err != nil {

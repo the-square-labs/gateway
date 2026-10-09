@@ -11,19 +11,13 @@ import (
 	"strings"
 
 	mobyclient "github.com/moby/moby/client"
-	"golang.org/x/sys/unix"
 )
 
-func (m *managedDatabaseManager) ensureCapacity(bytes int64) error {
-	var stat unix.Statfs_t
-	if err := unix.Statfs(m.root, &stat); err != nil {
-		return fmt.Errorf("stat database storage: %w", err)
-	}
-	free := int64(stat.Bavail) * int64(stat.Bsize)
-	if free < bytes || free-bytes < m.reserve {
-		return fmt.Errorf("insufficient database storage capacity after reserve")
-	}
-	return nil
+// reserveCapacity holds bytes more of the node's disk for a create or a grow
+// of a database image, counted against the full sizes of every image already
+// there (see managedDiskReservations); release once the image has its size.
+func (m *managedDatabaseManager) reserveCapacity(bytes int64) (func(), error) {
+	return managedDiskCapacity.reserve(m.root, bytes, m.reserve, m.statFilesystem, "insufficient database storage capacity after reserve")
 }
 
 // createImage removes its own partial image on failure; a leftover would make
@@ -81,9 +75,11 @@ func (m *managedDatabaseManager) ensureStorageSize(ctx context.Context, record *
 		return errors.New("managed database storage cannot be reduced")
 	}
 	if targetSize > info.Size() {
-		if err := m.ensureCapacity(targetSize - info.Size()); err != nil {
+		release, err := m.reserveCapacity(targetSize - info.Size())
+		if err != nil {
 			return err
 		}
+		defer release()
 		if output, err := exec.CommandContext(ctx, "fallocate", "-l", fmt.Sprintf("%d", targetSize), record.ImagePath).CombinedOutput(); err != nil {
 			return fmt.Errorf("grow managed database storage image: %w: %s", err, strings.TrimSpace(string(output)))
 		}

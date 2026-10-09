@@ -215,6 +215,14 @@ func (m *managedStorageManager) reclaimSpace(ctx context.Context) {
 		if record.engine() != managedStorageEngineSeaweedFS || record.Removed || !record.DesiredRunning || record.ContainerID == "" {
 			continue
 		}
+		// A disk that no longer takes writes cannot be compacted; the disk
+		// watch repairs it first.
+		if m.repairs.running(record.ID) || record.DiskRepair.blocksEngine() {
+			continue
+		}
+		if readOnly, _ := m.loopHost().readOnlyMount(record.MountPath); readOnly {
+			continue
+		}
 		if err := m.reclaimSeaweedFSSpace(ctx, record); err != nil {
 			m.logger.Debug("managed storage space of deleted objects not reclaimed in this pass", "id", record.ID, "error", err)
 		}
@@ -253,6 +261,9 @@ func (m *managedStorageManager) reclaimSeaweedFSSpace(ctx context.Context, recor
 	}
 	m.logger.Info("managed storage gave back the space of deleted objects", "id", record.ID,
 		"volumes", len(plan.VolumeIDs), "freedBytes", after.Free-space.Free, "freeBytes", after.Free)
+	// The compacted volume files are smaller now; the node's disk gets that
+	// space back once the storage's filesystem discards it.
+	trimInstanceDisk(m.loopHost(), m.logger, "managed storage", record.ID, record.MountPath)
 	return nil
 }
 

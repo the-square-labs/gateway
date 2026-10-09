@@ -16,6 +16,7 @@ import (
 	mobyclient "github.com/moby/moby/client"
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/docker-daemon/internal/config"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -258,6 +259,9 @@ type managedDatabaseRecord struct {
 	// delete could not finish is never remounted; the repair pass and a
 	// repeated delete complete it.
 	Deleting bool `json:"deleting,omitempty"`
+	// DiskRepair is the last repair of the image's filesystem after it went
+	// read-only (see managed_disk_repair.go).
+	DiskRepair *managedDiskRepair `json:"diskRepair,omitempty"`
 }
 
 // managedDatabaseRuntimeStats is intentionally a narrow managed-database
@@ -290,6 +294,14 @@ type managedDatabaseManager struct {
 	tlsReloads  resourceLocks
 	// loops overrides the kernel loop-device surface (tests).
 	loops *loopHost
+	// statFilesystem overrides statfs of the storage root (tests).
+	statFilesystem func(string, *unix.Statfs_t) error
+	// runFsck overrides e2fsck (tests).
+	runFsck func(ctx context.Context, image string) (int, string, error)
+	// repairs are the disk repairs running now; incidents the engine stops
+	// nobody asked for.
+	repairs   diskRepairs
+	incidents *engineIncidents
 }
 
 func newManagedDatabaseManager(cfg *config.Config, client *Client, logger *slog.Logger) (*managedDatabaseManager, error) {
@@ -309,7 +321,7 @@ func newManagedDatabaseManager(cfg *config.Config, client *Client, logger *slog.
 	if reserve < 0 {
 		return nil, fmt.Errorf("database reserve bytes cannot be negative")
 	}
-	return &managedDatabaseManager{cfg: cfg, client: client, logger: logger, root: root, reserve: reserve}, nil
+	return &managedDatabaseManager{cfg: cfg, client: client, logger: logger, root: root, reserve: reserve, incidents: newEngineIncidents()}, nil
 }
 
 func (p *DockerPlugin) handleManagedDatabaseCommand(cmd *pb.DockerDatabaseCommand, result *pb.CommandResult) {
@@ -436,6 +448,9 @@ func (m *managedDatabaseManager) handle(ctx context.Context, action, id, configJ
 		if err != nil {
 			return "", err
 		}
+		if err := m.diskBlocksCommand(&record, true); err != nil {
+			return "", err
+		}
 		if err := m.ensureMounted(ctx, &record); err != nil {
 			return "", err
 		}
@@ -459,6 +474,11 @@ func (m *managedDatabaseManager) handle(ctx context.Context, action, id, configJ
 		if err != nil {
 			return "", err
 		}
+		if record.OperationID != input.OperationID {
+			if err := m.diskBlocksCommand(&record, true); err != nil {
+				return "", err
+			}
+		}
 		if err := m.restart(ctx, &record, input); err != nil {
 			return "", err
 		}
@@ -475,6 +495,11 @@ func (m *managedDatabaseManager) handle(ctx context.Context, action, id, configJ
 		if err != nil {
 			return "", err
 		}
+		if record.OperationID != input.OperationID || input.PreserveLifecycleOperationID {
+			if err := m.diskBlocksCommand(&record, false); err != nil {
+				return "", err
+			}
+		}
 		if err := m.update(ctx, &record, input); err != nil {
 			return "", err
 		}
@@ -486,6 +511,9 @@ func (m *managedDatabaseManager) handle(ctx context.Context, action, id, configJ
 		record, err := m.loadRecord(id)
 		if err != nil {
 			return "", err
+		}
+		if m.repairs.running(id) {
+			return "", errDiskBeingRepaired("managed database")
 		}
 		if err := m.stopContainer(ctx, record.ContainerID); err != nil {
 			return "", err
@@ -506,6 +534,9 @@ func (m *managedDatabaseManager) handle(ctx context.Context, action, id, configJ
 		record, err := m.loadRecord(id)
 		if err != nil {
 			return "", err
+		}
+		if m.repairs.running(id) {
+			return "", errDiskBeingRepaired("managed database")
 		}
 		if action == "pause" {
 			if err := m.pauseContainer(ctx, record.ContainerID); err != nil {
@@ -549,12 +580,7 @@ func (m *managedDatabaseManager) handle(ctx context.Context, action, id, configJ
 		if err != nil {
 			return "", err
 		}
-		inspect, inspectErr := m.client.cli.ContainerInspect(ctx, record.ContainerID, mobyclient.ContainerInspectOptions{})
-		status := "stopped"
-		if inspectErr == nil {
-			status = managedDatabaseContainerStatus(inspect.Container.State)
-		}
-		return marshalManagedDatabaseInspect(record, status, m.missingRuntimeFiles(record))
+		return m.inspectDetail(ctx, record)
 	case "clickhouse_principal_apply_v1":
 		var input clickHousePrincipalCommand
 		if err := json.Unmarshal([]byte(configJSON), &input); err != nil {

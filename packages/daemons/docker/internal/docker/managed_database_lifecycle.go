@@ -584,9 +584,11 @@ func (m *managedDatabaseManager) create(ctx context.Context, id string, input ma
 	} else if containerID != "" {
 		return m.adoptLostRecord(ctx, record, containerID, input)
 	}
-	if err := m.ensureCapacity(input.StorageSizeBytes); err != nil {
+	release, err := m.reserveCapacity(input.StorageSizeBytes)
+	if err != nil {
 		return managedDatabaseRecord{}, err
 	}
+	defer release()
 
 	// No record and no container exist, so anything at these paths is left
 	// from a create that failed before (or from an older release) and is not

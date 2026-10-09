@@ -389,7 +389,7 @@ func TestReadLoopDevicesAndMountInfo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(mounts) != 2 || mounts[1] != (mountEntry{MountPoint: "/var/lib/docker-daemon/databases/mounts/a b", Number: "7:7", FSType: "ext4", Source: "/dev/loop7"}) {
+	if len(mounts) != 2 || mounts[1] != (mountEntry{MountPoint: "/var/lib/docker-daemon/databases/mounts/a b", Number: "7:7", FSType: "ext4", Source: "/dev/loop7", Options: "rw,noatime", SuperOptions: "rw"}) {
 		t.Fatalf("mounts = %+v", mounts)
 	}
 }
