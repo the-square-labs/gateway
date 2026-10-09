@@ -1,6 +1,6 @@
 import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { dockerRegistryNodeBindings } from '@/db/schema/index.js';
+import { dockerRegistryNodeBindings, nodes } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { DockerInternalRegistryService } from '@/modules/docker/docker-registry-internal.service.js';
 import type { EventBusService } from './event-bus.service.js';
@@ -347,6 +347,9 @@ export class RelayRegistryService {
       .select()
       .from(dockerRegistryNodeBindings)
       .where(and(eq(dockerRegistryNodeBindings.nodeId, nodeId), eq(dockerRegistryNodeBindings.status, 'active')));
+    // Nothing to sync to a node that cannot hold bindings: nginx, monitoring, relay and storage nodes, or a Docker
+    // daemon without registry access support (it never got a binding, so there is none to clear either).
+    if (bindings.length === 0 && !(await this.supportsRegistryBindings(nodeId))) return;
     // Context rows are independently revocable grants, not daemon transport rows.
     // Git releases and HA can legitimately share a repository on the same node.
     const repositories = new Map<string, typeof bindings>();
@@ -447,6 +450,16 @@ export class RelayRegistryService {
           )
         );
     }
+  }
+
+  private async supportsRegistryBindings(nodeId: string): Promise<boolean> {
+    const [node] = await this.db
+      .select({ type: nodes.type, capabilities: nodes.capabilities })
+      .from(nodes)
+      .where(eq(nodes.id, nodeId))
+      .limit(1);
+    const reported = (node?.capabilities as Record<string, unknown> | null)?.capabilities;
+    return node?.type === 'docker' && Array.isArray(reported) && reported.includes('docker_registry_proxy_v1');
   }
 
   private async refreshAll(): Promise<void> {

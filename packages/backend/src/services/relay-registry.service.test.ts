@@ -178,3 +178,43 @@ describe('registry bindings of earlier Availability images', () => {
     expect(synced.sort()).toEqual(['node-1', 'node-2']);
   });
 });
+
+describe('registry binding sync of nodes without bindings', () => {
+  function withNode(node: { type: string; capabilities: unknown }) {
+    const db = {
+      select: () => ({
+        from: () => ({
+          // The bindings query awaits where(); the node query reads one row through limit().
+          where: () => Object.assign(Promise.resolve([]), { limit: async () => [node] }),
+        }),
+      }),
+      update: () => ({ set: () => ({ where: async () => undefined }) }),
+    };
+    const dispatch = { sendDockerRegistryBindings: vi.fn(async () => ({ success: true })) };
+    const relayRegistry = new RelayRegistryService(db as never, {} as never, dispatch as never, {} as never);
+    return { relayRegistry, dispatch };
+  }
+
+  it('sends nothing to an nginx, monitoring, relay or storage node', async () => {
+    for (const type of ['nginx', 'monitoring', 'relay', 'storage']) {
+      const { relayRegistry, dispatch } = withNode({ type, capabilities: { capabilities: [] } });
+      await relayRegistry.syncNode('node-1');
+      expect(dispatch.sendDockerRegistryBindings).not.toHaveBeenCalled();
+    }
+  });
+
+  it('sends nothing to a Docker daemon without registry access support', async () => {
+    const { relayRegistry, dispatch } = withNode({ type: 'docker', capabilities: { capabilities: [] } });
+    await relayRegistry.syncNode('node-1');
+    expect(dispatch.sendDockerRegistryBindings).not.toHaveBeenCalled();
+  });
+
+  it('clears the bindings of a Docker daemon that supports registry access', async () => {
+    const { relayRegistry, dispatch } = withNode({
+      type: 'docker',
+      capabilities: { capabilities: ['docker_registry_proxy_v1'] },
+    });
+    await relayRegistry.syncNode('node-1');
+    expect(dispatch.sendDockerRegistryBindings).toHaveBeenCalledWith('node-1', []);
+  });
+});
