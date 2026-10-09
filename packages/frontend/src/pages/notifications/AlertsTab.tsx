@@ -161,7 +161,12 @@ export function AlertsTab({
     {
       id: "name",
       header: "Name",
-      render: (rule) => <span className="text-sm font-medium">{rule.name}</span>,
+      render: (rule) => (
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="truncate text-sm font-medium">{rule.name}</span>
+          {rule.isBuiltin && <Badge size="inline">Built-in</Badge>}
+        </div>
+      ),
     },
     {
       id: "category",

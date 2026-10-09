@@ -280,8 +280,8 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
         webhookId: { type: 'string', description: 'Filter by webhook UUID' },
         status: {
           type: 'string',
-          enum: ['success', 'failed', 'retrying', 'pending'],
-          description: 'Filter by delivery status',
+          enum: ['success', 'failed', 'retrying', 'pending', 'superseded'],
+          description: 'Filter by delivery status; superseded = not sent (see the delivery error for why)',
         },
         eventType: { type: 'string', description: 'Filter by event type' },
         page: { type: 'number' },

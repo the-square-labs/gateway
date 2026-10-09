@@ -44,7 +44,7 @@ const DELIVERY_COLUMNS: ResourceListColumn<WebhookDelivery>[] = [
   { id: "severity", label: "Severity", width: "120px" },
   { id: "http", label: "HTTP", width: "96px" },
   { id: "time", label: "Time", width: "96px" },
-  { id: "attempt", label: "Attempt", width: "100px" },
+  { id: "attempt", label: "Attempts", width: "100px" },
   { id: "when", label: "When", width: "180px" },
 ];
 
@@ -317,9 +317,7 @@ export function DeliveryLogTab({
                       </span>
                     </ResourceListCell>
                     <ResourceListCell>
-                      <span className="text-sm text-muted-foreground">
-                        {d.attempt}/{d.maxAttempts}
-                      </span>
+                      <span className="text-sm text-muted-foreground">{d.attempt}</span>
                     </ResourceListCell>
                     <ResourceListCell>
                       <RelativeTime value={d.createdAt} className="text-xs text-muted-foreground" />
