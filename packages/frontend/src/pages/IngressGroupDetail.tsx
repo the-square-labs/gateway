@@ -57,7 +57,11 @@ export function IngressGroupDetail() {
     return (
       <PageTransition>
         <div className="p-6">
-          <EmptyState message="Ingress group not found." />
+          <EmptyState
+            message="Ingress group not found."
+            actionLabel="Back to Ingress Groups"
+            onAction={() => navigate(ingressGroupsRoute())}
+          />
         </div>
       </PageTransition>
     );
@@ -89,7 +93,7 @@ export function IngressGroupDetail() {
     <PageTransition>
       <div className="h-full space-y-4 overflow-y-auto p-6">
         <PageHeader
-          leading={<PageBackButton />}
+          leading={<PageBackButton onClick={() => navigate(ingressGroupsRoute())} />}
           title={group.name}
           description={
             group.description || `${group.routeCount} routes · ${group.domainCount} domains`
