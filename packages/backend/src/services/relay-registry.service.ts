@@ -469,7 +469,10 @@ export class RelayRegistryService {
       .select({ nodeId: dockerRegistryNodeBindings.nodeId })
       .from(dockerRegistryNodeBindings)
       .where(eq(dockerRegistryNodeBindings.status, 'active'));
-    const nodeIds = [...new Set(rows.map(({ nodeId }) => nodeId))];
+    // A node that is not connected (yet) is synced when it connects (node.changed online), not on every refresh.
+    const nodeIds = [...new Set(rows.map(({ nodeId }) => nodeId))].filter(
+      (nodeId) => this.dispatch.isNodeConnected?.(nodeId) !== false
+    );
     const results = await Promise.allSettled(nodeIds.map((nodeId) => this.syncNode(nodeId)));
     results.forEach((result, index) => {
       const nodeId = nodeIds[index]!;

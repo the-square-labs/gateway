@@ -218,3 +218,15 @@ describe('registry binding sync of nodes without bindings', () => {
     expect(dispatch.sendDockerRegistryBindings).toHaveBeenCalledWith('node-1', []);
   });
 });
+
+describe('registry sync failures that are expected states (rc.8 O-6)', () => {
+  it('logs nothing at warn level for a node not connected yet or an unreachable local relay', async () => {
+    const { isExpectedSyncFailure } = await import('./relay-registry-sync.js');
+    expect(isExpectedSyncFailure(new Error('Node 1111 is not connected'))).toBe(true);
+    expect(isExpectedSyncFailure(new Error('Node disconnected'))).toBe(true);
+    expect(isExpectedSyncFailure(new Error('14 UNAVAILABLE: Name resolution failed for target dns:relay:9443'))).toBe(
+      true
+    );
+    expect(isExpectedSyncFailure(new Error('Docker daemon rejected internal registry bindings'))).toBe(false);
+  });
+});

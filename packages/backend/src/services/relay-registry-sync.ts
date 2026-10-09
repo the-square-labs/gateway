@@ -1,4 +1,5 @@
 import { createChildLogger } from '@/lib/logger.js';
+import { isNodeConnectionError } from '@/lib/node-connection-error.js';
 
 const logger = createChildLogger('RelayRegistryService');
 
@@ -36,11 +37,25 @@ export function withinNodeSyncBound(sync: Promise<void>, nodeId: string): Promis
  * and a node whose sync keeps failing lets its 120-second tokens expire. Each is logged, the same one per key once per
  * interval and otherwise at debug level, so a sync failing every 15 s does not flood the log.
  */
+/**
+ * Failures that are an expected state, not a sync problem: the node is not connected (yet; it is synced when it
+ * connects), or the local relay does not answer (its outage is reported on its own). Stand rc.8, O-6.
+ */
+export function isExpectedSyncFailure(error: unknown): boolean {
+  if (isNodeConnectionError(error)) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /Name resolution failed for target dns:|^14 UNAVAILABLE:|ECONNREFUSED/.test(message);
+}
+
 export class RegistrySyncFailureLog {
   private readonly reported = new Map<string, { message: string; at: number }>();
 
   report(key: string, error: unknown, context: Record<string, unknown> = {}, now = Date.now()): void {
     const message = error instanceof Error ? error.message : String(error);
+    if (isExpectedSyncFailure(error)) {
+      logger.debug('Internal registry sync waits for the node or the relay', { ...context, error: message });
+      return;
+    }
     const last = this.reported.get(key);
     if (last?.message === message && now - last.at < FAILURE_REPORT_MS) {
       logger.debug('Internal registry sync failed again', { ...context, error: message });
