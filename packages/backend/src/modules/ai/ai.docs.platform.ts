@@ -310,7 +310,7 @@ The render context is nested and canonical. Historical flat variables such as \`
 - \`{{node.id}}\`, \`{{node.name}}\`, \`{{health.status}}\`
 - \`{{certificate.days_until_expiry}}\`, \`{{certificate.expiry_date}}\`
 - \`{{state.current}}\`, \`{{event.name}}\`, \`{{operation.kind}}\`, \`{{operation.phase}}\`, \`{{operation.trigger}}\`
-- \`{{failure.code}}\`, \`{{details.*}}\`, \`{{fired.at}}\`, \`{{fired.duration}}\`, \`{{resolution.reason}}\`, \`{{gateway.url}}\`
+- \`{{failure.code}}\`, \`{{details.*}}\`, \`{{fired.at}}\`, \`{{fired.duration}}\` (how long the alert lasted, such as 3m 37s; \`{{fired.duration.seconds}}\` for the number), \`{{resolution.reason}}\`, \`{{gateway.url}}\`
 
 The category metadata returned by \`GET /api/notifications/alert-rules/categories\` is authoritative for event-specific variables. Build and Compose lifecycle events place safe structured fields in \`operation.*\`, \`failure.code\`, and \`details.*\`; database threshold alerts use \`metric.*\`; certificate alerts use \`certificate.*\`.
 
@@ -352,7 +352,7 @@ Available in all templates:
 ## Template Examples
 - \`CPU at {{round metric.value 1}}% on {{resource.name}} (threshold: {{metric.operator}} {{metric.threshold}}%)\`
 - \`{{resource.name}} {{metric.name}} has been above {{metric.threshold}}% for {{formatDuration metric.duration}}\`
-- \`Resolved after {{formatDuration fired.duration}} — {{metric.name}} now at {{round metric.value 1}}%\`
+- \`Resolved after {{fired.duration}} — {{metric.name}} now at {{round metric.value 1}}%\`
 - \`{{#if (gt metric.value 95)}}🔥 CRITICAL{{else}}⚠️ Warning{{/if}}: {{alert.name}}\`
 
 ## API Endpoints

@@ -98,7 +98,7 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
         resolveMessageTemplate: {
           type: 'string',
           description:
-            'Handlebars message sent when the alert resolves (e.g., "{{resource.name}} is back online after {{formatDuration fired.duration}}"). Omit to use Gateway\'s resolve text for the rule; the firing message is never reused.',
+            'Handlebars message sent when the alert resolves (e.g., "{{resource.name}} is back online after {{fired.duration}}"). Omit to use Gateway\'s resolve text for the rule; the firing message is never reused.',
         },
         webhookIds: { type: 'array', items: { type: 'string' }, description: 'Webhook IDs to deliver to' },
         cooldownSeconds: { type: 'number', description: 'Cooldown between repeated firings (default 900)' },

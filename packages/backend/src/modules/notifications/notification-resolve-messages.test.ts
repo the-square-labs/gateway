@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { isRecoveryEvent } from './notification-catalog.js';
+import { alertDurationSeconds } from './notification-evaluator.service.js';
+import { evaluateWindowRatio } from './notification-metrics.js';
 import { defaultResolveMessage, resolveTemplateOf } from './notification-resolve-messages.js';
+import { buildNotificationTemplateContext, renderTemplate } from './notification-templates.js';
 
 describe('resolve messages', () => {
   it('tells the recovery for the rule, with how long the alert lasted', () => {
@@ -41,5 +45,54 @@ describe('resolve messages', () => {
     expect(resolveTemplateOf({ messageTemplate: 'x', resolveMessageTemplate: '  ' })).toBeNull();
     const both = '{{#if (eq alert.status "resolved")}}up{{else}}down{{/if}}';
     expect(resolveTemplateOf({ messageTemplate: both })).toBe(both);
+  });
+
+  it('renders {{fired.duration}} as a readable duration and keeps the seconds for JSON and .seconds', () => {
+    const context = buildNotificationTemplateContext({
+      alert: { id: 'r', name: 'Node down', status: 'resolved', severity: 'critical' },
+      resource: { type: 'node', id: 'n', key: 'n', name: 'alpine-1' },
+      fired: { at: '2026-10-09T10:00:00.000Z', duration: 217 },
+    });
+    expect(renderTemplate('back after {{fired.duration}}', context)).toBe('back after 3m 37s');
+    expect(renderTemplate('{{fired.duration.seconds}} {{formatDuration fired.duration}}', context)).toBe('217 3m 37s');
+    expect(renderTemplate('{{{json fired}}}', context)).toBe('{"at":"2026-10-09T10:00:00.000Z","duration":217}');
+  });
+
+  it('counts an alert until its resource got back, not until the resolve window was covered', () => {
+    const firedAt = new Date(1_000_000);
+    // A 20-s relay outage resolved by a 61-s window: the clear run began at the first healthy sample.
+    const window = evaluateWindowRatio(
+      [
+        { timestamp: 1_020_000, breached: false },
+        { timestamp: 1_081_000, breached: false },
+      ],
+      'clear',
+      100,
+      60_000,
+      1_081_000
+    );
+    expect(window.targetSince).toBe(1_020_000);
+    expect(alertDurationSeconds(firedAt, window.targetSince, 1_081_000)).toBe(20);
+    expect(alertDurationSeconds(firedAt, null, 1_081_000)).toBe(81);
+    expect(
+      evaluateWindowRatio(
+        [
+          { timestamp: 1, breached: false },
+          { timestamp: 2, breached: true },
+          { timestamp: 3, breached: false },
+        ],
+        'clear',
+        50,
+        0,
+        3
+      ).targetSince
+    ).toBe(3);
+  });
+
+  it('treats back-online events as recoveries that close without a resolve', () => {
+    expect(isRecoveryEvent('node', 'online')).toBe(true);
+    expect(isRecoveryEvent('proxy', 'health.online')).toBe(true);
+    expect(isRecoveryEvent('node', 'offline')).toBe(false);
+    expect(isRecoveryEvent('proxy', 'health.offline')).toBe(false);
   });
 });

@@ -31,6 +31,7 @@ import {
   type WindowProbeSample,
 } from './notification.constants.js';
 import type { NotificationAlertRuleService } from './notification-alert-rule.service.js';
+import { isRecoveryEvent } from './notification-catalog.js';
 import {
   type DispatchResult,
   type DispatchWebhook,
@@ -90,6 +91,12 @@ function foldingParentKind(rule: { category?: string; eventPattern?: string | nu
 /** Resource keys of Gateway's own alerts (category gateway). */
 export const GATEWAY_RESOURCE_ID = 'gateway';
 export const GATEWAY_POSTGRES_RESOURCE_ID = 'gateway-postgres';
+
+/** Seconds from firing until the resource got back (backSince), or until now when that is not known. */
+export function alertDurationSeconds(firedAt: Date, backSince?: number | null, now = Date.now()): number {
+  const end = backSince != null && backSince >= firedAt.getTime() && backSince <= now ? backSince : now;
+  return Math.max(0, Math.round((end - firedAt.getTime()) / 1000));
+}
 
 /** Samples (oldest first) from windowStart on, plus the newest one before it: the state the window starts in. */
 function withWindowAnchor(samples: WindowProbeSample[], windowStart: number): WindowProbeSample[] {
@@ -1164,6 +1171,7 @@ export class NotificationEvaluatorService {
     if (!existingState) return;
 
     const resolveMs = (rule.resolveAfterSeconds ?? 60) * 1000;
+    let backSince: number | null = null;
 
     if (resolveMs > 0 && this.redis) {
       const evaluation = await this.evaluateRatioWindow(
@@ -1178,6 +1186,7 @@ export class NotificationEvaluatorService {
         logger.debug('Resolve ratio window has insufficient coverage', { ruleId: rule.id, resolveMs });
         return;
       }
+      backSince = evaluation.targetSince;
 
       if (!evaluation.thresholdMet) {
         logger.debug('Resolve ratio threshold not met', {
@@ -1194,7 +1203,7 @@ export class NotificationEvaluatorService {
     }
 
     const firedAt = existingState.firedAt;
-    const firedDurationSec = firedAt ? Math.round((Date.now() - firedAt.getTime()) / 1000) : 0;
+    const firedDurationSec = firedAt ? alertDurationSeconds(firedAt, backSince) : 0;
 
     const nodeName =
       rule.category === 'node' || rule.category === 'container'
@@ -1500,6 +1509,7 @@ export class NotificationEvaluatorService {
       if (!existingState) continue;
 
       const resolveMs = (rule.resolveAfterSeconds ?? 60) * 1000;
+      let backSince: number | null = null;
       if (resolveMs > 0 && this.redis) {
         const evaluation = await this.evaluateRatioWindow(
           rule.id,
@@ -1509,6 +1519,7 @@ export class NotificationEvaluatorService {
           'clear'
         );
         if (!evaluation?.hasCoverage || !evaluation.thresholdMet) continue;
+        backSince = evaluation.targetSince;
       } else if (resolveMs > 0 && !this.redis) {
         continue;
       }
@@ -1519,7 +1530,8 @@ export class NotificationEvaluatorService {
         resource.type,
         resource.id,
         resource.name,
-        this.getEventTemplateDetails(context, rule.eventPattern, currentState, resource.id)
+        this.getEventTemplateDetails(context, rule.eventPattern, currentState, resource.id),
+        { backSince }
       );
     }
   }
@@ -1690,20 +1702,22 @@ export class NotificationEvaluatorService {
     resourceKey: string,
     resourceName: string | undefined,
     details: TemplateDetails,
-    options: { notify?: boolean } = {}
+    /** backSince: when the resource got back to normal (the start of the clear samples that resolve it). */
+    options: { notify?: boolean; backSince?: number | null } = {}
   ): Promise<void> {
     const [state] = await this.db
       .select({ firedAt: notificationAlertStates.firedAt, context: notificationAlertStates.context })
       .from(notificationAlertStates)
       .where(eq(notificationAlertStates.id, stateId))
       .limit(1);
-    // How long the alert lasted, for the resolve message and its template ({{fired.*}}).
+    // How long the alert lasted, for the resolve message and its template ({{fired.*}}): until the resource got
+    // back, not until the resolve window was covered.
     if (!details.fired && state?.firedAt) {
       details = {
         ...details,
         fired: {
           at: state.firedAt.toISOString(),
-          duration: Math.round((Date.now() - state.firedAt.getTime()) / 1000),
+          duration: alertDurationSeconds(state.firedAt, options.backSince),
         },
       };
     }
@@ -1711,10 +1725,13 @@ export class NotificationEvaluatorService {
     // A folded alert resolves only where its own firing went out (or is still queued, where both are dropped).
     const onlyWebhookIds = foldedUnder(state?.context) ? await this.webhooksWithFiring(stateId) : undefined;
 
+    // A recovery alert (Node Online) ends when its resource goes down again: that is not a recovery that cleared, so
+    // the state closes without a message.
+    const notify = options.notify !== false && !isRecoveryEvent(rule.category, rule.eventPattern);
     // Health reports and sweeps race on the same state: only the caller that flips it notifies.
     const resolved = await this.commitWithDeliveries(
       rule,
-      options.notify === false ? null : event,
+      notify ? event : null,
       async (tx) => {
         const rows = await tx
           .update(notificationAlertStates)

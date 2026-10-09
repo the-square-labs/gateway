@@ -1,7 +1,7 @@
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
 import { json as cmJson } from "@codemirror/lang-json";
 import { defaultHighlightStyle, syntaxHighlighting } from "@codemirror/language";
-import { EditorState } from "@codemirror/state";
+import { Compartment, EditorState } from "@codemirror/state";
 import {
   placeholder as cmPlaceholder,
   Decoration,
@@ -58,7 +58,8 @@ export const UNIVERSAL_VARIABLES = [
   { name: "{{state.current}}", description: "Current state for stateful events" },
   { name: "{{event.name}}", description: "Event pattern/name" },
   { name: "{{fired.at}}", description: "When alert started firing" },
-  { name: "{{fired.duration}}", description: "Seconds alert was firing" },
+  { name: "{{fired.duration}}", description: "How long the alert lasted, such as 3m 37s" },
+  { name: "{{fired.duration.seconds}}", description: "How long the alert lasted, in seconds" },
   { name: "{{resolution.reason}}", description: "Resolve reason when known" },
   { name: "{{gateway.url}}", description: "Gateway URL" },
 ];
@@ -232,13 +233,21 @@ export function TemplateCheatsheetLink({
 
 // ── CodeMirror Template Editor ──────────────────────────────────────
 
+const DEFAULT_TEMPLATE_PLACEHOLDER =
+  "CPU at {{metric.value}}% on {{resource.name}} (threshold: {{metric.operator}} {{metric.threshold}}%)";
+
 export const TemplateEditor = React.forwardRef<
   TemplateEditorHandle,
-  { value: string; onChange: (v: string) => void; minHeight?: number }
->(function TemplateEditor({ value, onChange, minHeight = 260 }, ref) {
+  { value: string; onChange: (v: string) => void; minHeight?: number; placeholder?: string }
+>(function TemplateEditor(
+  { value, onChange, minHeight = 260, placeholder = DEFAULT_TEMPLATE_PLACEHOLDER },
+  ref
+) {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const initialValueRef = useRef(value);
+  const placeholderRef = useRef(placeholder);
+  const placeholderCompartment = useRef(new Compartment());
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
   const isInternalChange = useRef(false);
@@ -258,9 +267,7 @@ export const TemplateEditor = React.forwardRef<
         cmJson(),
         hbsHighlighter,
         cmTheme,
-        cmPlaceholder(
-          "CPU at {{metric.value}}% on {{resource.name}} (threshold: {{metric.operator}} {{metric.threshold}}%)"
-        ),
+        placeholderCompartment.current.of(cmPlaceholder(placeholderRef.current)),
         EditorView.lineWrapping,
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
@@ -280,6 +287,16 @@ export const TemplateEditor = React.forwardRef<
       viewRef.current = null;
     };
   }, []);
+
+  // The example follows the rule being edited (a metric, an event, a resolve).
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || placeholderRef.current === placeholder) return;
+    placeholderRef.current = placeholder;
+    view.dispatch({
+      effects: placeholderCompartment.current.reconfigure(cmPlaceholder(placeholder)),
+    });
+  }, [placeholder]);
 
   // Sync external value changes (e.g., preset switch)
   useEffect(() => {

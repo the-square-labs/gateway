@@ -68,14 +68,20 @@ hbs.registerHelper('percent', (value, total) => {
   if (Number.isNaN(v) || Number.isNaN(t) || t === 0) return 0;
   return Number(((v / t) * 100).toFixed(1));
 });
-hbs.registerHelper('formatDuration', (seconds) => {
-  const s = Number(seconds);
-  if (Number.isNaN(s) || s < 0) return String(seconds);
-  if (s < 60) return `${Math.round(s)}s`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;
-  const h = Math.floor(s / 3600);
-  const m = Math.floor((s % 3600) / 60);
+/** "45s", "3m 37s", "1h 9m": how long an alert lasted, as resolve texts and {{fired.duration}} show it. */
+export function formatDurationSeconds(seconds: number): string {
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
   return m > 0 ? `${h}h ${m}m` : `${h}h`;
+}
+hbs.registerHelper('formatDuration', (seconds) => {
+  // {{fired.duration}} is already formatted; its seconds stay readable as fired.duration.seconds.
+  const raw = seconds && typeof seconds === 'object' && 'seconds' in seconds ? seconds.seconds : seconds;
+  const s = Number(raw);
+  if (Number.isNaN(s) || s < 0) return String(seconds);
+  return formatDurationSeconds(s);
 });
 hbs.registerHelper('timeago', (timestamp) => {
   const d = typeof timestamp === 'string' ? new Date(timestamp) : timestamp instanceof Date ? timestamp : null;
@@ -135,6 +141,8 @@ export function renderTemplate(template: string, context: object): string {
 // ── Template Context Builder ──────────────────────────────────────────
 
 type SeverityTemplateValue = string & { emoji: string; color: number };
+/** Renders as "3m 37s"; JSON keeps the number of seconds, and .seconds reads it in a template. */
+type DurationTemplateValue = string & { seconds: number };
 
 export interface NotificationTemplateResource {
   type: string;
@@ -192,7 +200,7 @@ export interface NotificationTemplateContext {
   details: Record<string, string | number | boolean | null>;
   fired: {
     at: string | null;
-    duration: number | null;
+    duration: DurationTemplateValue | null;
   };
   resolution: {
     reason: string | null;
@@ -220,7 +228,8 @@ export type NotificationTemplateContextInput = {
   operation?: Partial<NotificationTemplateContext['operation']>;
   failure?: Partial<NotificationTemplateContext['failure']>;
   details?: Record<string, string | number | boolean | null>;
-  fired?: Partial<NotificationTemplateContext['fired']>;
+  /** duration: seconds the alert lasted. */
+  fired?: { at?: string | null; duration?: number | null };
   resolution?: Partial<NotificationTemplateContext['resolution']>;
   gateway?: Partial<NotificationTemplateContext['gateway']>;
 };
@@ -244,6 +253,18 @@ function buildSeverityTemplateValue(severity: Severity): SeverityTemplateValue {
     },
   });
   return value as unknown as SeverityTemplateValue;
+}
+
+function buildDurationTemplateValue(seconds: unknown): DurationTemplateValue | null {
+  const raw = seconds && typeof seconds === 'object' && 'seconds' in seconds ? seconds.seconds : seconds;
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0) return null;
+  const value = Object.assign(new String(formatDurationSeconds(raw)), {
+    seconds: raw,
+    toJSON() {
+      return raw;
+    },
+  });
+  return value as unknown as DurationTemplateValue;
 }
 
 export function buildNotificationTemplateContext(input: NotificationTemplateContextInput): NotificationTemplateContext {
@@ -298,7 +319,7 @@ export function buildNotificationTemplateContext(input: NotificationTemplateCont
     details: input.details ?? {},
     fired: {
       at: input.fired?.at ?? null,
-      duration: input.fired?.duration ?? null,
+      duration: buildDurationTemplateValue(input.fired?.duration),
     },
     resolution: {
       reason: input.resolution?.reason ?? null,

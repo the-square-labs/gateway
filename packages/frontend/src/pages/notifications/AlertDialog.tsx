@@ -390,8 +390,27 @@ export function AlertDialog({
   const firstMetric = cat?.metrics[0];
   const firstEvent = cat?.events[0];
   const selectedEventDef = cat?.events.find((event) => event.id === eventPattern);
-  /** Threshold rules and stateful events resolve; one-off events never do, so they have no resolve message. */
-  const resolvable = type === "threshold" || !!selectedEventDef?.supportsThreshold;
+  /**
+   * Threshold rules and stateful events resolve. One-off events never do, and a recovery state (Node Online) closes
+   * quietly, so neither has a resolve message.
+   */
+  const resolvable =
+    type === "threshold" || (!!selectedEventDef?.supportsThreshold && !selectedEventDef.recovery);
+  // Examples in the empty template fields, for the metric or event this rule watches.
+  const selectedMetricDef = cat?.metrics.find((item) => item.id === metric);
+  const templateSubject =
+    type === "threshold"
+      ? (selectedMetricDef?.label.replace(/\s*\([^)]*\)\s*$/, "") ?? "{{metric.name}}")
+      : (selectedEventDef?.label ?? "{{alert.name}}");
+  const metricUnit = selectedMetricDef?.unit === "%" ? "%" : "";
+  const messagePlaceholder =
+    type === "threshold"
+      ? `${templateSubject} at {{metric.value}}${metricUnit} on {{resource.name}} (threshold: {{metric.operator}} {{metric.threshold}}${metricUnit})`
+      : `${templateSubject} on {{resource.name}}`;
+  const resolvePlaceholder =
+    type === "threshold"
+      ? `${templateSubject} on {{resource.name}} is back to normal at {{metric.value}}${metricUnit} after {{fired.duration}}`
+      : "{{resource.name}} is back to normal after {{fired.duration}}";
   const isCertificateExpiryThreshold =
     type === "threshold" && category === "certificate" && metric === CERTIFICATE_EXPIRY_METRIC;
   const applyMetricDefaults = useCallback((metricDef: NonNullable<typeof firstMetric>) => {
@@ -1167,6 +1186,7 @@ export function AlertDialog({
                     value={messageTemplate}
                     onChange={setMessageTemplate}
                     minHeight={300}
+                    placeholder={messagePlaceholder}
                   />
                   <TemplateCheatsheetLink
                     variables={[
@@ -1184,6 +1204,7 @@ export function AlertDialog({
                       value={resolveMessageTemplate}
                       onChange={setResolveMessageTemplate}
                       minHeight={120}
+                      placeholder={resolvePlaceholder}
                     />
                     <p className="text-xs text-muted-foreground">
                       Sent when the alert resolves. Leave empty to use Gateway's text for this

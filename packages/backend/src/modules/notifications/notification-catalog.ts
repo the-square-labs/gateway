@@ -61,6 +61,11 @@ export interface EventDefinition {
   label: string;
   defaultSeverity: Severity;
   supportsThreshold?: boolean;
+  /**
+   * A recovery state (back online): its alert is sent once when the state begins and closes quietly when the state
+   * ends (going offline is not a recovery that "cleared"), so it has no resolve message.
+   */
+  recovery?: boolean;
 }
 
 export interface CategoryDefinition {
@@ -211,7 +216,7 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
     ],
     events: [
       { id: 'offline', label: 'Node Offline', defaultSeverity: 'critical', supportsThreshold: true },
-      { id: 'online', label: 'Node Online', defaultSeverity: 'info', supportsThreshold: true },
+      { id: 'online', label: 'Node Online', defaultSeverity: 'info', supportsThreshold: true, recovery: true },
     ],
     variables: [
       { name: '{{resource.name}}', description: 'Node hostname' },
@@ -225,7 +230,8 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
       { name: '{{metric.operator}}', description: 'Comparison operator' },
       { name: '{{metric.duration}}', description: 'Configured fire-after duration' },
       { name: '{{fired.at}}', description: 'When the alert started firing' },
-      { name: '{{fired.duration}}', description: 'How long alert has been firing' },
+      { name: '{{fired.duration}}', description: 'How long the alert lasted, such as 3m 37s' },
+      { name: '{{fired.duration.seconds}}', description: 'How long the alert lasted, in seconds' },
     ],
   },
   {
@@ -244,7 +250,7 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
       { id: 'exited', label: 'Container Exited', defaultSeverity: 'warning', supportsThreshold: true },
       { id: 'health.offline', label: 'Health Offline', defaultSeverity: 'critical', supportsThreshold: true },
       { id: 'health.degraded', label: 'Health Degraded', defaultSeverity: 'warning', supportsThreshold: true },
-      { id: 'health.online', label: 'Health Online', defaultSeverity: 'info', supportsThreshold: true },
+      { id: 'health.online', label: 'Health Online', defaultSeverity: 'info', supportsThreshold: true, recovery: true },
       {
         id: 'dependency.database_offline',
         label: 'Database Secure Link Offline',
@@ -271,7 +277,8 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
       { name: '{{metric.threshold}}', description: 'Configured threshold' },
       { name: '{{health.status}}', description: 'HTTP health status' },
       { name: '{{fired.at}}', description: 'When the alert started firing' },
-      { name: '{{fired.duration}}', description: 'How long alert has been firing' },
+      { name: '{{fired.duration}}', description: 'How long the alert lasted, such as 3m 37s' },
+      { name: '{{fired.duration.seconds}}', description: 'How long the alert lasted, in seconds' },
     ],
   },
   {
@@ -318,7 +325,7 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
     events: [
       { id: 'health.offline', label: 'Health Offline', defaultSeverity: 'critical', supportsThreshold: true },
       { id: 'health.degraded', label: 'Health Degraded', defaultSeverity: 'warning', supportsThreshold: true },
-      { id: 'health.online', label: 'Health Online', defaultSeverity: 'info', supportsThreshold: true },
+      { id: 'health.online', label: 'Health Online', defaultSeverity: 'info', supportsThreshold: true, recovery: true },
       { id: 'maintenance.active', label: 'Maintenance Active', defaultSeverity: 'warning', supportsThreshold: true },
       { id: 'created', label: 'Proxy Created', defaultSeverity: 'info' },
       { id: 'deleted', label: 'Proxy Deleted', defaultSeverity: 'info' },
@@ -617,7 +624,8 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
       { name: '{{certificate.expiry_date}}', description: 'Expiry date' },
       { name: '{{metric.threshold}}', description: 'Configured threshold' },
       { name: '{{fired.at}}', description: 'When the alert started firing' },
-      { name: '{{fired.duration}}', description: 'How long alert has been firing' },
+      { name: '{{fired.duration}}', description: 'How long the alert lasted, such as 3m 37s' },
+      { name: '{{fired.duration.seconds}}', description: 'How long the alert lasted, in seconds' },
     ],
   },
   {
@@ -660,7 +668,13 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
       { id: 'deleted', label: 'Managed Database Deleted', defaultSeverity: 'info' },
       { id: 'health.offline', label: 'Database Offline', defaultSeverity: 'critical', supportsThreshold: true },
       { id: 'health.degraded', label: 'Database Degraded', defaultSeverity: 'warning', supportsThreshold: true },
-      { id: 'health.online', label: 'Database Online', defaultSeverity: 'info', supportsThreshold: true },
+      {
+        id: 'health.online',
+        label: 'Database Online',
+        defaultSeverity: 'info',
+        supportsThreshold: true,
+        recovery: true,
+      },
       {
         id: 'binding.provisioning_failed',
         label: 'Database Binding Provisioning Failed',
@@ -715,7 +729,13 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
       { id: 'deleted', label: 'Managed Database Deleted', defaultSeverity: 'info' },
       { id: 'health.offline', label: 'Database Offline', defaultSeverity: 'critical', supportsThreshold: true },
       { id: 'health.degraded', label: 'Database Degraded', defaultSeverity: 'warning', supportsThreshold: true },
-      { id: 'health.online', label: 'Database Online', defaultSeverity: 'info', supportsThreshold: true },
+      {
+        id: 'health.online',
+        label: 'Database Online',
+        defaultSeverity: 'info',
+        supportsThreshold: true,
+        recovery: true,
+      },
       {
         id: 'binding.provisioning_failed',
         label: 'Database Binding Provisioning Failed',
@@ -755,7 +775,13 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
       { id: 'deleted', label: 'Managed Database Deleted', defaultSeverity: 'info' },
       { id: 'health.offline', label: 'Database Offline', defaultSeverity: 'critical', supportsThreshold: true },
       { id: 'health.degraded', label: 'Database Degraded', defaultSeverity: 'warning', supportsThreshold: true },
-      { id: 'health.online', label: 'Database Online', defaultSeverity: 'info', supportsThreshold: true },
+      {
+        id: 'health.online',
+        label: 'Database Online',
+        defaultSeverity: 'info',
+        supportsThreshold: true,
+        recovery: true,
+      },
       {
         id: 'binding.provisioning_failed',
         label: 'Database Binding Provisioning Failed',
@@ -792,4 +818,11 @@ export const CATEGORY_MAP = new Map(ALERT_CATEGORIES.map((c) => [c.id, c]));
 
 export function eventSupportsThreshold(category: AlertCategory, eventId: string): boolean {
   return CATEGORY_MAP.get(category)?.events.some((event) => event.id === eventId && event.supportsThreshold) ?? false;
+}
+
+/** Whether a rule's event is a recovery state (see EventDefinition.recovery). */
+export function isRecoveryEvent(category: string | null | undefined, eventPattern: string | null | undefined): boolean {
+  if (!category || !eventPattern) return false;
+  return !!ALERT_CATEGORIES.find((item) => item.id === category)?.events.find((event) => event.id === eventPattern)
+    ?.recovery;
 }

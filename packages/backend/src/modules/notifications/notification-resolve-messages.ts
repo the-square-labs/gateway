@@ -1,4 +1,5 @@
 import { ALERT_CATEGORIES } from './notification-catalog.js';
+import { formatDurationSeconds } from './notification-templates.js';
 
 /**
  * Gateway's resolve texts: what a reader is told once an alert clears, for rules without a resolve message. They name
@@ -42,15 +43,6 @@ const EVENT_RESOLVE_TEXT: Record<string, (name: string) => string> = {
   'database_redis:health.offline': (name) => `Database ${name} is back online`,
   'database_redis:health.degraded': (name) => `Database ${name} is healthy again`,
 };
-
-/** Same format as the formatDuration template helper. */
-export function formatAlertDuration(seconds: number): string {
-  if (seconds < 60) return `${Math.round(seconds)}s`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${Math.round(seconds % 60)}s`;
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
-}
 
 function categoryOf(rule: { category?: string | null }) {
   return ALERT_CATEGORIES.find((category) => category.id === rule.category);
@@ -105,7 +97,7 @@ export function defaultResolveMessage(
     }
   }
   const duration = details.fired?.duration;
-  if (typeof duration === 'number' && duration > 0) text += ` after ${formatAlertDuration(duration)}`;
+  if (typeof duration === 'number' && duration > 0) text += ` after ${formatDurationSeconds(duration)}`;
   return `${text}.`;
 }
 

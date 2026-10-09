@@ -172,6 +172,8 @@ export interface AlertCategoryDef {
     label: string;
     defaultSeverity: string;
     supportsThreshold?: boolean;
+    /** A recovery state (back online): sent once when it begins, closes quietly, no resolve message. */
+    recovery?: boolean;
   }>;
   variables: Array<{ name: string; description: string }>;
 }

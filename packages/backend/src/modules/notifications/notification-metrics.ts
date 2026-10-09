@@ -222,6 +222,11 @@ export interface WindowRatioEvaluation {
   matchingSamples: number;
   ratioPercent: number;
   thresholdMet: boolean;
+  /**
+   * Start of the trailing run of samples in the target state (when the resource got back to normal, for 'clear'):
+   * an alert's duration ends there, not when its resolve window was covered.
+   */
+  targetSince: number | null;
 }
 
 export function evaluateWindowRatio(
@@ -238,6 +243,7 @@ export function evaluateWindowRatio(
       matchingSamples: 0,
       ratioPercent: 0,
       thresholdMet: false,
+      targetSince: null,
     };
   }
 
@@ -248,6 +254,12 @@ export function evaluateWindowRatio(
     targetState === 'breach' ? sample.breached : !sample.breached
   ).length;
   const ratioPercent = (matchingSamples / sorted.length) * 100;
+  let targetSince: number | null = null;
+  for (const sample of sorted) {
+    const matches = targetState === 'breach' ? sample.breached : !sample.breached;
+    if (!matches) targetSince = null;
+    else targetSince ??= sample.timestamp;
+  }
 
   return {
     hasCoverage,
@@ -255,5 +267,6 @@ export function evaluateWindowRatio(
     matchingSamples,
     ratioPercent,
     thresholdMet: hasCoverage && ratioPercent >= thresholdPercent,
+    targetSince,
   };
 }
