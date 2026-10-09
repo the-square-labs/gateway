@@ -342,6 +342,36 @@ describe("Gateway's own relayed streams return to the nearest relay, paced (O-1)
     t.instance.stop();
   });
 
+  it('judges its streams on a new assignment as soon as it is active (stand rc.8, F-2)', async () => {
+    // The local relay drained in a Relay Pool update onto `local:primary, nl:fallback`: the stream went to NL. Then
+    // `uk:primary, nl:fallback` became active; Gateway's streams stayed on NL for 80 s, judged on the old assignment.
+    let now = T0;
+    const t = paths(
+      () => null,
+      () => now
+    );
+    t.instance.observe('relay-uk', 60);
+    t.instance.observe('relay-nl', 300);
+    now += GATEWAY_RETURN_STABLE_MS;
+    t.instance.observe('relay-uk', 60);
+    t.instance.observe('relay-nl', 300);
+    t.instance.note('route-1', [{ ...local, assignmentState: 'draining' }, nl]);
+    t.fetchCandidates.mockResolvedValue([{ ...uk, topology: { role: 'primary' } }, nl]);
+    const migrate = vi.fn(async () => undefined);
+    t.registry.liveSessions.mockReturnValue([
+      { relayId: 'relay-nl', routeId: 'route-1', movable: true, lastMoveAt: T0, migrate },
+    ]);
+    t.registry.timers.setTimeout.mockImplementation((task: () => void) => task());
+    t.registry.schedule.mockImplementation((task: () => Promise<unknown>) => void task());
+    // The candidates it dialed are a second old: without the activation it would look again only after 30 s.
+    now += 1_000;
+    expect(await t.instance.returnPass()).toBe(0);
+    t.instance.assignmentsChanged();
+    expect(await t.instance.returnPass()).toBe(1);
+    expect(migrate).toHaveBeenCalledWith('return');
+    t.instance.stop();
+  });
+
   it('returns a stream on the far standby to the near one while the local relay stays down', async () => {
     let now = T0;
     const t = paths(

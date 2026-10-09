@@ -529,6 +529,11 @@ export class RelayPolicyService {
     this.gatewayPaths().startMeasuring();
   }
 
+  /** An assignment generation became active: Gateway's own streams judge their relays on it at once. */
+  gatewayAssignmentsChanged(): void {
+    this.gatewayRelayPaths?.assignmentsChanged();
+  }
+
   private gatewayPaths(): GatewayRelayPaths {
     if (!this.gatewayRelayPaths) {
       const topology = new RelayTopologyService(this.db);

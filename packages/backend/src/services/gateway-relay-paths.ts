@@ -40,6 +40,8 @@ const ROUTE_CANDIDATES_FRESH_MS = 30_000;
 export const GATEWAY_RETURN_INTERVAL_MS = 10_000;
 const GATEWAY_RETURN_BATCH = 32;
 export const GATEWAY_RETURN_COOLDOWN_MS = 20_000;
+/** After a placement change, the return pass runs this soon (assignmentsChanged): the measuring pass ends first. */
+export const GATEWAY_PROMPT_RETURN_MS = 3_000;
 
 /** Relays of one role within this band of the nearest are equally near (relaybridge costBand). */
 const COST_BAND_RATIO = 1.2;
@@ -185,6 +187,7 @@ export class GatewayRelayPaths {
   private localRelay?: Pick<LocalRelayOutageSignal, 'latestOutage'>;
   private sampler: ReturnType<typeof setInterval> | null = null;
   private returner: ReturnType<typeof setInterval> | null = null;
+  private promptReturn: ReturnType<typeof setTimeout> | null = null;
   private sampling: Promise<void> | null = null;
   /** The remote relays of the pool at the last measuring pass: measured for as long as they are in it. */
   private pool = new Set<string>();
@@ -406,6 +409,27 @@ export class GatewayRelayPaths {
     return gatewayReturnTarget(route.candidates, place, relayId) !== null;
   }
 
+  /**
+   * An assignment generation became active (a placement change): the routes' candidates are looked up again at the
+   * next return judgement, every relay is measured now, and a return pass runs shortly instead of at the next tick, so
+   * Gateway's own streams leave a farther relay as soon as the nearer one is in their assignment and stable (stand
+   * rc.8, F-2: they stayed on the 300-ms relay for 80 s after the generation with the 60-ms relay was active).
+   */
+  assignmentsChanged(): void {
+    for (const route of this.routes.values()) route.at = Number.NEGATIVE_INFINITY;
+    void this.sample();
+    if (this.promptReturn) return;
+    this.promptReturn = setTimeout(() => {
+      this.promptReturn = null;
+      void this.returnPass().catch((error) =>
+        logger.debug('Gateway relay return pass failed', {
+          error: error instanceof Error ? error.message : String(error),
+        })
+      );
+    }, GATEWAY_PROMPT_RETURN_MS);
+    this.promptReturn.unref?.();
+  }
+
   /** Starts measuring the pool at once and every interval, and returning (idempotent). */
   startMeasuring(): void {
     this.start();
@@ -433,6 +457,8 @@ export class GatewayRelayPaths {
   stop(): void {
     if (this.sampler) clearInterval(this.sampler);
     if (this.returner) clearInterval(this.returner);
+    if (this.promptReturn) clearTimeout(this.promptReturn);
+    this.promptReturn = null;
     this.sampler = null;
     this.returner = null;
   }
