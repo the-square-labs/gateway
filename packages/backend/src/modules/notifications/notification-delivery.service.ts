@@ -1,4 +1,4 @@
-import { and, count, desc, eq, inArray, lt, lte, notInArray, type SQL, sql } from 'drizzle-orm';
+import { and, count, desc, eq, exists, inArray, isNull, lt, lte, notInArray, or, type SQL, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { notificationDeliveryLog, notificationWebhooks } from '@/db/schema/index.js';
 import { buildWhere } from '@/lib/utils.js';
@@ -114,19 +114,33 @@ export class NotificationDeliveryService {
     };
   }
 
-  /** Deliveries due to be sent: queued by the alert outbox, or waiting for a retry (nextRetryAt <= now). */
-  async getPendingRetries(limit: number) {
-    return this.db
-      .select()
-      .from(notificationDeliveryLog)
+  /** Webhooks with queued deliveries that may send now: not paused, and no other sender holds their queue. */
+  async getWebhooksDue(limit: number): Promise<string[]> {
+    const rows = await this.db
+      .select({ id: notificationWebhooks.id })
+      .from(notificationWebhooks)
       .where(
         and(
-          inArray(notificationDeliveryLog.status, [...OPEN_DELIVERY_STATUSES]),
-          lte(notificationDeliveryLog.nextRetryAt, new Date())
+          or(
+            isNull(notificationWebhooks.deliveryPausedUntil),
+            lte(notificationWebhooks.deliveryPausedUntil, sql`now()`)
+          ),
+          or(isNull(notificationWebhooks.deliveryLeaseUntil), lte(notificationWebhooks.deliveryLeaseUntil, sql`now()`)),
+          exists(
+            this.db
+              .select({ id: notificationDeliveryLog.id })
+              .from(notificationDeliveryLog)
+              .where(
+                and(
+                  eq(notificationDeliveryLog.webhookId, notificationWebhooks.id),
+                  inArray(notificationDeliveryLog.status, [...OPEN_DELIVERY_STATUSES])
+                )
+              )
+          )
         )
       )
-      .orderBy(notificationDeliveryLog.nextRetryAt)
       .limit(limit);
+    return rows.map((row) => row.id);
   }
 
   /** Clean old delivery log entries (for housekeeping) */

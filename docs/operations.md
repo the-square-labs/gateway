@@ -431,6 +431,12 @@ Use status pages for externally visible service health and incidents. Use notifi
 
 Notification message and webhook templates use one canonical nested context. Common families are `notification.*`, `alert.*`, `resource.*`, `metric.*`, `node.*`, `health.*`, `certificate.*`, `state.*`, `event.*`, `operation.*`, `failure.*`, `details.*`, `fired.*`, `resolution.*`, and `gateway.*`. For example, use `{{notification.title}}`, `{{alert.severity.emoji}}`, `{{metric.value}}`, and `{{fired.duration}}`. Historical flat names such as `alert_name`, `value`, `threshold`, `fired_at`, and `fired_duration` are not aliases and render empty. The `coalesce` helper can select the first non-empty nested value.
 
+### Webhook Delivery
+
+Each webhook sends its notifications one at a time, in the order the alerts fired and resolved. When a webhook's target cannot be reached (network or DNS error, timeout, `408`, `425` or `5xx`), the whole webhook pauses and tries the same notification again after 15 seconds, 30 seconds, 1, 2 and then every 5 minutes; nothing behind it is sent meanwhile, and the queue continues in order once the target answers. A `429` pauses the webhook for as long as the target asks (`Retry-After`, or Discord's `retry_after`). Any other `4xx` fails that notification only. A notification still queued 24 hours later fails. The queue is kept in the database, so it continues after a Gateway restart.
+
+A firing notification that has not gone out yet is not sent once its alert has resolved, and neither is that resolve: the reader never saw the alert, so there is nothing to resolve. The **Delivery Log** shows both as **Not sent** with the reason.
+
 ### SIEM Audit Export
 
 Configure SIEM collectors in **Notifications → SIEM**. Gateway keeps delivery in the main app process: no separate Compose service or worker container is required. A scheduler claims durable outbox rows every 30 seconds with database leases, so duplicate scheduler execution is safe if more than one app process is present. This lease safety applies only to SIEM delivery; horizontal Gateway application clustering is not currently a supported deployment mode.

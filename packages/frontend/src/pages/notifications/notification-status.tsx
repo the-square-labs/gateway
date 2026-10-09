@@ -1,4 +1,4 @@
-import { CheckCircle2, Clock, XCircle } from "lucide-react";
+import { CheckCircle2, Clock, MinusCircle, XCircle } from "lucide-react";
 import type { StatusTone } from "@/components/common/resource-status";
 import type { SiemDeliveryStatus } from "@/types";
 
@@ -39,12 +39,12 @@ export function httpStatusVariant(status: number): StatusTone {
 
 /**
  * The status glyph at the start of a delivery log row: delivered, failed,
- * pending (neutral) or still in progress (warning).
+ * pending (neutral), still in progress (warning) or skipped (not sent, nothing went wrong).
  */
 export function DeliveryStatusIcon({
   state,
 }: {
-  state: "delivered" | "failed" | "pending" | "in-progress";
+  state: "delivered" | "failed" | "pending" | "in-progress" | "skipped";
 }) {
   return (
     <span className="flex h-8 w-8 items-center justify-center bg-muted">
@@ -54,6 +54,8 @@ export function DeliveryStatusIcon({
         <XCircle className="h-4 w-4 text-destructive" />
       ) : state === "pending" ? (
         <Clock className="h-4 w-4 text-muted-foreground" aria-label="Pending" />
+      ) : state === "skipped" ? (
+        <MinusCircle className="h-4 w-4 text-muted-foreground" aria-label="Not sent" />
       ) : (
         <Clock className="h-4 w-4 text-warning-text" />
       )}

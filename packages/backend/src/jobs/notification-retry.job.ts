@@ -12,20 +12,19 @@ export class NotificationRetryJob {
     private dispatcherService: NotificationDispatcherService
   ) {}
 
+  /** Each webhook with queued deliveries sends them in order; webhooks run side by side. */
   async run(): Promise<void> {
-    const pendingRetries = await this.deliveryService.getPendingRetries(BATCH_SIZE);
+    const webhookIds = await this.deliveryService.getWebhooksDue(BATCH_SIZE);
 
-    if (pendingRetries.length === 0) return;
+    if (webhookIds.length === 0) return;
 
-    logger.debug(`Processing ${pendingRetries.length} pending webhook retries`);
+    logger.debug(`Sending the queued deliveries of ${webhookIds.length} webhook(s)`);
 
-    const results = await Promise.allSettled(
-      pendingRetries.map((delivery) => this.dispatcherService.retryDelivery(delivery.id))
-    );
+    const results = await Promise.allSettled(webhookIds.map((id) => this.dispatcherService.drainWebhook(id)));
 
     const failed = results.filter((r) => r.status === 'rejected');
     if (failed.length > 0) {
-      logger.warn(`${failed.length} retry attempts threw errors`);
+      logger.warn(`${failed.length} webhook queue runs threw errors`);
     }
   }
 }

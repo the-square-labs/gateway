@@ -75,7 +75,8 @@ export interface WebhookDelivery {
   attempt: number;
   maxAttempts: number;
   nextRetryAt: string | null;
-  status: "pending" | "success" | "failed" | "retrying";
+  /** superseded: not sent, the alert resolved first (or another alert stands for it); `error` says why. */
+  status: "pending" | "success" | "failed" | "retrying" | "superseded";
   error: string | null;
   createdAt: string;
   completedAt: string | null;

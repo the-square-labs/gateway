@@ -502,21 +502,31 @@ export class NotificationEvaluatorService {
     );
     try {
       await this.commitWithDeliveries(alert.rule, resolvedEvent, async (tx) => {
-        await tx.insert(notificationAlertStates).values({
-          ruleId: alert.rule.id,
-          resourceType: 'gateway',
-          resourceId: GATEWAY_POSTGRES_RESOURCE_ID,
-          status: 'resolved',
-          severity: alert.rule.severity,
-          firedAt: new Date(alert.firedAt),
-          lastNotifiedAt: new Date(alert.firedAt),
-          resolvedAt: new Date(),
-          context: details,
-        });
+        const [state] = await tx
+          .insert(notificationAlertStates)
+          .values({
+            ruleId: alert.rule.id,
+            resourceType: 'gateway',
+            resourceId: GATEWAY_POSTGRES_RESOURCE_ID,
+            status: 'resolved',
+            severity: alert.rule.severity,
+            firedAt: new Date(alert.firedAt),
+            lastNotifiedAt: new Date(alert.firedAt),
+            resolvedAt: new Date(),
+            context: details,
+          })
+          .returning({ id: notificationAlertStates.id });
         for (const send of alert.sends) {
-          await this.dispatcherService.recordSentDelivery(tx, send.webhook, alert.event, send.result, send.sentAt);
+          await this.dispatcherService.recordSentDelivery(
+            tx,
+            send.webhook,
+            alert.event,
+            send.result,
+            send.sentAt,
+            state!.id
+          );
         }
-        return true;
+        return state!.id;
       });
       logger.info('Postgres outage alert resolved', { ruleId: alert.rule.id });
     } catch (settleError) {
@@ -1550,31 +1560,39 @@ export class NotificationEvaluatorService {
   /**
    * Transactional outbox: the alert state change and its webhook deliveries commit together, so a
    * restart or a failed send after commit leaves queued deliveries for the retry job instead of a
-   * silently lost notification. Returns false when the state change did not apply (lost a race).
+   * silently lost notification. applyStateChange returns the alert state it changed (the deliveries
+   * name it), or null when the change did not apply (lost a race); so does this.
    */
   private async commitWithDeliveries(
     rule: any,
     event: NotificationEvent | null,
-    applyStateChange: (tx: DrizzleTransaction) => Promise<boolean>
-  ): Promise<boolean> {
-    const webhookIds = (rule.webhookIds ?? []) as string[];
+    applyStateChange: (tx: DrizzleTransaction) => Promise<string | null>,
+    /** Only these of the rule's webhooks get the notification. */
+    onlyWebhookIds?: string[]
+  ): Promise<string | null> {
+    const webhookIds = ((rule.webhookIds ?? []) as string[]).filter(
+      (id) => !onlyWebhookIds || onlyWebhookIds.includes(id)
+    );
     const webhooks =
       event && webhookIds.length > 0
         ? (await this.webhookService.getRawByIds(webhookIds)).filter((webhook) => webhook.enabled)
         : [];
-    let deliveryIds: string[] = [];
-    const applied = await this.db.transaction(async (tx) => {
-      if (!(await applyStateChange(tx))) return false;
-      if (event && webhooks.length > 0) deliveryIds = await this.dispatcherService.enqueue(tx, webhooks, event);
-      return true;
+    let queuedWebhookIds: string[] = [];
+    const stateId = await this.db.transaction(async (tx) => {
+      const changed = await applyStateChange(tx);
+      if (!changed) return null;
+      if (event && webhooks.length > 0) {
+        queuedWebhookIds = await this.dispatcherService.enqueue(tx, webhooks, event, changed);
+      }
+      return changed;
     });
-    if (applied && deliveryIds.length > 0) this.sendQueuedDeliveries(rule.id, deliveryIds);
-    return applied;
+    if (stateId && queuedWebhookIds.length > 0) this.sendQueuedDeliveries(rule.id, queuedWebhookIds);
+    return stateId;
   }
 
-  private sendQueuedDeliveries(ruleId: string, deliveryIds: string[]): void {
+  private sendQueuedDeliveries(ruleId: string, webhookIds: string[]): void {
     const work: Promise<void> = this.dispatcherService
-      .deliverQueued(deliveryIds)
+      .drainWebhooks(webhookIds)
       .catch((err) => {
         logger.warn('Immediate alert delivery failed; the retry job will send it', {
           ruleId,
@@ -1608,7 +1626,7 @@ export class NotificationEvaluatorService {
         })
         .onConflictDoNothing()
         .returning({ id: notificationAlertStates.id });
-      return inserted.length > 0;
+      return inserted[0]?.id ?? null;
     });
     if (!fired) return; // already firing
 
@@ -1641,7 +1659,7 @@ export class NotificationEvaluatorService {
         .set({ status: 'resolved', resolvedAt: new Date() })
         .where(and(eq(notificationAlertStates.id, stateId), eq(notificationAlertStates.status, 'firing')))
         .returning({ id: notificationAlertStates.id });
-      return rows.length > 0;
+      return rows[0]?.id ?? null;
     });
     if (!resolved) return;
 
@@ -1763,16 +1781,19 @@ export class NotificationEvaluatorService {
 
     // Record notification time for cooldown, in the same transaction as its deliveries.
     await this.commitWithDeliveries(rule, event, async (tx) => {
-      await tx.insert(notificationAlertStates).values({
-        ruleId: rule.id,
-        resourceType,
-        resourceId: resourceKey,
-        status: 'resolved',
-        severity: rule.severity,
-        context: details,
-        resolvedAt: new Date(),
-      });
-      return true;
+      const [state] = await tx
+        .insert(notificationAlertStates)
+        .values({
+          ruleId: rule.id,
+          resourceType,
+          resourceId: resourceKey,
+          status: 'resolved',
+          severity: rule.severity,
+          context: details,
+          resolvedAt: new Date(),
+        })
+        .returning({ id: notificationAlertStates.id });
+      return state?.id ?? null;
     });
 
     this.eventBus?.publish('alert.fired', {

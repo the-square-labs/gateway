@@ -235,6 +235,7 @@ export function DeliveryLogTab({
               <SelectItem value="failed">Failed</SelectItem>
               <SelectItem value="retrying">Retrying</SelectItem>
               <SelectItem value="pending">Pending</SelectItem>
+              <SelectItem value="superseded">Not sent</SelectItem>
             </SelectContent>
           </Select>
         }
@@ -282,7 +283,9 @@ export function DeliveryLogTab({
                               ? "failed"
                               : d.status === "pending"
                                 ? "pending"
-                                : "in-progress"
+                                : d.status === "superseded"
+                                  ? "skipped"
+                                  : "in-progress"
                         }
                       />
                     </ResourceListCell>
@@ -364,7 +367,7 @@ export function DeliveryLogTab({
                 <div>
                   <span className="text-muted-foreground">Status:</span>{" "}
                   <Badge variant={webhookDeliveryVariant(detail.status)} size="inline">
-                    {detail.status}
+                    {detail.status === "superseded" ? "not sent" : detail.status}
                   </Badge>
                 </div>
                 <div>
@@ -385,8 +388,7 @@ export function DeliveryLogTab({
                   {detail.responseTimeMs != null ? `${detail.responseTimeMs}ms` : "N/A"}
                 </div>
                 <div>
-                  <span className="text-muted-foreground">Attempt:</span> {detail.attempt}/
-                  {detail.maxAttempts}
+                  <span className="text-muted-foreground">Attempts:</span> {detail.attempt}
                 </div>
                 <div>
                   <span className="text-muted-foreground">Created:</span>{" "}
@@ -395,7 +397,9 @@ export function DeliveryLogTab({
               </div>
               {detail.error && (
                 <div>
-                  <p className="text-sm font-medium mb-1">Error</p>
+                  <p className="text-sm font-medium mb-1">
+                    {detail.status === "superseded" ? "Reason" : "Error"}
+                  </p>
                   <pre className="bg-muted p-3 rounded text-xs whitespace-pre-wrap">
                     {detail.error}
                   </pre>

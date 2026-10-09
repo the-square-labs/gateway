@@ -1,4 +1,4 @@
-import { boolean, index, jsonb, pgTable, text, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
+import { boolean, index, integer, jsonb, pgTable, text, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
 
 export const notificationWebhooks = pgTable(
   'notification_webhooks',
@@ -17,6 +17,14 @@ export const notificationWebhooks = pgTable(
     templatePreset: varchar('template_preset', { length: 50 }), // 'discord' | 'slack' | 'telegram' | 'json' | 'plain' | null
     bodyTemplate: text('body_template'),
     headers: jsonb('headers').$type<Record<string, string>>().notNull().default({}),
+
+    // Delivery queue. While the target cannot be reached the whole webhook pauses (deliveryPausedUntil) and resumes in
+    // order; deliveryFailures counts the unreachable sends in a row (the backoff step). One sender at a time holds the
+    // lease, so deliveries go out in order also with several Gateway instances.
+    deliveryPausedUntil: timestamp('delivery_paused_until', { withTimezone: true }),
+    deliveryFailures: integer('delivery_failures').notNull().default(0),
+    deliveryLeaseUntil: timestamp('delivery_lease_until', { withTimezone: true }),
+    deliveryLeaseToken: uuid('delivery_lease_token'),
 
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
