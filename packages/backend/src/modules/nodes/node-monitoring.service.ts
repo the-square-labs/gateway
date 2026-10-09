@@ -35,6 +35,9 @@ export function compactMonitoringHistorySnapshot(snapshot: any): MonitoringSnaps
     health: {
       nginxRunning: health.nginxRunning,
       configValid: health.configValid,
+      ...(typeof health.nginxServiceProblem === 'string' && health.nginxServiceProblem
+        ? { nginxServiceProblem: health.nginxServiceProblem }
+        : {}),
       nginxUptimeSeconds: health.nginxUptimeSeconds,
       workerCount: health.workerCount,
       nginxVersion: health.nginxVersion,
