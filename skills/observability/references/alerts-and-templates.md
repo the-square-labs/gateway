@@ -8,7 +8,7 @@ An alert rule has:
 - `gateway` watches Gateway itself: threshold metrics `host_cpu`, `host_memory`, `host_disk`, `process_memory`, `event_loop_delay`, `api_error_rate`, `api_latency_p95`, `postgres_latency`, `postgres_pool_waiting`, `redis_latency`, and stateful events `postgres.unavailable`, `redis.unavailable`, `container.unhealthy`, `job.failing` besides the relay and license events. A `postgres.unavailable` alert is sent straight to its webhooks while Postgres is down and recorded once it is back;
 - `type`: `threshold` (`metric`, `operator`, `thresholdValue`, `durationSeconds`, `fireThresholdPercent`, `resolveAfterSeconds`, `resolveThresholdPercent`) or `event` (`eventPattern`);
 - `resourceIds`: the resources in scope; empty means every matching resource;
-- `severity`, a Handlebars message template, and `cooldownSeconds` (default 900).
+- `severity`, a Handlebars message template (`messageTemplate`, sent when the alert fires), a resolve message template (`resolveMessageTemplate`, sent when it resolves; empty uses Gateway's text for the rule, such as "Proxy host example.com is back online after 13m 2s.", never the firing message), and `cooldownSeconds` (default 900).
 
 `GET /api/notifications/alert-rules/categories` is the authoritative list of each category's metrics, events, and template variables. Read it before writing a rule or template instead of guessing field names.
 

@@ -133,6 +133,7 @@ export function AlertDialog({
   const [resourceIds, setResourceIds] = useState<string[]>([]);
   const [scopeEnabled, setScopeEnabled] = useState(false);
   const [messageTemplate, setMessageTemplate] = useState("");
+  const [resolveMessageTemplate, setResolveMessageTemplate] = useState("");
   const [selectedWebhookIds, setSelectedWebhookIds] = useState<string[]>([]);
   const [cooldownSeconds, setCooldownSeconds] = useState("900");
 
@@ -172,6 +173,7 @@ export function AlertDialog({
     setResourceIds(rule?.resourceIds ?? []);
     setScopeEnabled(!!rule && rule.resourceIds.length > 0);
     setMessageTemplate(rule?.messageTemplate ?? "");
+    setResolveMessageTemplate(rule?.resolveMessageTemplate ?? "");
     setSelectedWebhookIds(rule?.webhookIds ?? []);
     setCooldownSeconds(String(rule?.cooldownSeconds ?? 900));
     setResourceSearch("");
@@ -388,6 +390,8 @@ export function AlertDialog({
   const firstMetric = cat?.metrics[0];
   const firstEvent = cat?.events[0];
   const selectedEventDef = cat?.events.find((event) => event.id === eventPattern);
+  /** Threshold rules and stateful events resolve; one-off events never do, so they have no resolve message. */
+  const resolvable = type === "threshold" || !!selectedEventDef?.supportsThreshold;
   const isCertificateExpiryThreshold =
     type === "threshold" && category === "certificate" && metric === CERTIFICATE_EXPIRY_METRIC;
   const applyMetricDefaults = useCallback((metricDef: NonNullable<typeof firstMetric>) => {
@@ -590,6 +594,9 @@ export function AlertDialog({
         severity,
         cooldownSeconds: cooldownNum,
         messageTemplate: messageTemplate || undefined,
+        // Only alerts that resolve send it; empty stores null, so Gateway's resolve text is used.
+        resolveMessageTemplate:
+          resolvable && resolveMessageTemplate.trim() ? resolveMessageTemplate : null,
         webhookIds: selectedWebhookIds,
         resourceIds: scopeEnabled ? resourceIds : [],
         enabled: rule?.enabled ?? true,
@@ -1170,6 +1177,20 @@ export function AlertDialog({
                     ]}
                   />
                 </div>
+                {resolvable && (
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium">Resolve Message Template</label>
+                    <TemplateEditor
+                      value={resolveMessageTemplate}
+                      onChange={setResolveMessageTemplate}
+                      minHeight={120}
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Sent when the alert resolves. Leave empty to use Gateway's text for this
+                      alert, such as "Proxy host example.com is back online after 13m 2s."
+                    </p>
+                  </div>
+                )}
               </motion.div>
             )}
           </AnimatePresence>

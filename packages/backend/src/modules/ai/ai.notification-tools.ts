@@ -143,6 +143,7 @@ export async function executeNotificationTool(
           eventPattern: a.eventPattern,
           resourceIds: a.resourceIds,
           messageTemplate: a.messageTemplate,
+          resolveMessageTemplate: a.resolveMessageTemplate,
           webhookIds: a.webhookIds,
           cooldownSeconds: a.cooldownSeconds,
           // The tool creates active rules unless told otherwise; the route schema defaults to disabled.
@@ -169,6 +170,7 @@ export async function executeNotificationTool(
           eventPattern: a.eventPattern,
           resourceIds: a.resourceIds,
           messageTemplate: a.messageTemplate,
+          resolveMessageTemplate: a.resolveMessageTemplate,
           webhookIds: a.webhookIds,
           cooldownSeconds: a.cooldownSeconds,
         })

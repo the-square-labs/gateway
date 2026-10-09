@@ -94,6 +94,7 @@ function rule(seed: number, overrides: Partial<AlertRule> & Pick<AlertRule, "nam
     eventPattern: null,
     resourceIds: [],
     messageTemplate: null,
+    resolveMessageTemplate: null,
     webhookIds: [opsWebhook],
     cooldownSeconds: 900,
     isBuiltin: false,

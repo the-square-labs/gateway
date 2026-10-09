@@ -286,6 +286,7 @@ Each alert rule defines:
 - **Severity**: info, warning, critical
 - **Webhooks**: webhookIds — which webhooks receive notifications from this rule
 - **Message template**: Handlebars template rendered with event-specific variables
+- **Resolve message**: resolveMessageTemplate — sent when the alert resolves; empty uses Gateway's resolve text for the rule (e.g. "Proxy host example.com is back online after 13m 2s."), never the firing message
 - **Cooldown**: cooldownSeconds — won't re-fire within this period (default 900s = 15 min)
 
 ## Webhooks

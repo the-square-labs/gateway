@@ -102,6 +102,7 @@ export class NotificationAlertRuleService {
         eventPattern: input.eventPattern ?? null,
         resourceIds: input.resourceIds,
         messageTemplate: input.messageTemplate ?? null,
+        resolveMessageTemplate: input.resolveMessageTemplate?.trim() ? input.resolveMessageTemplate : null,
         webhookIds: input.webhookIds,
         cooldownSeconds: input.cooldownSeconds,
       })
@@ -138,6 +139,9 @@ export class NotificationAlertRuleService {
     if (input.eventPattern !== undefined) updates.eventPattern = input.eventPattern;
     if (input.resourceIds !== undefined) updates.resourceIds = input.resourceIds;
     if (input.messageTemplate !== undefined) updates.messageTemplate = input.messageTemplate;
+    if (input.resolveMessageTemplate !== undefined) {
+      updates.resolveMessageTemplate = input.resolveMessageTemplate?.trim() ? input.resolveMessageTemplate : null;
+    }
     if (input.webhookIds !== undefined) updates.webhookIds = input.webhookIds;
     if (input.cooldownSeconds !== undefined) updates.cooldownSeconds = input.cooldownSeconds;
     if (isOnceADayAlertRule({ ...existing, metric: input.metric ?? existing.metric })) {

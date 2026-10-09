@@ -59,6 +59,8 @@ export const CreateAlertRuleSchema = z
 
     // Message template
     messageTemplate: z.string().max(4096).optional(),
+    // Sent when the alert resolves; empty uses Gateway's resolve text for the rule
+    resolveMessageTemplate: z.string().max(4096).nullable().optional(),
 
     // Webhooks to deliver to
     webhookIds: z.array(z.string().uuid()).default([]),
@@ -112,6 +114,7 @@ export const UpdateAlertRuleSchema = z.object({
   eventPattern: z.string().max(255).optional(),
   resourceIds: z.array(z.string()).optional(),
   messageTemplate: z.string().max(4096).optional(),
+  resolveMessageTemplate: z.string().max(4096).nullable().optional(),
   webhookIds: z.array(z.string().uuid()).optional(),
   cooldownSeconds: z.number().int().min(0).optional(),
 });

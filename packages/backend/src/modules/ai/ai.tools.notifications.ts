@@ -95,6 +95,11 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
           type: 'string',
           description: 'Handlebars message template (e.g., "CPU at {{value}}% on {{resource.name}}")',
         },
+        resolveMessageTemplate: {
+          type: 'string',
+          description:
+            'Handlebars message sent when the alert resolves (e.g., "{{resource.name}} is back online after {{formatDuration fired.duration}}"). Omit to use Gateway\'s resolve text for the rule; the firing message is never reused.',
+        },
         webhookIds: { type: 'array', items: { type: 'string' }, description: 'Webhook IDs to deliver to' },
         cooldownSeconds: { type: 'number', description: 'Cooldown between repeated firings (default 900)' },
         enabled: { type: 'boolean', description: 'Whether the rule is active (default false, like the UI)' },
@@ -127,6 +132,10 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
         eventPattern: { type: 'string' },
         resourceIds: { type: 'array', items: { type: 'string' } },
         messageTemplate: { type: 'string' },
+        resolveMessageTemplate: {
+          type: ['string', 'null'],
+          description: "Message sent when the alert resolves; empty or null uses Gateway's resolve text",
+        },
         webhookIds: { type: 'array', items: { type: 'string' } },
         cooldownSeconds: { type: 'number' },
       },

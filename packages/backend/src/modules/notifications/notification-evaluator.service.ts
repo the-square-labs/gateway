@@ -33,6 +33,7 @@ import type {
   DispatchWebhook,
   NotificationDispatcherService,
 } from './notification-dispatcher.service.js';
+import { defaultResolveMessage, resolveTemplateOf } from './notification-resolve-messages.js';
 import {
   buildNotificationTemplateContext,
   type NotificationEvent,
@@ -1650,6 +1651,21 @@ export class NotificationEvaluatorService {
     details: TemplateDetails,
     options: { notify?: boolean } = {}
   ): Promise<void> {
+    const [state] = await this.db
+      .select({ firedAt: notificationAlertStates.firedAt })
+      .from(notificationAlertStates)
+      .where(eq(notificationAlertStates.id, stateId))
+      .limit(1);
+    // How long the alert lasted, for the resolve message and its template ({{fired.*}}).
+    if (!details.fired && state?.firedAt) {
+      details = {
+        ...details,
+        fired: {
+          at: state.firedAt.toISOString(),
+          duration: Math.round((Date.now() - state.firedAt.getTime()) / 1000),
+        },
+      };
+    }
     const event = this.buildResolvedEvent(rule, resourceType, resourceKey, resourceName, details);
 
     // Health reports and sweeps race on the same state: only the caller that flips it notifies.
@@ -1701,7 +1717,7 @@ export class NotificationEvaluatorService {
     };
   }
 
-  /** The notification for a resolved alert, with the rule's message template rendered. */
+  /** The notification for a resolved alert, with the rule's resolve message rendered. */
   private buildResolvedEvent(
     rule: any,
     resourceType: string,
@@ -1724,9 +1740,11 @@ export class NotificationEvaluatorService {
       now,
       details
     );
-    const resolveMessage = rule.messageTemplate
-      ? renderTemplate(rule.messageTemplate, resolveContext)
-      : `${rule.name} has been resolved.`;
+    // Never the firing message: the rule's resolve message, else Gateway's text for the rule ("... is back online").
+    const resolveTemplate = resolveTemplateOf(rule);
+    const resolveMessage = resolveTemplate
+      ? renderTemplate(resolveTemplate, resolveContext)
+      : defaultResolveMessage(rule, resolvedResource.name, details);
     return {
       type: 'alert.resolved',
       title: `Resolved: ${rule.name}`,

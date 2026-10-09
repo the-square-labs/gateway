@@ -34,6 +34,8 @@ export interface AlertRule {
   eventPattern: string | null;
   resourceIds: string[];
   messageTemplate: string | null;
+  /** Sent when the alert resolves; null uses Gateway's resolve text for the rule. */
+  resolveMessageTemplate: string | null;
   webhookIds: string[];
   cooldownSeconds: number;
   isBuiltin: boolean;
