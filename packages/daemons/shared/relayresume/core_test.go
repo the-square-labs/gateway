@@ -534,3 +534,46 @@ func TestCoreSourceTakesTheExtensionFromHelloAck(t *testing.T) {
 		}
 	}
 }
+
+// A stream read out during a refused planned move carries the refusal: the
+// next process, which has no old path to hear out (the target's RST went to
+// the process that handed it over), ends it as the target's reset, not as a
+// cut, and never tries to move it.
+func TestCoreRefusalCarriedOverAHandoverIsThePeersReset(t *testing.T) {
+	pair, _, _ := refusedMove(t)
+	st := pair.src.exportState()
+	if st.Refused != RejectReset {
+		t.Fatalf("exported refusal %d", st.Refused)
+	}
+	st.MaxFrame = MaxFrameBytes
+	parsed, err := ParseSessionState(AppendSessionState(nil, &st))
+	if err != nil || parsed.Refused != RejectReset {
+		t.Fatalf("parsed %v: %+v", err, parsed)
+	}
+	next, err := restoreCore(Config{}, parsed, pair.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next.CanResume() {
+		t.Fatal("the next process tries to move a stream the target reset")
+	}
+	if deadline := next.NextDeadline(); deadline.After(pair.now) {
+		t.Fatalf("next deadline %v", deadline)
+	}
+	next.Tick(pair.now)
+	var reset *ResetError
+	if next.State() != StateReset || !errors.As(next.Err(), &reset) || !reset.Remote || isCut(next.Err()) {
+		t.Fatalf("next process: %s err %v", next.State(), next.Err())
+	}
+	// A refusal is only a source's, and only a reset's.
+	for _, bad := range []SessionState{{Role: RoleTarget, Refused: RejectReset}, {Role: RoleSource, Refused: RejectUnknown}} {
+		candidate := *parsed
+		candidate.Role, candidate.Refused = bad.Role, bad.Refused
+		if candidate.Role == RoleTarget {
+			candidate.SourceKind, candidate.SourceID = "daemon", "node-1"
+		}
+		if candidate.Validate() == nil {
+			t.Fatalf("refusal %d for role %d validated", bad.Refused, bad.Role)
+		}
+	}
+}

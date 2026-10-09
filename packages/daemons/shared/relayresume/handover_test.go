@@ -556,3 +556,38 @@ func TestHandoverHandedOverTableAnswersNoResume(t *testing.T) {
 		t.Fatalf("the handed over process answered %v", frame)
 	}
 }
+
+// A process that read a stream out never ends it on a deadline while it is
+// sealed: a refused planned move waits for Thaw (or goes to the next process
+// with the state), where its hearing out goes on.
+func TestHandoverSealedRefusedMoveWaitsForThaw(t *testing.T) {
+	pair, _, _ := refusedMove(t)
+	s := newSession(pair.src, "route-1", MaxFrameBytes)
+	s.Freeze()
+	st, err := s.HandoverState(time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Refused != RejectReset {
+		t.Fatalf("read out refusal %d", st.Refused)
+	}
+	// The refusal's deadline (pair.now + ResumeAckTimeout) passed long ago.
+	s.tick()
+	s.mu.Lock()
+	state := s.core.State()
+	s.mu.Unlock()
+	if state.Terminal() {
+		t.Fatalf("the sealed process ended the stream: %v", s.core.Err())
+	}
+	s.Thaw()
+	select {
+	case <-s.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the thawed stream's passed deadline did not act")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !isCut(s.core.Err()) {
+		t.Fatalf("thawed without word from the old path: %v", s.core.Err())
+	}
+}

@@ -129,10 +129,11 @@ type Session struct {
 	// sealed: the stream's state was read out (HandoverState), and the next
 	// process may carry it on from exactly that state. Until it thaws, this
 	// process tells the peer nothing beyond it: what the peer sends is kept
-	// unprocessed (Thaw processes it, Detach drops it), and no RESUME is
-	// answered or begun. Otherwise an offset learnt after the read-out (a
-	// RESUME_ACK's rcv_nxt) lets the peer free bytes the next process never
-	// got, or a CLOSE exchange finishes the stream behind its back.
+	// unprocessed (Thaw processes it, Detach drops it), no RESUME is
+	// answered or begun, and no deadline acts on it. Otherwise an offset
+	// learnt after the read-out (a RESUME_ACK's rcv_nxt) lets the peer free
+	// bytes the next process never got, or a CLOSE exchange or a timeout
+	// ends the stream behind its back.
 	sealed bool
 	// frozenOut: Recv last answered ErrFrozen, so the bridge holds no byte
 	// from the stream until it calls Recv again (RecvBlocked).
@@ -550,6 +551,13 @@ func (s *Session) tick() {
 		return
 	}
 	s.armedAt = time.Time{}
+	if s.sealed {
+		// Read out for a handover: no deadline acts on the stream here (see
+		// sealed; a refused move, a suspend or half-close timeout would end
+		// it behind the next process's back). Thaw rearms the timer.
+		s.mu.Unlock()
+		return
+	}
 	s.core.Tick(time.Now())
 	s.afterLocked(false)
 	s.mu.Unlock()
@@ -883,6 +891,8 @@ func (s *Session) Thaw() {
 				s.handleFrameLocked(run, item.frame, item.err)
 			}
 		}
+		// The deadlines that passed while it was sealed act now.
+		s.armLocked()
 		s.stateCond.Broadcast()
 		s.bgCond.Broadcast()
 	}

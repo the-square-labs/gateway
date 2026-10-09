@@ -280,6 +280,10 @@ type Core struct {
 	// path out until refusedDeadline before it counts as cut.
 	refused         byte
 	refusedDeadline time.Time
+	// refusedCarried: the refusal came with a stream another process handed
+	// over (SessionState.Refused). The old path, and the RST on it, stayed
+	// with that process, so the target's reset is taken as said.
+	refusedCarried bool
 
 	// Statistics.
 	Retransmitted uint64
@@ -1259,6 +1263,20 @@ func (c *Core) endRefused(code byte) {
 	c.closeAll()
 }
 
+// endCarriedRefusal ends a handed over stream whose planned move the target
+// refused because it reset the stream (source): the target's RST travelled
+// on the old path, which the process that handed the stream over kept. It
+// ends as that peer reset, as it would have there, not as a cut.
+func (c *Core) endCarriedRefusal() {
+	if c.Done() {
+		c.finish()
+		return
+	}
+	c.err = &ResetError{Code: RstResumeRejected, Reject: c.refused, Remote: true, Reason: "the target reset the stream while it moved", Err: ErrAborted}
+	c.state = StateReset
+	c.closeAll()
+}
+
 // ResumeVerdict is the target's answer to a RESUME.
 type ResumeVerdict struct {
 	Accepted bool
@@ -1392,6 +1410,10 @@ func (c *Core) Tick(now time.Time) {
 		c.attemptFailed(c.pending, now)
 	}
 	if c.refused != 0 && !now.Before(c.refusedDeadline) {
+		if c.refusedCarried {
+			c.endCarriedRefusal()
+			return
+		}
 		// The old path told nothing in time.
 		c.endRefused(c.refused)
 		return

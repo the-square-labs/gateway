@@ -60,6 +60,10 @@ type SessionState struct {
 	Window         uint64
 	ExtendedWindow uint64
 	PeerDelivered  uint64
+	// Refused (source): a planned move the target refused with RejectReset
+	// while the old path ran (Core.refused); the next process ends the
+	// stream as the target's reset.
+	Refused byte
 
 	// Receive side: [Delivered, RcvNxt) was received and not handed to the
 	// local socket; Queued holds its data bytes.
@@ -124,6 +128,8 @@ func (st *SessionState) Validate() error {
 		return invalid("window %d", st.Window)
 	case st.ExtendedWindow != 0 && (st.ExtendedWindow <= MaxWindow || st.ExtendedWindow > MaxExtendedWindow):
 		return invalid("extended window %d", st.ExtendedWindow)
+	case st.Refused != 0 && (st.Refused != RejectReset || st.Role != RoleSource):
+		return invalid("refusal %d", st.Refused)
 	}
 	unacked := uint64(0)
 	if end := st.dataEnd(); st.SndUna < end {
@@ -165,6 +171,9 @@ func (c *Core) exportState() SessionState {
 	}
 	if c.wnd > MaxWindow {
 		st.ExtendedWindow = c.wnd
+	}
+	if c.cfg.Role == RoleSource {
+		st.Refused = c.refused
 	}
 	end := st.dataEnd()
 	if c.sndUna < end {
@@ -231,6 +240,10 @@ func restoreCore(cfg Config, st *SessionState, now time.Time) (*Core, error) {
 		timeout = UnplannedBudget
 	}
 	c.suspendDeadline = frozen.Add(timeout)
+	if st.Refused != 0 {
+		// Nothing to hear out here (refusedCarried): it ends at the first tick.
+		c.refused, c.refusedDeadline, c.refusedCarried = st.Refused, now, true
+	}
 	return c, nil
 }
 
@@ -268,12 +281,13 @@ const (
 	stateFieldFrozenAt         = 29 // unix milliseconds
 	stateFieldPeerDelivered    = 30
 	stateFieldExtendedWindow   = 31
+	stateFieldRefused          = 32
 )
 
 // stateFieldKinds is the wire type of every known field.
 var stateFieldKinds = func() map[protowire.Number]protowire.Type {
 	kinds := map[protowire.Number]protowire.Type{}
-	for field := protowire.Number(stateFieldRole); field <= stateFieldExtendedWindow; field++ {
+	for field := protowire.Number(stateFieldRole); field <= stateFieldRefused; field++ {
 		kinds[field] = protowire.VarintType
 	}
 	for _, field := range []protowire.Number{stateFieldRouteID, stateFieldSessionID, stateFieldTargetNonce, stateFieldKeyID,
@@ -337,6 +351,7 @@ func AppendSessionState(buffer []byte, st *SessionState) []byte {
 	}
 	varint(stateFieldPeerDelivered, st.PeerDelivered)
 	varint(stateFieldExtendedWindow, st.ExtendedWindow)
+	varint(stateFieldRefused, uint64(st.Refused))
 	return buffer
 }
 
@@ -448,6 +463,11 @@ func ParseSessionState(data []byte) (*SessionState, error) {
 			st.PeerDelivered = value
 		case stateFieldExtendedWindow:
 			st.ExtendedWindow = value
+		case stateFieldRefused:
+			if value > 0xff {
+				return nil, malformed
+			}
+			st.Refused = byte(value)
 		}
 		if err != nil {
 			return nil, err
