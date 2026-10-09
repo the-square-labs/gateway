@@ -175,6 +175,12 @@ export class ManagedWorkloadLifecycle<TRow extends WorkloadRow, TCredentials> {
   private async runDelete(row: TRow, userId: string | null): Promise<unknown> {
     try {
       await this.dispatch.beforeDelete?.(row, userId);
+    } catch (error) {
+      // The Gateway-side cleanup (links, keys, routes) failed; the delete
+      // keeps its pending operation and the reconciliation pass retries it.
+      return this.markWaiting(row, 'delete', error instanceof Error ? error.message : undefined);
+    }
+    try {
       const payload = await this.dispatch.renderCommandPayload(row, 'remove');
       const result = await this.dispatch.sendCommand(row.nodeId, 'remove', row.id, payload);
       if (!result.success) return this.markError(row, 'delete', result.error);
@@ -399,6 +405,22 @@ export class ManagedWorkloadLifecycle<TRow extends WorkloadRow, TCredentials> {
   async markOutcomeUnknown(row: TRow): Promise<unknown> {
     const pending = (await this.store.setStatus(row.id, {
       lastError: this.labels.reconciling,
+    })) as unknown as TRow;
+    this.dispatch.emit(pending, 'reconciling');
+    return this.dispatch.toView(pending);
+  }
+
+  /**
+   * A pending operation that could not go ahead yet and is retried by the
+   * reconciliation pass: the row says what it waits for.
+   */
+  async markWaiting(row: TRow, operation: string, detail?: string): Promise<unknown> {
+    const sanitizedDetail = sanitizeDaemonDetail(detail);
+    const pending = (await this.store.setStatus(row.id, {
+      lastError:
+        sanitizedDetail && this.labels.waiting
+          ? this.labels.waiting(operation, sanitizedDetail)
+          : this.labels.reconciling,
     })) as unknown as TRow;
     this.dispatch.emit(pending, 'reconciling');
     return this.dispatch.toView(pending);

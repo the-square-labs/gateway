@@ -19,4 +19,9 @@ export interface ManagedWorkloadLabels {
    * the workload keeps the status it had. Defaults to `failed`'s text.
    */
   refused?: (operation: string, detail: string) => string;
+  /**
+   * lastError text of a delete whose Gateway-side cleanup failed; it is
+   * retried with the pending operation. Defaults to `reconciling`.
+   */
+  waiting?: (operation: string, detail: string) => string;
 }

@@ -11,6 +11,7 @@ const labels: ManagedWorkloadLabels = {
   failed: (operation, detail) => (detail ? `Storage ${operation} failed: ${detail}` : `Storage ${operation} failed`),
   reconciling: 'Storage operation outcome is being reconciled',
   refused: (operation, detail) => `The node refused the ${operation} and changed nothing: ${detail}`,
+  waiting: (operation, detail) => `Storage ${operation} is retried automatically: ${detail}`,
 };
 
 function setup(row: Record<string, unknown>) {
@@ -87,5 +88,35 @@ describe('managed workload update the node refused', () => {
     ).toBe(true);
     expect(isUpdateRefusedBeforeChange('grow managed database filesystem: exit status 1')).toBe(false);
     expect(isUpdateRefusedBeforeChange(undefined)).toBe(false);
+  });
+});
+
+describe('managed workload delete whose Gateway-side cleanup fails', () => {
+  it('keeps the delete pending, says why, and sends nothing to the node', async () => {
+    const row = {
+      id: 'storage',
+      nodeId: 'node',
+      status: 'deleting',
+      updatedById: null,
+      pendingOperation: { id: 'op', action: 'delete' },
+    };
+    const { lifecycle, writes, dispatch, store } = setup(row);
+    dispatch.beforeDelete.mockRejectedValueOnce(
+      new Error('Failed to delete the SeaweedFS IAM user that owns this access key: SeaweedFS IAM ServiceFailure')
+    );
+    await lifecycle.dispatchDelete(row as never, null);
+    expect(writes).toEqual([
+      {
+        lastError:
+          'Storage delete is retried automatically: Failed to delete the SeaweedFS IAM user that owns this access key: SeaweedFS IAM ServiceFailure',
+      },
+    ]);
+    expect(dispatch.sendCommand).not.toHaveBeenCalled();
+    expect(store.delete).not.toHaveBeenCalled();
+
+    // The next pass retries it and the delete completes.
+    await lifecycle.dispatchDelete(row as never, null);
+    expect(dispatch.sendCommand).toHaveBeenCalledWith('node', 'remove', 'storage', '');
+    expect(store.delete).toHaveBeenCalledWith('storage');
   });
 });
