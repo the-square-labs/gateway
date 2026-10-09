@@ -197,6 +197,11 @@ export interface RelayPoolUpdateRuntime {
    * settling after a restart (daemon updates included), so two members of one policy never restart together.
    */
   awaitLeasePeers?(relayInstanceId: string, signal: AbortSignal): Promise<void>;
+  /**
+   * Before the run drains its next relay and after its last step: waits (bounded) until the placement that includes
+   * the relays it updated so far is active (RelayPoolService.settleForUpdate).
+   */
+  settlePlacement?(signal: AbortSignal): Promise<void>;
   /** After the relay restarted at `since`: waits (bounded) until it reports a lease acceptor that votes again. */
   awaitLeaseSettled?(relayInstanceId: string, since: number, signal: AbortSignal): Promise<void>;
   /** Whether the remote relay of this node is connected now; an offline member is skipped, not waited for. */
@@ -1428,6 +1433,9 @@ chmod 700 "$backup"
             // sessions move instead of dropping when its container is recreated. Otherwise they drop once.
             interruption = await this.localRelayTakeoverBlocker(runtime, instance.id);
             if (!interruption) {
+              // The relay updated before it must carry the local relay's workloads, not the one left over.
+              await runtime.settlePlacement?.(signal);
+              throwIfAbandoned();
               drainGraceMs = await this.updateDrainGraceMs(runtime, instance.id);
               await this.updatePoolStep(step.id, 'draining', false, new Date(Date.now() + drainGraceMs));
               drainedInstanceId = instance.id;
@@ -1496,6 +1504,9 @@ chmod 700 "$backup"
         // A voter or candidate of the relay's lease policies that is restarting or settling goes first.
         await runtime.awaitLeasePeers?.(instance.id, signal);
         throwIfAbandoned();
+        // Placement including the relay updated before goes first (settlePlacement).
+        await runtime.settlePlacement?.(signal);
+        throwIfAbandoned();
         drainGraceMs = await this.updateDrainGraceMs(runtime, instance.id);
         await this.updatePoolStep(step.id, 'draining', false, new Date(Date.now() + drainGraceMs));
         drainedInstanceId = instance.id;
@@ -1542,6 +1553,8 @@ chmod 700 "$backup"
         currentStepId = null;
       }
       throwIfAbandoned();
+      // The last relay updated (usually the local one) takes its workloads back now, not after automatic placement.
+      await runtime.settlePlacement?.(signal);
       await this.promoteRelayConnectorImages(artifact);
       // An abandoned or recovered run stays failed.
       await this.db

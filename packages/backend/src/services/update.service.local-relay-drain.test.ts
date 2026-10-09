@@ -218,6 +218,21 @@ describe('The local relay step of a Relay Pool update', () => {
     expect(state.drainDeadlineAt).toBeInstanceOf(Date);
   });
 
+  it('drains the local relay only once the placement with the relay updated before is active, and settles it after the run (stand rc.8, F-2)', async () => {
+    const { service, runtime } = localStepPool(null);
+    const events: string[] = [];
+    const settlePlacement = vi.fn(async () => void events.push('placement settled'));
+    service.setRelayPoolUpdateRuntime({ ...runtime, settlePlacement });
+    runtime.drainInstance.mockImplementation(
+      async (_id: string, _user: string, enabled: boolean) => void events.push(enabled ? 'drain' : 'resume')
+    );
+
+    await service.performRelayUpdate('v2.4.3', relayArtifact(), 'admin-1');
+
+    expect(events).toEqual(['placement settled', 'drain', 'resume', 'placement settled']);
+    expect(settlePlacement).toHaveBeenCalledWith(expect.any(AbortSignal));
+  });
+
   it('disconnects the local relay streams left after the drain grace before it recreates the relay', async () => {
     const { service, dockerService, runtime, drainWait } = localStepPool(null);
     drainWait.mockResolvedValueOnce(false).mockResolvedValueOnce(false);

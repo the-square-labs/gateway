@@ -2153,6 +2153,7 @@ export async function initializeContainer(): Promise<void> {
       forceDisconnectInstance: (instanceId, userId) =>
         relayPoolService.forceDisconnectInstance(instanceId, userId, { update: true }),
       localRelayTakeoverBlocker: (instanceId) => relayPoolService.localRelayTakeoverBlocker(instanceId),
+      settlePlacement: (signal) => relayPoolService.settleForUpdate(signal),
       isRelayConnected: (nodeId) => relayPolicyService?.isRemoteInstanceConnected(nodeId) ?? true,
       relayStreamReports: () => relayPolicyService?.relayStreamReports() ?? [],
       prepareWorkerUpdate: (version, arch) =>

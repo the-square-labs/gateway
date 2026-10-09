@@ -518,3 +518,23 @@ export function attachEndpointRtts(
     }
   }
 }
+
+/**
+ * The relay a staged generation leaves out although it serves again since the generation was planned (`plannedAt`):
+ * it was planned while that relay drained, restarted or failed, so its placement is out of date. Activated anyway, it
+ * put the workloads on the farther relay left over, and a Relay Pool update then drained the next relay into that
+ * placement (stand rc.8, F-2: generations planned while UK drained for its update were activated 1 s after UK was
+ * ready again, and the local relay's traffic went to the 300-ms relay). `backAt`: when each relay last started to
+ * serve again; `serving`: the relays that serve now. Null when the generation is current.
+ */
+export function relayBackSincePlanned(
+  plannedAt: number,
+  relayIds: ReadonlySet<string>,
+  backAt: ReadonlyMap<string, number>,
+  serving: ReadonlySet<string>
+): string | null {
+  for (const [id, at] of backAt) {
+    if (at > plannedAt && !relayIds.has(id) && serving.has(id)) return id;
+  }
+  return null;
+}

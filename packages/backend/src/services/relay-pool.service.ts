@@ -51,6 +51,7 @@ import {
   placementInstances,
   RELAY_RETURN_HOLD_MS,
   type RelayAssignmentRole,
+  relayBackSincePlanned,
   samePlannedAssignments,
 } from './relay-topology.js';
 import type { RelayTopologyService } from './relay-topology.service.js';
@@ -69,6 +70,11 @@ export interface RelayPoolWarning {
 const AUTO_REBALANCE_SETTLE_MS = 30_000;
 /** How long a relay an update drained counts as restarting by plan when the update never resumes it. */
 const UPDATE_DRAIN_PLANNED_MS = 60 * 60_000;
+/** A rolled-back out-of-date generation is planned again after this; the placement that rolled it back finishes first. */
+const REPLAN_AFTER_SUPERSEDE_MS = 1_000;
+/** How long a Relay Pool update waits for placement to settle before it drains its next relay (settleForUpdate). */
+const UPDATE_PLACEMENT_SETTLE_MS = 90_000;
+const UPDATE_PLACEMENT_POLL_MS = 1_000;
 const AUTO_REBALANCE_RETRY_MS = 5 * 60_000;
 /**
  * A workload a transient condition deferred is retried after this long, doubling while the condition lasts, up to
@@ -230,6 +236,9 @@ export class RelayPoolService {
    * resumes them (see placementView).
    */
   private readonly drainedForUpdate = new Map<string, number>();
+  /** Whether placement last saw each relay serving, and when each one last started to serve again. */
+  private readonly servingNow = new Map<string, boolean>();
+  private readonly servingAgainAt = new Map<string, number>();
   /** The relays last judged failing on their data plane, and when each one last entered or left that judgement. */
   private dataPlaneFailing = new Set<string>();
   private readonly dataPlaneChangedAt = new Map<string, number>();
@@ -422,6 +431,17 @@ export class RelayPoolService {
       if (!known.has(id) || now - at >= UPDATE_DRAIN_PLANNED_MS) this.drainedForUpdate.delete(id);
     }
     const planned = ({ id, state }: RelayInstanceRow) => state === 'draining' || this.drainedForUpdate.has(id);
+    for (const instance of instances) {
+      const up = (instance.state === 'ready' || grace.has(instance.id)) && !failing.has(instance.id);
+      if (up && this.servingNow.get(instance.id) === false) this.servingAgainAt.set(instance.id, now);
+      this.servingNow.set(instance.id, up);
+    }
+    for (const id of this.servingNow.keys()) {
+      if (!known.has(id)) {
+        this.servingNow.delete(id);
+        this.servingAgainAt.delete(id);
+      }
+    }
     for (const instance of instances) {
       if ((instance.state !== 'ready' && !grace.has(instance.id) && !planned(instance)) || failing.has(instance.id)) {
         this.notServingAt.set(instance.id, now);
@@ -2113,6 +2133,9 @@ export class RelayPoolService {
   private forgetPlannedDrain(instanceId: string): void {
     this.drainedForUpdate.delete(instanceId);
     this.notServingAt.delete(instanceId);
+    // A generation staged while it drained leaves it out: it must not be activated now (relayBackSincePlanned).
+    this.servingNow.set(instanceId, true);
+    this.servingAgainAt.set(instanceId, Date.now());
   }
 
   /** Raw streams the daemons report through this relay: they end only on their own or when cut. */
@@ -2250,6 +2273,7 @@ export class RelayPoolService {
   private async tryActivate(generationId: string): Promise<boolean> {
     if (this.preparingGenerations.has(generationId)) return false;
     let failed = false;
+    let superseded: string | null = null;
     let endpointId: string | undefined;
     const activated = await this.db.transaction(async (tx) => {
       // Removal must not delete a staged assignment between this readiness read
@@ -2305,6 +2329,22 @@ export class RelayPoolService {
       ) {
         return false;
       }
+      superseded = await this.relayBackSince(tx, generation.createdAt, assignments);
+      if (superseded) {
+        // Rolled back as not attempted, like a deferral: the workload keeps its active generation, and placement
+        // plans it again with the relay that came back.
+        await tx
+          .update(relayEndpointAssignmentGenerations)
+          .set({
+            state: 'retired',
+            retiredAt: new Date(),
+            activationError: `${DEFERRED_NOTE}: a relay it leaves out serves again; placed again`,
+            updatedAt: new Date(),
+          })
+          .where(eq(relayEndpointAssignmentGenerations.id, generation.id));
+        await bumpRelayPolicyRevision(tx);
+        return false;
+      }
       await tx
         .update(relayEndpointAssignmentGenerations)
         .set({ state: 'draining', drainStartedAt: new Date(), updatedAt: new Date() })
@@ -2328,11 +2368,118 @@ export class RelayPoolService {
     // A verified outcome ends the deferral backoff: a failure carries its own cooldown.
     if ((failed || activated) && endpointId) this.deferrals.delete(endpointId);
     if (failed) await this.withdrawGenerations([generationId]);
+    if (superseded) {
+      logger.info('A staged relay placement left out a relay that serves again; it is placed again', {
+        endpointId,
+        relayInstanceId: superseded,
+      });
+      await this.withdrawGenerations([generationId]);
+      this.events.publish('system.relay.health.changed', { poolId: 'system', action: 'rebalance_deferred' });
+      if (endpointId) this.replanSoon(endpointId);
+    }
     if (activated) {
       await this.policy.reconcileAndSync();
+      // Gateway's own streams look at the new assignment at once instead of at their next 30-s lookup.
+      this.policy.gatewayAssignmentsChanged?.();
       this.events.publish('system.relay.health.changed', { poolId: 'system', action: 'rebalance_activated' });
     }
     return activated;
+  }
+
+  /**
+   * The relay that a staged generation (`plannedAt`, its `assignments`) leaves out although it serves again since:
+   * placement saw it come back (or an update or an operator resumed it) after the generation was planned, and it is
+   * ready now (relayBackSincePlanned).
+   */
+  private async relayBackSince(
+    tx: Pick<DrizzleClient, 'select'>,
+    plannedAt: Date,
+    assignments: ReadonlyArray<{ relayInstanceId: string }>
+  ): Promise<string | null> {
+    const relayIds = new Set(assignments.map(({ relayInstanceId }) => relayInstanceId));
+    const candidates = [...this.servingAgainAt].filter(([id, at]) => at > plannedAt.getTime() && !relayIds.has(id));
+    if (!candidates.length) return null;
+    const ready = await tx
+      .select({ id: relayInstances.id })
+      .from(relayInstances)
+      .where(
+        and(
+          inArray(
+            relayInstances.id,
+            candidates.map(([id]) => id)
+          ),
+          eq(relayInstances.state, 'ready')
+        )
+      );
+    return relayBackSincePlanned(
+      plannedAt.getTime(),
+      relayIds,
+      this.servingAgainAt,
+      new Set(ready.map(({ id }) => id))
+    );
+  }
+
+  /**
+   * Before a Relay Pool update drains its next relay, and after its last one: waits (bounded) until no placement is
+   * staged, then places every workload whose plan changed (a relay the update just resumed is back) and waits until
+   * those generations are active. Otherwise the drain met a placement made while the previous relay drained, and its
+   * workloads went to the relay left over, however far (stand rc.8, F-2: the local relay drained 2 s after UK was
+   * ready again, onto generations without UK, and its traffic ran over the 300-ms relay until UK's generations were
+   * active). An update never waits on placement for longer than UPDATE_PLACEMENT_SETTLE_MS.
+   */
+  async settleForUpdate(signal?: AbortSignal, timeoutMs = UPDATE_PLACEMENT_SETTLE_MS): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    const waitWhile = async (busy: () => Promise<boolean>): Promise<boolean> => {
+      while (await busy()) {
+        if (signal?.aborted || Date.now() >= deadline) return false;
+        await new Promise((resolve) => setTimeout(resolve, UPDATE_PLACEMENT_POLL_MS).unref?.());
+      }
+      return true;
+    };
+    const staging = async () =>
+      this.rebalanceFlight ||
+      (
+        await this.db
+          .select({ id: relayEndpointAssignmentGenerations.id })
+          .from(relayEndpointAssignmentGenerations)
+          .where(eq(relayEndpointAssignmentGenerations.state, 'staging'))
+          .limit(1)
+      ).length > 0;
+    try {
+      if (!(await waitWhile(staging))) return;
+      const { rebalanceEndpointIds } = await this.getSnapshot();
+      if (!rebalanceEndpointIds.length) return;
+      await this.stageRebalance(undefined, {
+        allowNoop: true,
+        automatic: true,
+        evacuation: true,
+        endpointIds: rebalanceEndpointIds,
+      });
+      await waitWhile(staging);
+    } catch (error) {
+      logger.warn('Relay placement did not settle before the next step of a Relay Pool update', {
+        error: relayPoolErrorMessage(error),
+      });
+    }
+  }
+
+  /** Plans one endpoint again soon, after a staged generation of it was rolled back as out of date. */
+  private replanSoon(endpointId: string): void {
+    const timer = setTimeout(() => {
+      if (this.rebalanceFlight) return; // The running placement, or the next reconciliation, takes it.
+      void this.stageRebalance(undefined, {
+        allowNoop: true,
+        automatic: true,
+        evacuation: true,
+        endpointIds: [endpointId],
+      }).catch((error) =>
+        logger.debug('Relay placement of a workload was not repeated yet', {
+          endpointId,
+          error: relayPoolErrorMessage(error),
+        })
+      );
+    }, REPLAN_AFTER_SUPERSEDE_MS);
+    timer.unref?.();
   }
 
   /**
