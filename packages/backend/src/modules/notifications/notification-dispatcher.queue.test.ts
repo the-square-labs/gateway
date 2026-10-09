@@ -11,6 +11,15 @@ describe('webhook delivery outcomes', () => {
     expect(result(408)).toEqual({ kind: 'unreachable' });
     expect(result(400)).toEqual({ kind: 'rejected' });
     expect(result(404)).toEqual({ kind: 'rejected' });
+    expect(
+      result(
+        undefined,
+        'Webhook target blocked by outbound network policy: Webhook target did not resolve to an IP address'
+      )
+    ).toEqual({ kind: 'unreachable' });
+    expect(
+      result(undefined, 'Webhook target blocked by outbound network policy: private network targets are not allowed')
+    ).toEqual({ kind: 'rejected' });
   });
 
   it("waits as long as a 429 asks: Retry-After, Discord's retry_after, or 30 s", () => {

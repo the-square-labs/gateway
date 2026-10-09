@@ -226,10 +226,10 @@ describe.skipIf(!url)('Alert folding on disposable PostgreSQL', () => {
     expect(resumed).toBe(1);
   });
 
-  it('creates the built-in outbound rule with the webhooks of the route and node rules', async () => {
+  it('upgrades: queued deliveries keep their creation order, and the built-in outbound rule gets the route and node webhooks', async () => {
     const fresh = await disposableDatabase(url!, 'alert_folding_seed');
     try {
-      await migrateDatabase(fresh.pool, '0234_alert_rule_resolve_message');
+      await migrateDatabase(fresh.pool, '0232_docker_task_follow_ups');
       const hook = (
         await fresh.pool.query(
           `insert into notification_webhooks (name, url) values ('D', 'https://hooks.example.test/y') returning id`
@@ -240,7 +240,26 @@ describe.skipIf(!url)('Alert folding on disposable PostgreSQL', () => {
          values ('Proxy host down', true, 'event', 'proxy', 'health.offline', $1)`,
         [JSON.stringify([hook])]
       );
+      for (const [body, age] of [
+        ['later', '1 minute'],
+        ['earlier', '2 minutes'],
+      ]) {
+        await fresh.pool.query(
+          `insert into notification_delivery_log (webhook_id, event_type, severity, request_url, request_method,
+             request_body, status, created_at)
+           values ($1, 'alert.fired', 'critical', 'https://hooks.example.test/y', 'POST', $2, 'retrying',
+             now() - $3::interval)`,
+          [hook, body, age]
+        );
+      }
       await migrateDatabase(fresh.pool);
+      await fresh.pool.query(
+        `insert into notification_delivery_log (webhook_id, event_type, severity, request_url, request_method, request_body)
+         values ($1, 'alert.fired', 'critical', 'https://hooks.example.test/y', 'POST', 'new')`,
+        [hook]
+      );
+      const queue = (await fresh.pool.query(`select request_body from notification_delivery_log order by seq`)).rows;
+      expect(queue.map((row) => row.request_body)).toEqual(['earlier', 'later', 'new']);
       const seeded = (
         await fresh.pool.query(
           `select enabled, is_builtin, severity, webhook_ids from notification_alert_rules where event_pattern = 'outbound.unavailable'`
@@ -250,5 +269,5 @@ describe.skipIf(!url)('Alert folding on disposable PostgreSQL', () => {
     } finally {
       await fresh.drop();
     }
-  });
+  }, 60_000);
 });

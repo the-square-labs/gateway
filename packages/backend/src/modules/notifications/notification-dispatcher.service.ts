@@ -33,6 +33,8 @@ const MAX_QUEUED_MS = 24 * 60 * 60 * 1000;
 const WEBHOOK_LEASE_SECONDS = 60;
 /** A rate limit this short is waited out in place; a longer one pauses the webhook. */
 const INLINE_RATE_LIMIT_WAIT_MS = 5_000;
+/** Short rate limits waited out in place in a row before the webhook pauses instead (the lease is not renewed meanwhile). */
+const MAX_INLINE_RATE_LIMIT_WAITS = 3;
 /** Without a Retry-After, a rate-limited webhook waits this long. */
 const DEFAULT_RATE_LIMIT_WAIT_MS = 30_000;
 /** Deliveries one drain sends before it yields; the retry job continues. */
@@ -56,6 +58,8 @@ export type DeliveryOutcome =
   | { kind: 'rejected' }
   | { kind: 'unreachable' }
   | { kind: 'rate_limited'; waitMs: number };
+
+const OUTBOUND_POLICY_ERROR_PREFIX = 'Webhook target blocked by outbound network policy:';
 
 function headerValue(headers: QueuedSendResult['responseHeaders'], name: string): string | undefined {
   if (!headers) return undefined;
@@ -94,7 +98,12 @@ export function rateLimitWaitMs(
  */
 export function classifyDeliveryResult(result: QueuedSendResult): DeliveryOutcome {
   const status = result.statusCode;
-  if (status === undefined) return { kind: 'unreachable' };
+  if (status === undefined) {
+    // The outbound policy refusing the target is configuration, not an outage; a name that did not resolve is.
+    const policyDenied =
+      result.error?.startsWith(OUTBOUND_POLICY_ERROR_PREFIX) && !/did not resolve/.test(result.error);
+    return policyDenied ? { kind: 'rejected' } : { kind: 'unreachable' };
+  }
   if (status >= 200 && status < 300) return { kind: 'delivered' };
   if (status === 429)
     return { kind: 'rate_limited', waitMs: rateLimitWaitMs(result.responseHeaders, result.responseBody) };
@@ -571,7 +580,7 @@ export class NotificationDispatcherService {
       return 'continue';
     }
 
-    for (;;) {
+    for (let inlineWaits = 0; ; inlineWaits++) {
       const result = await this.sendQueued(webhook, delivery);
       const attempt = delivery.attempt + 1;
       delivery = { ...delivery, attempt };
@@ -601,7 +610,11 @@ export class NotificationDispatcherService {
         });
         return 'continue';
       }
-      if (outcome.kind === 'rate_limited' && outcome.waitMs <= INLINE_RATE_LIMIT_WAIT_MS) {
+      if (
+        outcome.kind === 'rate_limited' &&
+        outcome.waitMs <= INLINE_RATE_LIMIT_WAIT_MS &&
+        inlineWaits < MAX_INLINE_RATE_LIMIT_WAITS
+      ) {
         await this.recordAttempt(delivery.id, attempt, result, { status: 'retrying', error: 'Rate limited' });
         await sleep(outcome.waitMs);
         continue;
@@ -721,10 +734,10 @@ export class NotificationDispatcherService {
       this.generalSettingsService?.getCachedPublicUrl()
     );
     if (!result.allowed) {
-      throw new Error(`Webhook target blocked by outbound network policy: ${result.reason ?? 'target is not allowed'}`);
+      throw new Error(`${OUTBOUND_POLICY_ERROR_PREFIX} ${result.reason ?? 'target is not allowed'}`);
     }
     if (result.resolvedAddresses.length === 0) {
-      throw new Error('Webhook target blocked by outbound network policy: target did not resolve');
+      throw new Error(`${OUTBOUND_POLICY_ERROR_PREFIX} target did not resolve`);
     }
     return fetchWithPinnedAddresses(url, result.resolvedAddresses, options);
   }
