@@ -259,8 +259,16 @@ func (m *managedStorageManager) reclaimSeaweedFSSpace(ctx context.Context, recor
 	if err != nil {
 		return err
 	}
+	freed := after.Free - space.Free
+	if freed <= 0 {
+		// Nothing came free (new objects took the space, or the volumes'
+		// garbage was already counted); not worth a line every pass.
+		m.logger.Debug("managed storage compaction freed no space", "id", record.ID,
+			"volumes", len(plan.VolumeIDs), "freedBytes", freed, "freeBytes", after.Free)
+		return nil
+	}
 	m.logger.Info("managed storage gave back the space of deleted objects", "id", record.ID,
-		"volumes", len(plan.VolumeIDs), "freedBytes", after.Free-space.Free, "freeBytes", after.Free)
+		"volumes", len(plan.VolumeIDs), "freedBytes", freed, "freeBytes", after.Free)
 	// The compacted volume files are smaller now; the node's disk gets that
 	// space back once the storage's filesystem discards it.
 	trimInstanceDisk(m.loopHost(), m.logger, "managed storage", record.ID, record.MountPath)

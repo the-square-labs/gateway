@@ -1,9 +1,11 @@
 package docker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -257,6 +259,39 @@ func TestInspectReportsAFullSeaweedFSStorage(t *testing.T) {
 		if !tc.full && strings.Contains(detail, "storageFull") {
 			t.Fatalf("a storage with room reports storageFull: %s", detail)
 		}
+	}
+}
+
+// A pass logs that it gave space back only when it did (O-16: a read-only
+// storage logged "gave back ... freedBytes 0" every 30 s).
+func TestReclaimLogsOnlySpaceItGaveBack(t *testing.T) {
+	m, _, _, _ := reclaimTestStorage(t, 200*mebibyte, volumeStatus(t, volumeOf(11, 130, 130, true)))
+	var logs bytes.Buffer
+	m.logger = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	m.reclaimSpace(context.Background())
+	if strings.Contains(logs.String(), "gave back") {
+		t.Fatalf("a pass that freed nothing logged: %s", logs.String())
+	}
+
+	free := uint64(200 * mebibyte)
+	m.statFilesystem = func(path string, stat *unix.Statfs_t) error {
+		stat.Bsize, stat.Blocks, stat.Bavail = 1, 8*gibibyte, free
+		if path == m.root {
+			stat.Blocks, stat.Bavail = 64*gibibyte, 32*gibibyte
+		}
+		return nil
+	}
+	exec := m.execEngine
+	m.execEngine = func(ctx context.Context, container string, command []string, stdin string) ([]byte, error) {
+		if command[0] != "curl" {
+			free += 130 * mebibyte
+		}
+		return exec(ctx, container, command, stdin)
+	}
+	m.reclaimSpace(context.Background())
+	if !strings.Contains(logs.String(), "gave back the space of deleted objects") || !strings.Contains(logs.String(), "freedBytes=136314880") {
+		t.Fatalf("a pass that freed 130 MiB logged: %s", logs.String())
 	}
 }
 
