@@ -1,6 +1,6 @@
-import { count, eq, ilike, type SQL } from 'drizzle-orm';
+import { count, eq, ilike, inArray, type SQL } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { notificationAlertRules } from '@/db/schema/index.js';
+import { notificationAlertRules, notificationWebhooks } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
@@ -70,6 +70,26 @@ export class NotificationAlertRuleService {
     };
   }
 
+  /** Webhooks a rule notifies must exist; ids the rule already had (a webhook deleted since) are kept as they are. */
+  private async assertWebhooksExist(webhookIds: string[], alreadyOnRule: unknown = []): Promise<void> {
+    const kept = new Set(Array.isArray(alreadyOnRule) ? alreadyOnRule : []);
+    const wanted = [...new Set(webhookIds)].filter((id) => !kept.has(id));
+    if (wanted.length === 0) return;
+    const found = await this.db
+      .select({ id: notificationWebhooks.id })
+      .from(notificationWebhooks)
+      .where(inArray(notificationWebhooks.id, wanted));
+    const known = new Set(found.map((row) => row.id));
+    const missing = wanted.filter((id) => !known.has(id));
+    if (missing.length > 0) {
+      throw new AppError(
+        400,
+        'WEBHOOK_NOT_FOUND',
+        `No webhook has the id ${missing.join(', ')}; create the webhook first or pick an existing one`
+      );
+    }
+  }
+
   async getById(id: string) {
     const [rule] = await this.db
       .select()
@@ -83,6 +103,7 @@ export class NotificationAlertRuleService {
   async create(input: CreateAlertRuleInput, userId: string) {
     // API, AI and MCP all create through here; normalize windows a once-a-day rule can never satisfy.
     if (isOnceADayAlertRule(input)) input = { ...input, ...ONCE_A_DAY_ALERT_WINDOWS };
+    await this.assertWebhooksExist(input.webhookIds);
     const [rule] = await this.db
       .insert(notificationAlertRules)
       .values({
@@ -123,6 +144,7 @@ export class NotificationAlertRuleService {
 
   async update(id: string, input: UpdateAlertRuleInput, userId: string) {
     const existing = await this.getById(id);
+    if (input.webhookIds !== undefined) await this.assertWebhooksExist(input.webhookIds, existing.webhookIds);
 
     const updates: Record<string, unknown> = { updatedAt: new Date() };
     if (input.name !== undefined) updates.name = input.name;

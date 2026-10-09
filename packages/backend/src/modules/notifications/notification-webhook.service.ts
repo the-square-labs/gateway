@@ -1,6 +1,6 @@
-import { count, eq, ilike, inArray, type SQL } from 'drizzle-orm';
+import { count, eq, ilike, inArray, type SQL, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { notificationWebhooks } from '@/db/schema/index.js';
+import { notificationAlertRules, notificationWebhooks } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
@@ -187,7 +187,16 @@ export class NotificationWebhookService {
 
   async delete(id: string, userId: string) {
     const existing = await this.getById(id);
-    await this.db.delete(notificationWebhooks).where(eq(notificationWebhooks.id, id));
+    await this.db.transaction(async (tx) => {
+      await tx.delete(notificationWebhooks).where(eq(notificationWebhooks.id, id));
+      // Alert rules stop naming the deleted webhook (a rule only takes ids of existing webhooks).
+      await tx
+        .update(notificationAlertRules)
+        .set({
+          webhookIds: sql`(select coalesce(jsonb_agg(value), '[]'::jsonb) from jsonb_array_elements(${notificationAlertRules.webhookIds}) where value <> to_jsonb(${id}::text))`,
+        })
+        .where(sql`${notificationAlertRules.webhookIds} @> ${JSON.stringify([id])}::jsonb`);
+    });
 
     await this.auditService.log({
       userId,
