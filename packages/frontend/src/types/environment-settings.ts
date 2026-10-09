@@ -1,6 +1,7 @@
 export interface RateLimitSettings {
   windowMs: number;
   maxRequests: number;
+  sessionMaxRequests: number;
   authMaxRequests: number;
   authLoginMaxRequests: number;
   authCallbackMaxRequests: number;

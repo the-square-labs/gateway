@@ -15,6 +15,7 @@ export const RateLimitSettingsSchema = z
   .object({
     windowMs: positiveInt(1_000, 3_600_000),
     maxRequests: positiveInt(1, 1_000_000),
+    sessionMaxRequests: positiveInt(1, 1_000_000),
     authMaxRequests: positiveInt(1, 1_000_000),
     authLoginMaxRequests: positiveInt(1, 1_000_000),
     authCallbackMaxRequests: positiveInt(1, 1_000_000),

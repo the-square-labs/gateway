@@ -4,7 +4,7 @@ import { container, TOKENS } from '@/container.js';
 import { RATE_LIMIT_REDIS_TIMEOUT_MS } from '@/lib/rate-limit-timeout.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AppEnv } from '@/types.js';
-import { createRateLimiter } from './rate-limit.js';
+import { createApiRateLimitMiddleware, createRateLimiter } from './rate-limit.js';
 
 interface Entry {
   score: number;
@@ -302,5 +302,30 @@ describe('createRateLimiter', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('createApiRateLimitMiddleware', () => {
+  it('gives each signed-in session a budget of its own and counts everything else per client IP', async () => {
+    const redis = registerMemoryRedis();
+    const app = createTestApp();
+    // Defaults: 1200 per IP, 6000 per session in a minute.
+    app.use(
+      '*',
+      createApiRateLimitMiddleware(async (c) => c.req.header('x-test-session') ?? null)
+    );
+    app.get('/', (c) => c.text('ok'));
+    const ip = { 'x-real-ip': '192.0.2.90' };
+
+    for (let index = 0; index < 1_200; index++) await app.request('/', { headers: ip });
+    expect((await app.request('/', { headers: ip })).status).toBe(429);
+
+    // The UI behind the same IP is not limited by the scripts' traffic.
+    const session = await app.request('/', { headers: { ...ip, 'x-test-session': 'session-secret' } });
+    expect(session.status).toBe(200);
+    expect(session.headers.get('X-RateLimit-Limit')).toBe('6000');
+    // The counter is named by a hash of the session, never by the session ID.
+    expect([...redis.sets.keys()].some((key) => key.includes('session-secret'))).toBe(false);
+    expect([...redis.sets.keys()].some((key) => key.startsWith('ratelimit:api:session:'))).toBe(true);
   });
 });

@@ -18,6 +18,7 @@ export const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
   rateLimits: {
     windowMs: 60_000,
     maxRequests: 1_200,
+    sessionMaxRequests: 6_000,
     authMaxRequests: 120,
     authLoginMaxRequests: 20,
     authCallbackMaxRequests: 60,

@@ -18,6 +18,7 @@ const MIB = 1024 * KIB;
 const RATE_CORE_KEYS = [
   "windowMs",
   "maxRequests",
+  "sessionMaxRequests",
   "authMaxRequests",
   "authLoginMaxRequests",
   "authCallbackMaxRequests",
@@ -353,9 +354,18 @@ export function EnvironmentSettingsSection({ canEdit }: { canEdit: boolean }) {
             description="Authenticated API requests per client in each window."
             value={draft.rateLimits.maxRequests}
             unit="requests"
-            help="Applies to ordinary authenticated Gateway API calls from one client. Login, public, streaming, and inference routes have their own limits."
+            help="Applies to ordinary Gateway API calls from one client IP: API tokens, scripts, and requests without a session. Signed-in browser sessions, login, public, streaming, and inference routes have their own limits."
             disabled={disabled}
             onChange={(value) => setValue("rateLimits", "maxRequests", value)}
+          />
+          <NumberSetting
+            title="Signed-in sessions"
+            description="API requests per signed-in browser session in each window."
+            value={draft.rateLimits.sessionMaxRequests}
+            unit="requests"
+            help="Each signed-in browser session has a budget of its own, so the pages people open do not share the per-client limit with scripts and other browsers behind the same IP."
+            disabled={disabled}
+            onChange={(value) => setValue("rateLimits", "sessionMaxRequests", value)}
           />
           <NumberSetting
             title="Authentication"

@@ -89,6 +89,7 @@ const environmentDefaults: EnvironmentSettings = {
   rateLimits: {
     windowMs: 60_000,
     maxRequests: 1_000,
+    sessionMaxRequests: 6_000,
     authMaxRequests: 60,
     authLoginMaxRequests: 10,
     authCallbackMaxRequests: 30,

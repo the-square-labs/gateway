@@ -1,5 +1,5 @@
-import { randomUUID } from 'node:crypto';
-import type { MiddlewareHandler } from 'hono';
+import { createHash, randomUUID } from 'node:crypto';
+import type { Context, MiddlewareHandler } from 'hono';
 import { container, TOKENS } from '@/container.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { withRateLimitRedisTimeout } from '@/lib/rate-limit-timeout.js';
@@ -17,6 +17,8 @@ interface RateLimitConfig {
   windowMs: number;
   maxRequests: number;
   keyPrefix?: string;
+  /** What the requests are counted per; the client IP by default. */
+  key?: (c: Context<AppEnv>) => Promise<string>;
 }
 
 type RateLimitSelector = (settings: EnvironmentSettings['rateLimits']) => number;
@@ -58,9 +60,9 @@ export function createRateLimiter(config: RateLimitConfig): MiddlewareHandler<Ap
   const { windowMs, maxRequests, keyPrefix = 'ratelimit' } = config;
 
   return async (c, next) => {
-    const clientIp = (await getClientIpForContext(c)) || 'unknown';
+    const subject = config.key ? await config.key(c) : (await getClientIpForContext(c)) || 'unknown';
 
-    const key = `${keyPrefix}:${clientIp}`;
+    const key = `${keyPrefix}:${subject}`;
     const now = Date.now();
     const windowStart = now - windowMs;
 
@@ -101,6 +103,37 @@ function createEnvironmentRateLimiter(keyPrefix: string, maxRequests: RateLimitS
 }
 
 export const rateLimitMiddleware = createEnvironmentRateLimiter('ratelimit:api', (settings) => settings.maxRequests);
+
+/**
+ * The general API limit. A request of a signed-in browser session counts against that session's own budget
+ * (`sessionMaxRequests`), so the UI's page loads do not share one budget with every script and browser behind the
+ * same IP (stand rc.7, O-21). Anything else (API and OAuth tokens, no or an invalid session) counts per client IP
+ * against `maxRequests`, as before. `sessionOf` returns the session ID only for a live session.
+ */
+export function createApiRateLimitMiddleware(
+  sessionOf: (c: Context<AppEnv>) => Promise<string | null>
+): MiddlewareHandler<AppEnv> {
+  return async (c, next) => {
+    const settings = getEnvironmentSettingsSnapshot().rateLimits;
+    let sessionId: string | null = null;
+    try {
+      sessionId = await sessionOf(c);
+    } catch (error) {
+      logger.debug('Session lookup for the API rate limit failed; counting per client', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    if (!sessionId) return rateLimitMiddleware(c, next);
+    // The session ID is a credential: only its hash names the counter.
+    const subject = createHash('sha256').update(sessionId).digest('hex').slice(0, 32);
+    return createRateLimiter({
+      windowMs: settings.windowMs,
+      maxRequests: settings.sessionMaxRequests,
+      keyPrefix: 'ratelimit:api:session',
+      key: async () => subject,
+    })(c, next);
+  };
+}
 
 export const authRateLimitMiddleware = createEnvironmentRateLimiter(
   'ratelimit:auth',

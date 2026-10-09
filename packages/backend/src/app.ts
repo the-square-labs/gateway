@@ -31,6 +31,7 @@ import {
   authCallbackRateLimitMiddleware,
   authLoginRateLimitMiddleware,
   authRateLimitMiddleware,
+  createApiRateLimitMiddleware,
   pkiRateLimitMiddleware,
   publicStatusRateLimitMiddleware,
   publicWebhookRateLimitMiddleware,
@@ -55,6 +56,7 @@ import { accessSummaryRoutes } from '@/modules/auth/access-summary.routes.js';
 import {
   authMiddleware,
   isAdmittedSetupPurposeRequest,
+  liveRequestSessionId,
   optionalAuthMiddleware,
   requireActiveUser,
 } from '@/modules/auth/auth.middleware.js';
@@ -653,13 +655,15 @@ export function createApp(): GatewayAppRuntime {
     )
   );
 
-  // Rate limiting for API and public PKI routes
+  // Rate limiting for API and public PKI routes: a signed-in browser session has a budget of its own, anything else
+  // counts per client IP.
+  const apiRateLimitMiddleware = createApiRateLimitMiddleware(liveRequestSessionId);
   app.use('/api/*', async (c, next) => {
     if (isInferenceDataPlanePath(c.req.path)) {
       await next();
       return;
     }
-    await rateLimitMiddleware(c, next);
+    await apiRateLimitMiddleware(c, next);
   });
   // Public local-auth and passkey endpoints parse JSON before their route
   // schemas run, so give them the same conservative bound as OAuth bodies.

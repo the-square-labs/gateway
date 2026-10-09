@@ -153,6 +153,17 @@ function applyBearerContext(c: Context<AppEnv>, result: AuthenticatedBearer): vo
   c.set('authTokenId', result.tokenId);
 }
 
+/**
+ * The ID of the live browser session a request carries, or null (no session cookie, an expired or unknown session, or
+ * a bearer token). The API rate limit counts signed-in browser sessions per session; it is not authentication.
+ */
+export async function liveRequestSessionId(c: Context<AppEnv>): Promise<string | null> {
+  const credential = extractCredential(c);
+  if (credential?.type !== 'session') return null;
+  const session = await container.resolve(SessionService).getSession(credential.value);
+  return session && session.purpose !== 'setup' ? credential.value : null;
+}
+
 export const authMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
   const credential = extractCredential(c);
 
