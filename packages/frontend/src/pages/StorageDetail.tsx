@@ -8,6 +8,7 @@ import {
   ManagedCertificateNotice,
   useManagedCertificateStatus,
 } from "@/components/common/ManagedCertificateStatus";
+import { ManagedInstanceNotice } from "@/components/common/ManagedInstanceNotice";
 import { PageTransition } from "@/components/common/PageTransition";
 import {
   Dialog,
@@ -391,6 +392,8 @@ function StorageDetailContent({
         <HealthBars history={liveHealthHistory} currentStatus={liveHealthStatus} />
 
         <ManagedStorageFullNotice storage={storage} />
+
+        <ManagedInstanceNotice managed={storage.managed} />
 
         <ManagedStorageLegacyEngineBanner storage={storage} />
 

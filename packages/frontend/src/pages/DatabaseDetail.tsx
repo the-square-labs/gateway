@@ -9,6 +9,7 @@ import {
   ManagedCertificateNotice,
   useManagedCertificateStatus,
 } from "@/components/common/ManagedCertificateStatus";
+import { ManagedInstanceNotice } from "@/components/common/ManagedInstanceNotice";
 import { PageTransition } from "@/components/common/PageTransition";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { HealthBars } from "@/components/ui/health-bars";
@@ -687,6 +688,8 @@ function DatabaseDetailContent({
               onRotateCertificate={() => void rotateCertificate()}
               onRemove={() => void remove()}
             />
+
+            <ManagedInstanceNotice managed={database.managed} />
 
             <DatabaseTlsVerificationNotice
               database={database}
