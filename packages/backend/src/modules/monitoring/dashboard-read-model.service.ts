@@ -50,6 +50,13 @@ const EMPTY: Record<DashboardReadModelName, unknown[]> = {
   'stats-system': [],
 };
 
+/**
+ * Database events about what is inside a database, not about the connection the dashboard lists: a health sample,
+ * or a console query and the data or schema it changed. Refreshing the whole list on each would rebuild it for
+ * every query someone runs.
+ */
+const DATABASE_CONTENT_ACTIONS = new Set(['health.sampled', 'query.executed', 'data.updated', 'schema.updated']);
+
 const MATERIAL_PROXY_CHANGE: ReadModelEventSubscription = {
   channel: 'proxy.host.changed',
   matches: (payload) => (payload as { action?: string } | null)?.action !== 'health.sampled',
@@ -79,7 +86,7 @@ export class DashboardReadModelService {
     this.register('databases', () => listAllPages((page) => this.databases.list({ page, limit: 1_000 } as never)), [
       {
         channel: 'database.changed',
-        matches: (payload) => (payload as { action?: string } | null)?.action !== 'health.sampled',
+        matches: (payload) => !DATABASE_CONTENT_ACTIONS.has((payload as { action?: string } | null)?.action ?? ''),
       },
     ]);
     this.register(

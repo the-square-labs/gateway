@@ -386,13 +386,11 @@ function getLocalInterfaceAddresses(): Set<string> {
   return new Set(addresses);
 }
 
-export function isLocalMachineHost(
-  hostname: string,
-  localAddresses: ReadonlySet<string> = getLocalInterfaceAddresses()
-): boolean {
+export function isLocalMachineHost(hostname: string, localAddresses?: ReadonlySet<string>): boolean {
   if (isLoopbackHost(hostname)) return true;
   const normalized = hostname.toLowerCase();
-  return isPrivateOrLinkLocalIp(normalized) && localAddresses.has(normalized);
+  // Interfaces are listed only for a private address: most requests carry the public host.
+  return isPrivateOrLinkLocalIp(normalized) && (localAddresses ?? getLocalInterfaceAddresses()).has(normalized);
 }
 
 async function getRedisHealth(): Promise<'ok' | 'unavailable'> {
@@ -461,9 +459,10 @@ export function createApp(): GatewayAppRuntime {
     const publicUrl = await getCanonicalPublicUrl();
     const appHost = publicUrl ? normalizeRequestHost(new URL(publicUrl).host) : null;
     const setupComplete = await isSetupComplete();
-    const localHostAllowed = requestHost ? isLocalMachineHost(requestHost) : false;
+    // The setup guard below runs for the same request: it reuses this read.
+    c.set('setupComplete', setupComplete);
 
-    if (requestHost && (!setupComplete || (appHost && requestHost === appHost) || localHostAllowed)) {
+    if (requestHost && (!setupComplete || (appHost && requestHost === appHost) || isLocalMachineHost(requestHost))) {
       await next();
       return;
     }
@@ -545,7 +544,7 @@ export function createApp(): GatewayAppRuntime {
   });
 
   app.use('*', async (c, next) => {
-    if (await isSetupComplete()) {
+    if (c.get('setupComplete') ?? (await isSetupComplete())) {
       await next();
       return;
     }

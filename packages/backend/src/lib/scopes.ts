@@ -136,6 +136,27 @@ export function isResourceScoped(scope: string): boolean {
   return scope !== base && RESOURCE_SCOPABLE.includes(base);
 }
 
+/**
+ * Base and validity of stored scope strings, which repeat on every request (a user can hold hundreds of
+ * resource grants). Both are pure functions of the string and the built-in catalog. Bounded: long strings are
+ * not kept and the map starts over when full.
+ */
+const SCOPE_CLASS_CACHE_MAX_ENTRIES = 20_000;
+const SCOPE_CLASS_CACHE_MAX_LENGTH = 512;
+const scopeClassCache = new Map<string, string | null>();
+
+/** The base of a valid scope, or null for an invalid one. */
+function validScopeBase(scope: string): string | null {
+  const cached = scopeClassCache.get(scope);
+  if (cached !== undefined) return cached;
+  const base = isValidBaseScope(scope) ? extractBaseScope(scope) : null;
+  if (scope.length <= SCOPE_CLASS_CACHE_MAX_LENGTH) {
+    if (scopeClassCache.size >= SCOPE_CLASS_CACHE_MAX_ENTRIES) scopeClassCache.clear();
+    scopeClassCache.set(scope, base);
+  }
+  return base;
+}
+
 /** Canonicalize valid scopes so broad scopes win over resource-scoped variants. */
 export function canonicalizeScopes(scopes: readonly string[]): string[] {
   const exactScopes = new Set<string>();
@@ -143,8 +164,9 @@ export function canonicalizeScopes(scopes: readonly string[]): string[] {
 
   for (const rawScope of scopes) {
     const scope = rawScope.trim();
-    if (!scope || !isValidBaseScope(scope)) continue;
-    const base = extractBaseScope(scope);
+    if (!scope) continue;
+    const base = validScopeBase(scope);
+    if (base === null) continue;
     if (scope === base) {
       exactScopes.add(scope);
       continue;
