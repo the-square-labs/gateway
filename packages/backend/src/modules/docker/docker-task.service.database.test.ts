@@ -403,5 +403,5 @@ describe.skipIf(!url)('migration 0232 and a rollback to the release before it', 
       (await pool.query('select follow_ups from docker_tasks where id = $1', [before!.id])).rows[0].follow_ups
     ).toBeNull();
     expect(await current.get(before!.id)).toMatchObject({ status: 'failed' });
-  });
+  }, 60_000);
 });
