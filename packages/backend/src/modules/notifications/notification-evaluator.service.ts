@@ -92,6 +92,20 @@ function foldingParentKind(rule: { category?: string; eventPattern?: string | nu
 export const GATEWAY_RESOURCE_ID = 'gateway';
 export const GATEWAY_POSTGRES_RESOURCE_ID = 'gateway-postgres';
 
+/** Outage starts further back than this before the firing are not the same outage. */
+const MAX_OUTAGE_LEAD_MS = 15 * 60_000;
+
+/**
+ * When the outage an alert reports began: the source's own start (`details.outage_since`, the relay's first failed
+ * probe) when it came with the firing, else the firing. A relay alert fires 5–10 s into the outage (stand rc.8, O-1).
+ */
+export function outageStart(context: unknown, firedAt: Date): Date {
+  const since = (context as { details?: { outage_since?: unknown } } | null)?.details?.outage_since;
+  const start = typeof since === 'string' ? Date.parse(since) : Number.NaN;
+  const fired = firedAt.getTime();
+  return Number.isFinite(start) && start <= fired && fired - start <= MAX_OUTAGE_LEAD_MS ? new Date(start) : firedAt;
+}
+
 /** Seconds from firing until the resource got back (backSince), or until now when that is not known. */
 export function alertDurationSeconds(firedAt: Date, backSince?: number | null, now = Date.now()): number {
   const end = backSince != null && backSince >= firedAt.getTime() && backSince <= now ? backSince : now;
@@ -1772,7 +1786,7 @@ export class NotificationEvaluatorService {
         ...details,
         fired: {
           at: state.firedAt.toISOString(),
-          duration: alertDurationSeconds(state.firedAt, options.backSince),
+          duration: alertDurationSeconds(outageStart(state.context, state.firedAt), options.backSince),
         },
       };
     }

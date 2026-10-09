@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { NotificationEvaluatorService } from './notification-evaluator.service.js';
+import { NotificationEvaluatorService, outageStart } from './notification-evaluator.service.js';
 
 const T0 = Date.UTC(2026, 9, 8, 14, 0);
 const RELAY = 'system.relay.health.changed';
@@ -155,5 +155,27 @@ describe('Gateway relay alert: the supervisor state holds until its next change'
     await t.service.stop();
     await t.advance(2 * 60_000);
     expect(t.resolved).not.toHaveBeenCalled();
+  });
+});
+
+describe('Gateway relay alert duration (rc.8 O-1)', () => {
+  it('keeps the outage start the supervisor reports with the firing', async () => {
+    const t = setup({ eventPattern: 'relay.unavailable' });
+    const since = new Date(T0 - 8_000).toISOString();
+    await t.publish({ state: 'critical', reason: 'unreachable', attempt: 0, outageSince: since });
+    const details = (t.fired.mock.calls[0] as unknown[])[4] as { details: Record<string, unknown> };
+    expect(details.details.outage_since).toBe(since);
+    await t.service.stop();
+  });
+
+  it('counts a resolved alert from the outage start, not from its firing', () => {
+    const firedAt = new Date(T0);
+    expect(outageStart({ details: { outage_since: new Date(T0 - 8_000).toISOString() } }, firedAt)).toEqual(
+      new Date(T0 - 8_000)
+    );
+    // No start, a start after the firing, or one from an older outage: the firing.
+    expect(outageStart({}, firedAt)).toBe(firedAt);
+    expect(outageStart({ details: { outage_since: new Date(T0 + 1_000).toISOString() } }, firedAt)).toBe(firedAt);
+    expect(outageStart({ details: { outage_since: new Date(T0 - 3_600_000).toISOString() } }, firedAt)).toBe(firedAt);
   });
 });

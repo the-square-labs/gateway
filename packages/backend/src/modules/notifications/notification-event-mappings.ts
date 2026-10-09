@@ -311,7 +311,11 @@ export const EVENT_BUS_MAPPINGS: Record<string, EventMapping[]> = {
       // during a local relay outage.
       match: (p) => p.action !== 'revocation_fence' && typeof p.state === 'string',
       extractResource: () => ({ type: 'gateway', id: 'gateway-relay', name: 'Gateway relay' }),
-      extractData: (p) => ({ failure_code: p.reason ?? null, attempt: p.attempt ?? 0 }),
+      extractData: (p) => ({
+        failure_code: p.reason ?? null,
+        attempt: p.attempt ?? 0,
+        outage_since: typeof p.outageSince === 'string' ? p.outageSince : null,
+      }),
       stateful: {
         currentState: (p) =>
           p.state === 'critical'

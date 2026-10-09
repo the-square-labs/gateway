@@ -223,7 +223,7 @@ describe('relay supervisor: Gateway start', () => {
     const t = setup({ ...persistedOutage, state: 'healthy', reason: null, outage: null });
     await t.supervisor.start();
     // Nothing changed (healthy then, healthy now), yet the evaluator gets the state.
-    expect(t.published).toEqual([{ state: 'healthy', reason: null, attempt: 0 }]);
+    expect(t.published).toEqual([{ state: 'healthy', reason: null, attempt: 0, outageSince: null }]);
     await t.supervisor.stop();
   });
 });

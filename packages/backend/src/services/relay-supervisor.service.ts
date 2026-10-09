@@ -1032,10 +1032,13 @@ export class RelaySupervisorService implements LocalRelayOutageSignal {
   }
 
   private publish(): void {
+    const outage = this.state.outage;
     this.events.publish('system.relay.health.changed', {
       state: this.state.state,
       reason: this.state.reason,
       attempt: this.state.attempt,
+      // When the relay stopped serving, for the alert's duration (its first failed probe, before the alert fires).
+      outageSince: outage && outage.servingAgainAt === null ? outage.since : null,
     });
   }
 }
