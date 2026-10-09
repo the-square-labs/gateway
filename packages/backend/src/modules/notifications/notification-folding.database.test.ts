@@ -168,6 +168,35 @@ describe.skipIf(!url)('Alert folding on disposable PostgreSQL', () => {
     expect(await routeState()).toHaveLength(1);
   });
 
+  it('folds a container health alert under its node being down, also one raised before the node alert (rc.8 O-4)', async () => {
+    rules.push(await rule('Container down', 'container', 'health.offline'));
+    const container = (id: string, state: 'health.offline' | 'health.online') =>
+      observe(
+        'container',
+        state,
+        { type: 'docker_container', id, name: id },
+        { health_status: state, nodeId, resource_type: 'docker_container' }
+      );
+    const containerFolded = async (id: string) =>
+      (
+        await q(`select status, context -> 'folded' as folded from notification_alert_states where resource_id = $1`, [
+          id,
+        ])
+      ).rows[0];
+
+    await container('store', 'health.offline');
+    await node('offline');
+    await container('web', 'health.offline');
+    expect(await containerFolded('store')).toMatchObject({ status: 'firing', folded: { kind: 'node' } });
+    expect(await containerFolded('web')).toMatchObject({ status: 'firing', folded: { kind: 'node' } });
+    // The node alert went out; the container alert raised after it did not.
+    expect(sent.filter((body) => body.startsWith('Container down: web'))).toEqual([]);
+
+    await node('online');
+    expect((await containerFolded('web')).status).toBe('resolved');
+    expect((await containerFolded('store')).status).toBe('resolved');
+  });
+
   it('folds route alerts raised before Gateway noticed its outbound loss, and sends one alert once it can', async () => {
     reachable = false;
     await route('health.offline', { probe_failure: 'unreachable' });

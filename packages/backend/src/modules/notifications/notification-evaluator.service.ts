@@ -81,6 +81,18 @@ function isFoldableRouteRule(rule: { category?: string; eventPattern?: string | 
   return rule.category === 'proxy' && FOLDABLE_ROUTE_EVENTS.includes(rule.eventPattern as never);
 }
 
+/** Container and deployment health events that fold under their node's down alert, as route alerts do. */
+const FOLDABLE_CONTAINER_EVENTS = ['health.offline', 'health.degraded'] as const;
+const CONTAINER_ALERT_RESOURCE_TYPES = ['docker_container', 'docker_deployment'];
+
+function isFoldableContainerAlert(rule: { category?: string; eventPattern?: string | null }, resourceType: string) {
+  return (
+    rule.category === 'container' &&
+    FOLDABLE_CONTAINER_EVENTS.includes(rule.eventPattern as never) &&
+    CONTAINER_ALERT_RESOURCE_TYPES.includes(resourceType)
+  );
+}
+
 /** The kind of parent a rule's alerts are, if route alerts fold under them. */
 function foldingParentKind(rule: { category?: string; eventPattern?: string | null }): FoldedUnder['kind'] | null {
   if (rule.category === 'node' && rule.eventPattern === 'offline') return 'node';
@@ -1837,6 +1849,8 @@ export class NotificationEvaluatorService {
   // firing went. A parent that fires later folds the route alerts already firing that it explains. For FOLD_GRACE_MS
   // after a parent resolves, the route alerts it explains are held (not raised), so routes coming back right after
   // their node or Gateway's connectivity do not alert; a route still down after that alerts on its own.
+  // A container or deployment health alert (offline, degraded) folds the same way under the down alert of the node it
+  // runs on (stand rc.8, O-4: a container alert fired for a node that was itself cut off).
 
   /** The parent alert a route alert folds under, 'hold' while one resolved within FOLD_GRACE_MS, or null. */
   private async foldingParent(
@@ -1845,9 +1859,10 @@ export class NotificationEvaluatorService {
     resourceKey: string,
     details: TemplateDetails
   ): Promise<FoldedUnder | 'hold' | null> {
-    if (!isFoldableRouteRule(rule) || resourceType !== 'proxy') return null;
-    const unreachable = details.details?.probe_failure === 'unreachable';
-    const nodeIds = await this.routeNodeIds(resourceKey);
+    const route = isFoldableRouteRule(rule) && resourceType === 'proxy';
+    if (!route && !isFoldableContainerAlert(rule, resourceType)) return null;
+    const unreachable = route && details.details?.probe_failure === 'unreachable';
+    const nodeIds = route ? await this.routeNodeIds(resourceKey) : details.node?.id ? [details.node.id] : [];
     const sources: SQL[] = [];
     if (nodeIds.length > 0) {
       sources.push(
@@ -1931,9 +1946,20 @@ export class NotificationEvaluatorService {
       .where(
         and(
           eq(notificationAlertStates.status, 'firing'),
-          eq(notificationAlertStates.resourceType, 'proxy'),
-          eq(notificationAlertRules.category, 'proxy'),
-          inArray(notificationAlertRules.eventPattern, [...FOLDABLE_ROUTE_EVENTS]),
+          or(
+            and(
+              eq(notificationAlertStates.resourceType, 'proxy'),
+              eq(notificationAlertRules.category, 'proxy'),
+              inArray(notificationAlertRules.eventPattern, [...FOLDABLE_ROUTE_EVENTS])
+            ),
+            kind === 'node'
+              ? and(
+                  inArray(notificationAlertStates.resourceType, CONTAINER_ALERT_RESOURCE_TYPES),
+                  eq(notificationAlertRules.category, 'container'),
+                  inArray(notificationAlertRules.eventPattern, [...FOLDABLE_CONTAINER_EVENTS])
+                )
+              : undefined
+          ),
           sql`${notificationAlertStates.context} -> 'folded' is null`
         )
       );
@@ -1945,9 +1971,11 @@ export class NotificationEvaluatorService {
     for (const { state } of candidates) {
       const context = (state.context ?? {}) as TemplateDetails;
       const explained =
-        kind === 'gateway_outbound'
-          ? context.details?.probe_failure === 'unreachable'
-          : (await this.routeNodeIds(state.resourceId)).includes(parentResourceKey);
+        state.resourceType !== 'proxy'
+          ? kind === 'node' && context.node?.id === parentResourceKey
+          : kind === 'gateway_outbound'
+            ? context.details?.probe_failure === 'unreachable'
+            : (await this.routeNodeIds(state.resourceId)).includes(parentResourceKey);
       if (!explained) continue;
       await this.db
         .update(notificationAlertStates)
