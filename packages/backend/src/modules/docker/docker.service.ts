@@ -1399,7 +1399,9 @@ export class DockerManagementService {
       clearTransition: (nodeId, name) => this.clearTransition(nodeId, name),
       claimTransitions: (nodeId, entries) => this.containerTransitions.claim(nodeId, entries),
       releaseTransitions: (claim) => this.containerTransitions.release(claim),
-      acquireTransitionLeases: (nodeId, names) => this.containerTransitions.acquireLeases(nodeId, names),
+      acquireTransitionLeases: (nodeId, names, options) =>
+        this.containerTransitions.acquireLeases(nodeId, names, options),
+      transitionLeaseToken: (nodeId, name) => this.containerTransitions.leaseToken(nodeId, name),
       recheckMigrationGuard: (nodeId, identities, newName) => this.recheckMigrationGuard(nodeId, identities, newName),
       emitContainer: (nodeId, name, id, action, extra) => this.emitContainer(nodeId, name, id, action, extra),
       emitTransition: (nodeId, name, id, transition) => this.emitTransition(nodeId, name, id, transition),

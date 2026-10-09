@@ -277,6 +277,36 @@ describe('env follow-ups of an update or recreate Gateway restarted during befor
   });
 });
 
+describe('the API answer of an update whose node is lost', () => {
+  it('answers that the node did not answer and names the task settled with the node', async () => {
+    const t = setup({ answer: 'disconnected' });
+    const error = await updateContainer(t.first.ctx, NODE, 'api', { tag: '2' }, 'user-1').catch((caught) => caught);
+    const task = t.only();
+    expect(error).toMatchObject({ statusCode: 504, code: 'NODE_ANSWER_LOST', details: { taskId: task.id } });
+    expect(task.status).toBe('running');
+    expect(task.detachedAt).toBeInstanceOf(Date);
+  });
+
+  it('answers that nothing was changed and records a failed task when the node drops before the update is sent', async () => {
+    const t = setup({ answer: 'dropped-before' });
+    const error = await updateContainer(
+      t.first.ctx,
+      NODE,
+      'api',
+      { tag: '2', env: { API_KEY: NEW_SECRET } },
+      'user-1'
+    ).catch((caught) => caught);
+    const task = t.only();
+    expect(error).toMatchObject({ statusCode: 503, code: 'NODE_UNAVAILABLE', details: { taskId: task.id } });
+    expect(task).toMatchObject({
+      type: 'update',
+      status: 'failed',
+      error: 'The node lost its connection before the update was sent; the container was not changed',
+    });
+    expect(t.environment.stored.get('api')).toEqual(STORED);
+  });
+});
+
 describe('an update whose daemon restarted and forgot it', () => {
   it('puts back the saved env once the reconciler finds the old container and no task', async () => {
     const t = setup();

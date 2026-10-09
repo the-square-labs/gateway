@@ -205,7 +205,13 @@ export interface DockerContainerMutationContext {
    * CONTAINER_BUSY (details.name) when one holds a name. Released when the
    * name's transition ends here.
    */
-  acquireTransitionLeases(nodeId: string, names: readonly string[]): Promise<void>;
+  acquireTransitionLeases(
+    nodeId: string,
+    names: readonly string[],
+    options?: { takeOverToken?: string }
+  ): Promise<void>;
+  /** The token of the lease this process holds the container with (kept with the task's follow-ups). */
+  transitionLeaseToken?(nodeId: string, name: string): string | undefined;
   /** The migration guard, checked again once the mutation holds the container. */
   recheckMigrationGuard(nodeId: string, identities: readonly string[], newName?: string): Promise<void>;
   emitContainer(
@@ -1083,6 +1089,28 @@ export async function duplicateContainer(
   return data && typeof data === 'object' ? { ...data, id: newId, name } : { id: newId, name };
 }
 
+/** The node's control stream dropped, did not answer in time, or is not connected: no answer from the node. */
+function isNodeConnectionError(error: unknown): boolean {
+  if (error instanceof AppError) return false;
+  const message = error instanceof Error ? error.message : String(error);
+  return isLostTrackError(error) || /^Node \S+ is not connected$/.test(message);
+}
+
+/** The update was sent, but the node's answer was lost: it may run there, and its task is settled with the node. */
+function updateAnswerLostError(taskId: string): AppError {
+  return new AppError(
+    504,
+    'NODE_ANSWER_LOST',
+    `The node did not answer the update; it may still run there. Gateway settles task ${taskId} with the node once it is connected again.`,
+    { taskId }
+  );
+}
+
+/**
+ * POST .../update. The node lost before the update was sent (its control stream dropped while Gateway read the
+ * container) answers 503 NODE_UNAVAILABLE and records a failed task: nothing was changed. A lost answer once it was
+ * sent answers 504 NODE_ANSWER_LOST with the task that is settled with the node.
+ */
 export async function updateContainer(
   ctx: DockerContainerMutationContext,
   nodeId: string,
@@ -1090,6 +1118,35 @@ export async function updateContainer(
   config: Record<string, unknown>,
   userId: string,
   actorScopes: string[] = []
+) {
+  try {
+    return await updateContainerOnNode(ctx, nodeId, containerId, config, userId, actorScopes);
+  } catch (error) {
+    if (!isNodeConnectionError(error)) throw error;
+    const message = 'The node lost its connection before the update was sent; the container was not changed';
+    let taskId: string | undefined;
+    try {
+      const task = await ctx.taskService?.create({ nodeId, containerId, type: 'update' });
+      if (task) {
+        await ctx.taskService?.update(task.id, { status: 'failed', error: message, completedAt: new Date() });
+        taskId = task.id;
+      }
+    } catch (recordError) {
+      logger.warn('Could not record an update the node was lost before', { nodeId, containerId, error: recordError });
+    }
+    throw new AppError(503, 'NODE_UNAVAILABLE', `${message}. Try again once the node is online.`, {
+      ...(taskId ? { taskId } : {}),
+    });
+  }
+}
+
+async function updateContainerOnNode(
+  ctx: DockerContainerMutationContext,
+  nodeId: string,
+  containerId: string,
+  config: Record<string, unknown>,
+  userId: string,
+  actorScopes: string[]
 ) {
   await ctx.validateDockerNode(nodeId);
   await ctx.assertNotManagedDeploymentInternal(nodeId, containerId);
@@ -1169,6 +1226,7 @@ export async function updateContainer(
     Math.max(ctx.longDockerOperationTimeoutMs + 30000, updateTimeoutMs)
   );
   const followUps = await trackReplacementAhead(ctx, task?.id, name, ahead, {
+    leaseToken: ctx.transitionLeaseToken?.(nodeId, name),
     expectedEnv: hasEnvChange ? desiredUserEnv : storedEnv,
     ...(hasImageChange ? { previousRuntimeEnv } : {}),
     ...(hasEnvChange ? { restoreEnv: storedEnv } : {}),
@@ -1192,9 +1250,18 @@ export async function updateContainer(
       await ctx.accessResourceService?.preserveContainerRuntimeId(nodeId, name, newRuntimeId);
     }
   } catch (err) {
-    if (await leaveToTheNode(ctx, followUps, task?.id, err, nodeId, name)) throw err;
+    if (await leaveToTheNode(ctx, followUps, task?.id, err, nodeId, name)) throw updateAnswerLostError(task!.id);
     if (hasEnvChange) await ctx.environmentService?.replace(nodeId, name, storedEnv).catch(() => undefined);
     await ctx.failTask(task?.id, err instanceof Error ? err.message : 'Failed to update container', nodeId, name);
+    // The task records the outcome already; the connection error is not recorded a second time.
+    if (isNodeConnectionError(err)) {
+      throw new AppError(
+        503,
+        'NODE_UNAVAILABLE',
+        `The node lost its connection while the update was sent: ${err instanceof Error ? err.message : String(err)}`,
+        task?.id ? { taskId: task.id } : undefined
+      );
+    }
     throw err;
   }
   const daemonTaskId = asyncDaemonTaskId(data, 'update');
@@ -1418,13 +1485,11 @@ export async function recreateWithConfig(
         'Container recreated',
         Math.max(ctx.longDockerOperationTimeoutMs + 30000, ctx.lifecycleWatchTimeoutMs(recreateStopTimeout, 60))
       );
-      followUps = await trackReplacementAhead(
-        ctx,
-        task?.id,
-        name,
-        ahead,
-        hasRequestedImage ? { expectedEnv: storedEnv, previousRuntimeEnv } : { expectedEnv: storedEnv }
-      );
+      followUps = await trackReplacementAhead(ctx, task?.id, name, ahead, {
+        leaseToken: ctx.transitionLeaseToken?.(nodeId, name),
+        expectedEnv: storedEnv,
+        ...(hasRequestedImage ? { previousRuntimeEnv } : {}),
+      });
       const gate = followUps;
       const result = await ctx.nodeDispatch.sendDockerContainerCommand(
         nodeId,
@@ -1674,6 +1739,7 @@ export async function updateContainerEnv(
     Math.max(ctx.longDockerOperationTimeoutMs + 30000, ctx.lifecycleWatchTimeoutMs(updateStopTimeout, 60))
   );
   const followUps = await trackReplacementAhead(ctx, task?.id, name, ahead, {
+    leaseToken: ctx.transitionLeaseToken?.(nodeId, name),
     expectedEnv: desiredUserEnv,
     restoreEnv: storedEnv,
   });

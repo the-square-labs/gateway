@@ -57,7 +57,11 @@ export interface DockerEnvFollowUpContext {
     nodeId: string,
     entries: ReadonlyArray<{ name: string; state: ContainerTransition }>
   ): ContainerTransitionClaim;
-  acquireTransitionLeases(nodeId: string, names: readonly string[]): Promise<void>;
+  acquireTransitionLeases(
+    nodeId: string,
+    names: readonly string[],
+    options?: { takeOverToken?: string }
+  ): Promise<void>;
   releaseTransitions(claim: ContainerTransitionClaim): void;
 }
 
@@ -99,6 +103,11 @@ export interface DockerEnvFollowUpPlan {
   previousRuntimeEnv?: Record<string, string>;
   /** Set when the update saves the env before it runs: put back should the update not apply. */
   restoreEnv?: Record<string, string>;
+  /**
+   * The lease the operation holds the container with. Once Gateway lost track of the task (it restarted), the
+   * follow-ups take it over instead of waiting for it to lapse.
+   */
+  leaseToken?: string;
 }
 
 /** What tells the end of an update or recreate before it is dispatched: no daemon task is known yet. */
@@ -152,6 +161,7 @@ function followUpsRecord(
   if (!reconcile && !restore) return undefined;
   return {
     containerName: name,
+    ...(plan.leaseToken ? { leaseToken: plan.leaseToken } : {}),
     ...(reconcile ? { reconcileEnvAfterImageChange: true } : {}),
     ...(restore ? { restoreEnvAfterFailedUpdate: true } : {}),
     sealed: environmentService.sealFollowUpPayload({
@@ -238,7 +248,9 @@ export async function runKeptEnvFollowUps(
   const name = owed.containerName;
   const claim = ctx.claimTransitions(nodeId, [{ name, state: 'updating' }]);
   try {
-    await ctx.acquireTransitionLeases(nodeId, [name]);
+    // The operation's own lease is taken over: its process is gone (the task was settled with the node), and waiting
+    // for the lease to lapse held the settle up to a minute after the node was back (stand rc.7, O-11).
+    await ctx.acquireTransitionLeases(nodeId, [name], { takeOverToken: owed.leaseToken });
     const taken = await taskService.takeFollowUps(task.id);
     if (!taken || taken[followUp] !== true) return;
     const details = { taskId: task.id, nodeId, name, followUp };

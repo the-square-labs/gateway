@@ -169,7 +169,17 @@ export class DockerContainerTransitions {
    * transition: 409 CONTAINER_BUSY (details.leaseLost), and the operation must
    * stop.
    */
-  async acquireLeases(nodeId: string, names: readonly string[]): Promise<void> {
+  async acquireLeases(
+    nodeId: string,
+    names: readonly string[],
+    options: {
+      /**
+       * The lease of an operation whose process is gone (its task was detached, see DockerTaskReconciler): taken
+       * over instead of waiting up to a full TTL for it to lapse.
+       */
+      takeOverToken?: string;
+    } = {}
+  ): Promise<void> {
     const store = this.leaseStore;
     if (!store) return;
     const unique = [...new Set(names)];
@@ -196,7 +206,9 @@ export class DockerContainerTransitions {
           holder: this.leaseHolder,
           // A lease of this map on a key it no longer uses is one whose release
           // has not landed yet (or failed): it is taken back.
-          replaceable: (lease, leaseKey) => lease.holder === this.leaseHolder && !this.leaseKeyInUse(leaseKey),
+          replaceable: (lease, leaseKey) =>
+            (lease.holder === this.leaseHolder && !this.leaseKeyInUse(leaseKey)) ||
+            (!!options.takeOverToken && lease.token === options.takeOverToken),
         }
       );
     } finally {
@@ -227,6 +239,11 @@ export class DockerContainerTransitions {
       if (!this.transitions.has(key) || this.leases.has(key)) this.releaseLease(hold, leaseKeys[index]!);
       else this.leases.set(key, { hold, leaseKey: leaseKeys[index]! });
     }
+  }
+
+  /** The token of the lease backing the transition here on `name`, if any. */
+  leaseToken(nodeId: string, name: string): string | undefined {
+    return this.leases.get(this.key(nodeId, name))?.hold.token;
   }
 
   /** Renews the leases backing transitions here on `names`; 409 CONTAINER_BUSY when one was lost. */

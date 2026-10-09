@@ -36,9 +36,9 @@ export interface FakeDockerNodeOptions {
   /**
    * How an update's or recreate's command goes: `lost`: the daemon runs it, its answer never reaches Gateway;
    * `never-sent`: it never reaches the daemon; `disconnected`: the daemon runs it, the node's stream drops before the
-   * answer.
+   * answer; `dropped-before`: the node's stream drops while Gateway reads the container, before anything is sent.
    */
-  answer?: 'normal' | 'lost' | 'never-sent' | 'disconnected';
+  answer?: 'normal' | 'lost' | 'never-sent' | 'disconnected' | 'dropped-before';
 }
 
 /**
@@ -80,6 +80,7 @@ export function fakeDockerNode(oldEnv: string[], newEnv: string[], options: Fake
       case 'list':
         return ok(containers.map(({ id, name, state }) => ({ id, name, state })));
       case 'inspect': {
+        if (options.answer === 'dropped-before') throw new Error('Node disconnected');
         const container = containers.find(
           (entry) => entry.id === command.containerId || entry.name === command.containerId
         );

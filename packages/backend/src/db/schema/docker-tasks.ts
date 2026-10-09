@@ -58,6 +58,8 @@ export type DockerTaskTracking =
 export interface DockerTaskFollowUps {
   /** The container whose stored env the follow-ups write. */
   containerName: string;
+  /** The lease the operation held the container with: taken over when the task is settled after Gateway restarted. */
+  leaseToken?: string;
   /** Once the replacement succeeded: align stored env entries that only mirrored the replaced image's defaults. */
   reconcileEnvAfterImageChange?: boolean;
   /** Once the daemon reports that the update failed: put back the stored env the update saved before it ran. */
