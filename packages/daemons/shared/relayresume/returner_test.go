@@ -253,3 +253,75 @@ func TestPlannedMoveStallLeavesOutItsPacedStart(t *testing.T) {
 	}
 	session.Abort(RstAborted, "done")
 }
+
+// Stand rc.7 (F-3): after a local relay outage a node had 30-40 streams on a
+// farther relay, and with 8 moves a pass and a minute's cooldown they came
+// back over 60-100 s. With the defaults, streams that moved there in the
+// outage come back within two passes once their relay is stable again.
+func TestReturnerBringsANodesStreamsBackWithinTwoPasses(t *testing.T) {
+	h := newHarness(t, "relay-a", "relay-b")
+	dialer := &generationDialer{h: h}
+	dialer.generation.Store(1)
+	dialer.setPrefer("relay-a")
+	var sessions []*Session
+	for range 40 {
+		first, err := dialer.dial(context.Background(), DialRequest{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		session, err := h.mgr.NewSource(SourceConfig{RouteID: "route-1", Dial: dialer.dial,
+			Key: func() (string, []byte, bool) { return "v1", h.key, true }}, first)
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitOpen(t, session)
+		sessions = append(sessions, session)
+	}
+	countOn := func(relay string) int {
+		count := 0
+		for _, session := range sessions {
+			if session.RelayID() == relay && !session.Moving() {
+				count++
+			}
+		}
+		return count
+	}
+	waitOn := func(relay string, want int) {
+		t.Helper()
+		deadline := time.Now().Add(20 * time.Second)
+		for countOn(relay) != want && time.Now().Before(deadline) {
+			time.Sleep(5 * time.Millisecond)
+		}
+		if got := countOn(relay); got != want {
+			t.Fatalf("%d streams on %s, want %d", got, relay, want)
+		}
+	}
+	// The outage: every stream moves to relay-b.
+	dialer.setPrefer("relay-b")
+	for _, session := range sessions {
+		h.mgr.Repath(session, TriggerReturn, time.Now())
+	}
+	waitOn("relay-b", 40)
+	// relay-a serves again and has been stable for ReturnStableFor; the moves
+	// were 30 s ago on the returner's clock. The moves it asks for start at
+	// once on the real one.
+	dialer.setPrefer("relay-a")
+	const ago = 30 * time.Second
+	now := time.Now().Add(ago)
+	returner := &Returner{Manager: h.mgr,
+		Nearer: func(_ *Session, relayID string) bool { return relayID == "relay-b" },
+		now:    func() time.Time { return now },
+		jitter: func(time.Duration) time.Duration { return -ago },
+	}
+	if moved := returner.Pass(); moved != 32 {
+		t.Fatalf("first pass moved %d streams, want 32", moved)
+	}
+	waitOn("relay-a", 32)
+	if moved := returner.Pass(); moved != 8 {
+		t.Fatalf("second pass moved %d streams, want the remaining 8", moved)
+	}
+	waitOn("relay-a", 40)
+	for _, session := range sessions {
+		session.Abort(RstAborted, "done")
+	}
+}

@@ -33,13 +33,19 @@ type Returner struct {
 	jitter func(time.Duration) time.Duration
 }
 
+// A node carries tens of streams on one route set, and after a local relay
+// outage every one of them sits on a farther relay: with 8 moves a pass and a
+// minute's cooldown they came back 60-100 s after the relay served again
+// (stand rc.7, F-3). A pass now moves up to 32, and a stream that moved 20 s
+// ago may move again, which brings a node's streams back within a pass or two
+// once the relay is stable (relaybridge.ReturnStableFor).
 const (
 	// DefaultReturnInterval spaces the passes.
 	DefaultReturnInterval = 10 * time.Second
 	// DefaultReturnBatch bounds the streams one pass moves per daemon.
-	DefaultReturnBatch = 8
+	DefaultReturnBatch = 32
 	// DefaultReturnCooldown keeps a stream that just moved where it is for a while.
-	DefaultReturnCooldown = time.Minute
+	DefaultReturnCooldown = 20 * time.Second
 )
 
 // Run passes every Interval until ctx ends.

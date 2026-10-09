@@ -161,8 +161,11 @@ func ReturnTarget(candidates []*pb.RelayDataCandidate, transports map[string]Tra
 
 // ReturnStableFor is how long a relay must have been connected without a
 // break before streams return to it: a relay that just came back (or keeps
-// flapping) takes nothing until it proved itself.
-var ReturnStableFor = time.Minute
+// flapping) takes nothing until it proved itself. A return is a planned move
+// (the stream stays where it is when the new path does not open), so a short
+// proof is enough; a minute kept streams on a relay up to 300 ms away for that
+// long after every local relay restart (stand rc.7, F-3).
+var ReturnStableFor = 20 * time.Second
 
 // RelayStability remembers since when each relay has been connected without a
 // break. The zero value is ready to use.

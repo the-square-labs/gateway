@@ -339,3 +339,22 @@ func TestRegrantAtSpreadsBeforeTheDeadline(t *testing.T) {
 		}
 	}
 }
+
+// Stand rc.7 (F-3): streams came back to the local relay 60-100 s after it
+// served again, a minute of it waiting for the relay to prove itself. A relay
+// connected without a break for 20 s takes its streams back.
+func TestARelayBackForTwentySecondsTakesItsStreamsBack(t *testing.T) {
+	now := time.Unix(1000, 0)
+	stability := &RelayStability{now: func() time.Time { return now }}
+	stability.Observe(relayLocal, true)
+	now = now.Add(20 * time.Second)
+	stability.Observe(relayLocal, true)
+	loads := map[string]TransportLoad{relayLocal: {Available: true}, relayUK: {Available: true}}
+	if !StableTransports(loads, stability, relayUK)[relayLocal].Available {
+		t.Fatalf("a relay connected for 20 s does not count for a return (ReturnStableFor %s)", ReturnStableFor)
+	}
+	now = now.Add(-time.Second)
+	if StableTransports(loads, stability, relayUK)[relayLocal].Available {
+		t.Fatal("a relay connected for 19 s counts for a return")
+	}
+}
