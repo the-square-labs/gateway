@@ -431,7 +431,7 @@ Use status pages for externally visible service health and incidents. Use notifi
 
 Notification message and webhook templates use one canonical nested context. Common families are `notification.*`, `alert.*`, `resource.*`, `metric.*`, `node.*`, `health.*`, `certificate.*`, `state.*`, `event.*`, `operation.*`, `failure.*`, `details.*`, `fired.*`, `resolution.*`, and `gateway.*`. For example, use `{{notification.title}}`, `{{alert.severity.emoji}}`, `{{metric.value}}`, and `{{fired.duration}}` (how long the alert lasted, such as `3m 37s`; `{{fired.duration.seconds}}` is the number of seconds). Historical flat names such as `alert_name`, `value`, `threshold`, `fired_at`, and `fired_duration` are not aliases and render empty. The `coalesce` helper can select the first non-empty nested value.
 
-An alert rule has a message for when its alert fires and a **Resolve Message Template** for when it resolves. A rule without a resolve message uses Gateway's text for it, such as "Proxy host example.com is back online after 13m 2s." or "CPU Usage on node-1 is back to normal at 42% after 5m 0s."; the firing message is not reused for the resolve, unless it was written for both states (it reads `alert.status`). One-off event rules never resolve and have no resolve message. A recovery event (**Node Online**, **Health Online**, **Database Online**) is sent once when the resource comes back; when the resource goes down again the alert closes quietly, without a resolve message.
+An alert rule has a message for when its alert fires and a **Resolve Message Template** for when it resolves. A rule without a resolve message uses Gateway's text for it, such as "Proxy host example.com is back online after 13m 2s." or "CPU Usage on node-1 is back to normal at 42% after 5m 0s."; the firing message is not reused for the resolve, unless it was written for both states (it reads `alert.status`). One-off event rules never resolve and have no resolve message. A recovery event (**Node Online**, **Health Online**, **Database Online**) is sent once each time the resource comes back, not for resources that are simply up when the rule is created; when the resource goes down again the alert closes quietly, without a resolve message.
 
 ### Webhook Delivery
 
@@ -447,6 +447,8 @@ A proxy host health alert (offline or degraded) is folded under another alert th
 
 - the proxy host's node is down: a node **offline** alert fires for the node serving the proxy host (its nginx node or a member of its ingress group) or for the node running its container upstream;
 - Gateway lost outbound connectivity, and the proxy host's health probe was sent by Gateway itself and got no answer (DNS, connect or timeout errors).
+
+A container or deployment health alert (offline or degraded) is folded the same way under the **offline** alert of the node it runs on.
 
 A folded alert is not sent to a webhook that gets the alert it is folded under; a webhook that does not get that alert still gets it. It resolves together with that alert, without a separate message. An alert that fires later still folds the proxy host alerts it explains if they have not gone out yet. For 2 minutes after that alert resolves, the proxy host alerts it explains are not raised, so proxy hosts that come back right after their node or Gateway's connectivity do not alert; a proxy host still down after that alerts on its own. While Gateway cannot reach its webhooks, their notifications wait and go out in order as soon as it can.
 
