@@ -532,3 +532,28 @@ func TestStorageRemovalRemovesLeftoverMemberContainers(t *testing.T) {
 		t.Fatalf("listed with filters %s, want the member's labels", filters)
 	}
 }
+
+// Each instance disk is trimmed every interval, and at every watch while the
+// node's disk is below its reserve.
+func TestDiskTrimsSpacing(t *testing.T) {
+	now := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	trims := newDiskTrims()
+	trims.now = func() time.Time { return now }
+	if !trims.due("storage/a", false) {
+		t.Fatal("a disk never trimmed is not due")
+	}
+	now = now.Add(diskWatchInterval)
+	if trims.due("storage/a", false) {
+		t.Fatal("a disk trimmed 30 s ago is due")
+	}
+	if !trims.due("storage/a", true) {
+		t.Fatal("a disk is not trimmed while the node's disk is below its reserve")
+	}
+	now = now.Add(diskTrimInterval)
+	if !trims.due("storage/a", false) {
+		t.Fatal("a disk is not trimmed after an interval")
+	}
+	if !nodeDiskTight("/", 2*testGiB, statfsWithFree(testGiB)) || nodeDiskTight("/", 2*testGiB, statfsWithFree(4*testGiB)) {
+		t.Fatal("tight node disk misjudged")
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	mobyclient "github.com/moby/moby/client"
+	"golang.org/x/sys/unix"
 )
 
 // trimMount discards the free blocks of a mounted filesystem (tests replace it).
@@ -25,16 +26,30 @@ func newDiskTrims() *diskTrims {
 }
 
 // due reports whether the disk under key was not trimmed for an interval
-// and takes the slot.
-func (t *diskTrims) due(key string) bool {
+// (any time when urgent) and takes the slot.
+func (t *diskTrims) due(key string, urgent bool) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	now := t.now()
-	if last, ok := t.last[key]; ok && now.Sub(last) < diskTrimInterval {
+	if last, ok := t.last[key]; ok && !urgent && now.Sub(last) < diskTrimInterval {
 		return false
 	}
 	t.last[key] = now
 	return true
+}
+
+// nodeDiskTight reports a node disk with less free space than its reserve:
+// the instances' disks then give back what their engines freed (SeaweedFS's
+// own compaction, deleted rows) at every watch instead of every interval.
+func nodeDiskTight(root string, reserve int64, statfs func(string, *unix.Statfs_t) error) bool {
+	if statfs == nil {
+		statfs = unix.Statfs
+	}
+	var stat unix.Statfs_t
+	if err := statfs(root, &stat); err != nil {
+		return false
+	}
+	return int64(stat.Bavail)*int64(stat.Bsize) < reserve
 }
 
 // trim gives the space of deleted data on the filesystem at mountPath back to
@@ -85,6 +100,7 @@ func (m *managedDatabaseManager) watchDisks(ctx context.Context, trims *diskTrim
 	if err != nil {
 		return
 	}
+	urgent := nodeDiskTight(m.root, m.reserve, m.statFilesystem)
 	for _, record := range records {
 		if ctx.Err() != nil {
 			return
@@ -104,7 +120,7 @@ func (m *managedDatabaseManager) watchDisks(ctx context.Context, trims *diskTrim
 			}
 			continue
 		}
-		if trims.due("database/" + record.ID) {
+		if trims.due("database/"+record.ID, urgent) {
 			trimInstanceDisk(m.loopHost(), m.logger, "managed database", record.ID, record.MountPath)
 		}
 	}
@@ -117,6 +133,7 @@ func (m *managedStorageManager) watchDisks(ctx context.Context, trims *diskTrims
 	if err != nil {
 		return
 	}
+	urgent := nodeDiskTight(m.root, m.reserve, m.statFilesystem)
 	for _, record := range records {
 		if ctx.Err() != nil {
 			return
@@ -136,7 +153,7 @@ func (m *managedStorageManager) watchDisks(ctx context.Context, trims *diskTrims
 			}
 			continue
 		}
-		if trims.due("storage/" + record.ID) {
+		if trims.due("storage/"+record.ID, urgent) {
 			trimInstanceDisk(m.loopHost(), m.logger, "managed storage", record.ID, record.MountPath)
 		}
 	}

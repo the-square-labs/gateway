@@ -32,8 +32,9 @@ const (
 	// A repair writes into the image, which may need blocks the node's disk
 	// does not have yet; below this much free space it waits.
 	diskRepairMinimumFreeBytes = 256 * mebibyte
-	// How often the free space of deleted data is given back to the node.
-	diskTrimInterval = time.Hour
+	// How often the free space of deleted data is given back to the node;
+	// every disk watch while the node's disk is below its reserve.
+	diskTrimInterval = 10 * time.Minute
 )
 
 // managedDiskRepair is the last repair of an instance's disk, kept in its
