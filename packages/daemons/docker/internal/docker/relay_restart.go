@@ -65,13 +65,16 @@ drain:
 	// An update hands the streams and node-local links to the next process: the relays answer new tunnels
 	// "restarting" from here on (live_handover.go). What it does not hand over drains as before.
 	result := p.handOverConnections()
+	// What the update cuts is counted now: the drain closes the idle ones,
+	// and they are cut as much as the ones the exit ends.
+	cuts := p.updateCutsNow()
 	links := make(chan int, 1)
 	go func() { links <- p.linkFlows.drain(restartDrainLimit) }()
 	p.proxyTunnels.drain(restartDrainLimit)
 	if busy := <-links; busy > 0 {
 		p.logger.Info("link connections still busy when the restart drain ended are cut", "connections", busy)
 	}
-	p.recordUpdateConnections(started, result)
+	p.recordUpdateConnections(started, result, cuts)
 }
 
 // announceRestartToRelays renews every serving registration RESTARTING on

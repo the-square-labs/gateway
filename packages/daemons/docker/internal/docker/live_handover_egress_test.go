@@ -253,7 +253,7 @@ func (pair *egressHandoverPair) update(fromVersion string) {
 	lifecycle.Version = fromVersion
 	result := old.handOverConnections()
 	if result.Committed {
-		old.recordUpdateConnections(result.StartedAt, result)
+		old.recordUpdateConnections(result.StartedAt, result, old.updateCutsNow())
 	}
 	lifecycle.Version = previousVersion
 	if !result.Committed || result.HandedOver == 0 || len(result.Cut) > 0 {

@@ -49,6 +49,10 @@ type Report struct {
 	PauseP50    time.Duration  `json:"pauseP50,omitempty"`
 	PauseP99    time.Duration  `json:"pauseP99,omitempty"`
 	PauseMax    time.Duration  `json:"pauseMax,omitempty"`
+	// Counted: Cut holds every connection the update did not hand over,
+	// counted before the drain that closes the idle ones. Processes of
+	// 2.11.4-rc.7 and earlier counted after it (CutUncounted).
+	Counted bool `json:"counted,omitempty"`
 }
 
 // AddCut counts n connections cut under class.
@@ -123,11 +127,28 @@ func NewTracker(stateDir, version string) *Tracker {
 	}
 	if err == nil && time.Since(pending.StartedAt) < 30*time.Minute {
 		pending.ToVersion = version
+		markUncounted(pending)
 		t.pending = pending
 	} else {
 		close(t.settled)
 	}
 	return t
+}
+
+// markUncounted turns the cut of an older process's report that handed
+// nothing over into CutUncounted: that process counted only the connections
+// still open after its drain, which had closed the idle ones (a service
+// restart of 22 connections reported one). Such an update cut every
+// connection of the daemon; the count is a lower bound.
+func markUncounted(report *Report) {
+	if report.Counted || report.Handover || len(report.Cut) == 0 {
+		return
+	}
+	total := 0
+	for _, n := range report.Cut {
+		total += n
+	}
+	report.Cut = map[string]int{CutUncounted: total}
 }
 
 // Track follows a stream taken over until it resumed or ended.

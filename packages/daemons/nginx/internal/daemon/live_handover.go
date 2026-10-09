@@ -105,17 +105,26 @@ func (p *NginxPlugin) handOverConnections() handover.Result {
 	return result
 }
 
+// updateCutsNow counts, by class, the connections this process still carries
+// once the handover took what it could: the update cuts every one of them,
+// those the last drains close as well as those still open at the exit.
+func (p *NginxPlugin) updateCutsNow() map[string]int {
+	cuts := p.handover.Remaining()
+	for class, n := range p.liveCuts.snapshot() {
+		cuts[class] += n
+	}
+	return cuts
+}
+
 // recordUpdateConnections leaves the next process what this update did to the
-// connections: what it handed over, and what is still open at the exit.
-func (p *NginxPlugin) recordUpdateConnections(started time.Time, result handover.Result) {
+// connections: what it handed over, and what it cut (counted before the last
+// drains, updateCutsNow).
+func (p *NginxPlugin) recordUpdateConnections(started time.Time, result handover.Result, cuts map[string]int) {
 	if !exitingForUpdate() || p.baseCfg == nil {
 		return
 	}
-	report := handover.Report{FromVersion: lifecycle.Version, StartedAt: started, Handover: result.Committed, HandedOver: result.HandedOver}
-	for class, n := range p.handover.Remaining() {
-		report.AddCut(class, n)
-	}
-	for class, n := range p.liveCuts.snapshot() {
+	report := handover.Report{FromVersion: lifecycle.Version, StartedAt: started, Handover: result.Committed, HandedOver: result.HandedOver, Counted: true}
+	for class, n := range cuts {
 		report.AddCut(class, n)
 	}
 	if err := handover.WritePending(p.baseCfg.StateDir, report); err != nil && p.logger != nil {

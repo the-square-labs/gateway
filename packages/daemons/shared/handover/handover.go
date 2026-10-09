@@ -98,6 +98,11 @@ const (
 	// process, or failed before the update's counts were final: what the
 	// stream carried did not reach it, so the update did not keep it.
 	CutLocalClosed = "local_closed"
+	// CutUncounted: an update that handed nothing over cut every connection
+	// of the daemon, but the process that stopped (2.11.4-rc.7 or earlier)
+	// counted only what was still open after its drain had closed the rest:
+	// the number is a lower bound, "all connections of this node".
+	CutUncounted = "uncounted"
 )
 
 // item is a bridge or a pipe.
@@ -635,6 +640,10 @@ func (r *Registry) Remaining() map[string]int {
 			}
 			if class := current.cutClass(); class != "" {
 				cut[class]++
+				continue
+			}
+			if current.session.State().Terminal() {
+				// Ended already: nothing left to cut.
 				continue
 			}
 			current.stop.mu.Lock()

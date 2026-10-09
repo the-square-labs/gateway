@@ -1,6 +1,7 @@
 package handover
 
 import (
+	"maps"
 	"testing"
 	"time"
 )
@@ -66,5 +67,36 @@ func TestStreamTotalsAreTakenOnce(t *testing.T) {
 	}
 	if totals := TakeStreamTotals(stateDir); totals.Cut != 0 {
 		t.Fatalf("stale totals taken: %+v", totals)
+	}
+}
+
+// A report of an older process that handed nothing over counted only what
+// its drain left open: the next process reports such an update as having cut
+// every connection (CutUncounted), not the lower bound as a count (O-2).
+func TestTrackerMarksAnOlderUncountedCutAsAll(t *testing.T) {
+	cases := []struct {
+		name   string
+		report Report
+		want   map[string]int
+	}{
+		{"older service restart", Report{Cut: map[string]int{CutServiceRestart: 1}}, map[string]int{CutUncounted: 1}},
+		{"older update without a keeper", Report{Cut: map[string]int{CutNoHandover: 2, "registry": 1}}, map[string]int{CutUncounted: 3}},
+		{"counted service restart", Report{Counted: true, Cut: map[string]int{CutServiceRestart: 22}}, map[string]int{CutServiceRestart: 22}},
+		{"older handover", Report{Handover: true, Cut: map[string]int{"postgres_tls": 2}}, map[string]int{"postgres_tls": 2}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			tc.report.FromVersion, tc.report.StartedAt = "v1", time.Now()
+			if err := WritePending(dir, tc.report); err != nil {
+				t.Fatal(err)
+			}
+			tracker := NewTracker(dir, "v2")
+			tracker.Settle()
+			last := tracker.Last()
+			if last == nil || !maps.Equal(last.Cut, tc.want) {
+				t.Fatalf("last report = %+v, want cut %v", last, tc.want)
+			}
+		})
 	}
 }

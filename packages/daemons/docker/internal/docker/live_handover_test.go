@@ -4,10 +4,16 @@ package docker
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/handover"
 	"github.com/wiolett-industries/gateway/daemon-shared/handover/handovertest"
 	"github.com/wiolett-industries/gateway/daemon-shared/relayresume"
 	"github.com/wiolett-industries/gateway/docker-daemon/internal/config"
@@ -136,5 +142,92 @@ func TestRestartCarriesTheRelayStreamCutTotal(t *testing.T) {
 	again.restoreHandover()
 	if stats := again.relayStreamStats(); stats.GetCutTotal() != 0 {
 		t.Fatalf("the totals were carried twice: %+v", stats)
+	}
+}
+
+// noHandoverKeeper is a launcher that keeps nothing for the next process (one
+// that predates the keeper, or a service restart that stops it too).
+type noHandoverKeeper struct{ *handovertest.Keeper }
+
+func (noHandoverKeeper) HandsOver() bool { return false }
+
+// openLinkFlow opens a stream from the source daemon for a workload
+// connection that came in at a link socket (tracked like one, so a restart's
+// drain closes it when idle).
+func (pair *streamPair) openLinkFlow() (net.Conn, *relaySourceTunnel) {
+	assignment := pair.source.relayGrants.lookup("connect", pair.kinds.connect, testLinkID)
+	tunnel, err := pair.source.openRelaySource(assignment)
+	if err != nil {
+		pair.t.Fatal(err)
+	}
+	local, app := testTCPPair(pair.t)
+	flow, done := pair.source.linkFlows.track(local)
+	go func() {
+		defer done()
+		tunnel.bridge(flow)
+	}()
+	return app, tunnel
+}
+
+// An update that hands nothing over cuts every connection of the daemon, the
+// idle ones its drain closes included, and reports each of them (O-2: a
+// service restart of 22 link connections reported one, the one still busy
+// when the drain ended; the others had ended by then).
+func TestUpdateWithoutHandoverReportsTheConnectionsTheDrainCloses(t *testing.T) {
+	pair := newStreamPair(t, true, true)
+	idle, idleTunnel := pair.openLinkFlow()
+	busy, busyTunnel := pair.openLinkFlow()
+	// Referenced to the end: a collected connection would close and end its stream.
+	t.Cleanup(func() { _ = idle.Close(); _ = busy.Close() })
+	waitFor(t, "the streams to open", func() bool {
+		return idleTunnel.session.State() == relayresume.StateOpen && busyTunnel.session.State() == relayresume.StateOpen
+	})
+	buffer := make([]byte, 4)
+	if _, err := idle.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	_ = idle.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := io.ReadFull(idle, buffer); err != nil {
+		t.Fatal(err)
+	}
+	// The busy one keeps a request in flight for the whole drain.
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		chunk := make([]byte, 512)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if _, err := busy.Write(chunk); err != nil {
+				return
+			}
+			if _, err := io.ReadFull(busy, chunk); err != nil {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+	time.Sleep(linkFlowIdleQuiet + 100*time.Millisecond) // the first one is idle now: the drain closes it
+
+	previousKeeper, previousExit := handoverKeeper, exitingForUpdate
+	handoverKeeper, exitingForUpdate = noHandoverKeeper{handovertest.NewKeeper()}, func() bool { return true }
+	t.Cleanup(func() { handoverKeeper, exitingForUpdate = previousKeeper, previousExit })
+	source := pair.source
+	source.cfg.StateDir = t.TempDir()
+	source.AnnounceRestart()
+
+	data, err := os.ReadFile(filepath.Join(source.cfg.StateDir, "update-connections.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report handover.Report
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Handover || !report.Counted || report.Cut[handover.CutNoHandover] != 2 || len(report.Cut) != 1 {
+		t.Fatalf("report = %+v, want both connections cut as no_handover", report)
 	}
 }

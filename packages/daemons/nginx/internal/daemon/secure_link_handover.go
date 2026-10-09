@@ -367,13 +367,15 @@ func (p *NginxPlugin) HandOverSecureLinks() {
 			p.logger.Info("handing Secure Link sockets over to the next daemon process", "sockets", handed)
 		}
 		result := p.handOverConnections()
+		// What the update cuts is counted now: the drains below close it.
+		cuts := p.updateCutsNow()
 		drain(secureLinkHandoverFinish, secureLinkFinishQuiet, endOldest, nil)
 		// The exit cuts what is still open. The connections that answered are
 		// closed a tick before it, so nginx drops them from its keep-alive pool
 		// and the retries of the requests the exit cuts open new connections,
 		// which wait for the next process.
 		drain(secureLinkDrainTick, 0, endAll, nil)
-		p.recordUpdateConnections(started, result)
+		p.recordUpdateConnections(started, result, cuts)
 	})
 }
 
