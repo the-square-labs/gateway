@@ -25,11 +25,16 @@ package lifecycle
 //     under the running launcher as before.
 //
 // The update journal carries ServiceRestart so the start after the restart
-// may try the staged launcher with the pending update; the update result says
-// how the update restarts the daemon.
+// may try a refreshed launcher with the pending update; the update result says
+// how the update restarts the daemon. That start runs the updated binary's
+// bootstrap, which stages the updated binary itself as the launcher on trial
+// (stageServiceRestartLauncher): the service starts the newest launcher at
+// once instead of the one the previous daemon staged, which the newest one
+// would replace in place a minute later.
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -202,15 +207,19 @@ func planUpdateRestart() *launcherServiceRestart {
 // service manager, and waits until the service manager (directly, or through
 // the stopping launcher) stops this daemon. Without a method it does nothing,
 // and on any failure the daemon exits for the update under its launcher as
-// before.
-func (r *launcherServiceRestart) run(logger *slog.Logger) {
+// before. It reports whether the service manager stopped the daemon: the
+// daemon then exits 0, so the launcher, which returns the exit status of its
+// child when it is stopped itself, exits cleanly and the planned restart is
+// no failure of the unit (launchers of every release so far take only a clean
+// exit or a signal for a clean stop).
+func (r *launcherServiceRestart) run(logger *slog.Logger) bool {
 	if r == nil || r.method == "" {
-		return
+		return false
 	}
 	if err := markLauncherUpdateServiceRestart(r.stateDir, true); err != nil {
 		serviceRestartPending.Store(false)
 		logger.Warn("the update restarts the daemon under the running launcher: the update journal could not be marked for a service restart", "error", err)
-		return
+		return false
 	}
 	stopped := make(chan os.Signal, 1)
 	signal.Notify(stopped, syscall.SIGTERM)
@@ -219,13 +228,15 @@ func (r *launcherServiceRestart) run(logger *slog.Logger) {
 		serviceRestartPending.Store(false)
 		_ = markLauncherUpdateServiceRestart(r.stateDir, false)
 		logger.Warn("the update restarts the daemon under the running launcher: the service restart could not be requested", "error", err, "service_manager", r.manager.String())
-		return
+		return false
 	}
 	logger.Info("restarting the whole service for the update so the refreshed launcher starts", "service_manager", r.manager.String())
 	select {
 	case <-stopped:
+		return true
 	case <-time.After(launcherServiceRestartWait):
 		logger.Warn("the service manager did not stop the daemon in time; exiting for the update", "service_manager", r.manager.String())
+		return false
 	}
 }
 
@@ -255,4 +266,75 @@ func markLauncherUpdateServiceRestart(stateDir string, restart bool) error {
 	}
 	state.ServiceRestart = restart
 	return writeLauncherUpdateState(stateDir, state)
+}
+
+// stageServiceRestartLauncher stages executable, the updated daemon binary
+// whose bootstrap runs the start after a service restart for its update, as
+// the launcher that start tries. Without it the start tries the launcher the
+// previous daemon staged (older than this binary), and this binary's
+// launcher replaces it in place once the update committed: two launcher swaps
+// instead of one. Every check that fails keeps today's selection; the staged
+// launcher stays on trial as any other (attempts, fallback to the installed
+// copy, abandoned binaries are never staged again).
+func stageServiceRestartLauncher(stateDir, launcherPath, executable string) error {
+	return withLauncherRefreshLock(stateDir, func() error {
+		pending, err := readLauncherUpdateState(stateDir)
+		if err != nil || pending == nil || !pending.ServiceRestart || filepath.Clean(pending.BinaryPath) != filepath.Clean(executable) {
+			return err
+		}
+		version, err := readDaemonBinaryVersion(executable)
+		if err != nil {
+			return fmt.Errorf("read daemon binary version: %w", err)
+		}
+		if version != pending.TargetVersion {
+			return nil
+		}
+		sum, err := executableChecksum(executable)
+		if err != nil {
+			return err
+		}
+		if installed, err := executableChecksum(launcherPath); err == nil && installed == sum {
+			return nil
+		}
+		next := stagedLauncherPath(launcherPath)
+		current, readErr := readLauncherRefreshState(stateDir)
+		if readErr == nil && current != nil && current.TargetSHA256 == sum && filepath.Clean(current.LauncherPath) == filepath.Clean(launcherPath) {
+			if current.Phase == launcherRefreshPhaseAbandoned {
+				// This binary already failed a launcher trial on this node.
+				return nil
+			}
+			if nextSum, err := executableChecksum(next); err == nil && nextSum == sum {
+				// Staged already (a start that came back): keep its attempts.
+				return nil
+			}
+		}
+		if err := removeLauncherRefreshState(stateDir); err != nil {
+			return err
+		}
+		if err := copyExecutableAtomic(executable, next); err != nil {
+			return fmt.Errorf("stage launcher copy: %w", err)
+		}
+		discard := func(cause error) error {
+			_ = os.Remove(next)
+			return cause
+		}
+		if nextSum, err := executableChecksum(next); err != nil {
+			return discard(err)
+		} else if nextSum != sum {
+			return discard(errors.New("daemon binary changed while it was staged"))
+		}
+		if err := probeLauncher(next); err != nil {
+			return discard(fmt.Errorf("staged launcher probe failed: %w", err))
+		}
+		if err := writeLauncherRefreshState(stateDir, &launcherRefreshState{
+			Phase:         launcherRefreshPhaseTrial,
+			LauncherPath:  launcherPath,
+			TargetSHA256:  sum,
+			TargetVersion: version,
+			StagedAt:      time.Now().UTC(),
+		}); err != nil {
+			return discard(fmt.Errorf("persist launcher refresh state: %w", err))
+		}
+		return nil
+	})
 }

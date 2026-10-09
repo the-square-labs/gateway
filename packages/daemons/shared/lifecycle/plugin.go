@@ -26,6 +26,9 @@ type RestartRequestedError struct {
 	// serviceRestart, when set, restarts the whole service for the update
 	// (launcher_service_restart.go).
 	serviceRestart *launcherServiceRestart
+	// serviceStopped: the service manager stopped the daemon for that
+	// restart, so the daemon exits 0 (a planned stop, not a failure).
+	serviceStopped bool
 }
 
 func (e *RestartRequestedError) Error() string {
@@ -36,7 +39,14 @@ func (e *RestartRequestedError) Error() string {
 // while preserving the ordinary non-zero failure contract for every other
 // daemon error.
 func DaemonExitCode(err error) int {
-	if RestartRequested(err) {
+	var restart *RestartRequestedError
+	if errors.As(err, &restart) {
+		if restart.serviceStopped {
+			// The whole service restarts for the update: the stopping launcher
+			// passes this status on as its own, and only 0 (or a signal) keeps
+			// the planned restart from being recorded as a failure of the unit.
+			return 0
+		}
 		return LauncherUpdateExitCode
 	}
 	return 1

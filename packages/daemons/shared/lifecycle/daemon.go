@@ -148,7 +148,7 @@ func (d *DaemonBase) Run(ctx context.Context) error {
 			d.logger.Info(restart.Message, "action", "restarting")
 			exitingForUpdate.Store(true)
 			d.PrepareShutdown()
-			restart.serviceRestart.run(d.logger)
+			restart.serviceStopped = restart.serviceRestart.run(d.logger)
 			return restart
 		}
 		var delay time.Duration
@@ -497,6 +497,13 @@ func ExitingForUpdate() bool { return exitingForUpdate.Load() }
 // cancelling the context of Run; later calls do nothing.
 func (d *DaemonBase) PrepareShutdown() {
 	d.prepareShutdownOnce.Do(func() {
+		if !exitingForUpdate.Load() && candidateStopHandsOver() {
+			// Stopped on trial, most likely for a rollback: the previous
+			// daemon starts next and takes the connections over
+			// (launcher_candidate_stop.go).
+			d.logger.Info("update candidate stopped on trial; handing connections over to the daemon that starts next", "version", Version)
+			exitingForUpdate.Store(true)
+		}
 		if announcer, ok := d.plugin.(RestartAnnouncerPlugin); ok {
 			announcer.AnnounceRestart()
 		}

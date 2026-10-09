@@ -190,7 +190,9 @@ func TestServiceRestartStopsTheLauncherAndStartsTheStagedLauncher(t *testing.T) 
 
 	plan := &launcherServiceRestart{stateDir: f.stateDir, launcherPID: launcher.Process.Pid, method: launcherRestartSignal, manager: launcherServiceManager{kind: launcherManagerOpenRC}}
 	started := time.Now()
-	plan.run(discardLauncherLogger())
+	if stopped := plan.run(discardLauncherLogger()); !stopped {
+		t.Fatal("run did not report the stop by the service manager")
+	}
 	if waited := time.Since(started); waited >= launcherServiceRestartWait {
 		t.Fatalf("the daemon was not stopped by the launcher (waited %s)", waited)
 	}
@@ -341,5 +343,68 @@ func TestSystemdUnitFileRestartCombinesDropIns(t *testing.T) {
 	write(filepath.Join(etc, "docker-daemon.service.d", "20-old.conf"), "[Service]\nRestart=always\n")
 	if restart, ok := systemdUnitFileRestart("docker-daemon.service", directories); !ok || restart != "always" {
 		t.Fatalf("Restart = %q, %v", restart, ok)
+	}
+}
+
+// The start after a service restart for an update runs the updated binary's
+// launcher at once, not the older launcher the previous daemon staged (O-4).
+func TestServiceRestartStartsTheUpdatedLauncher(t *testing.T) {
+	f := newServiceRestartFixture(t)
+	// The launcher the previous daemon staged: older than the updated binary.
+	f.stageNext(t, []string{LauncherFeatureListenerKeep, LauncherFeatureSelfUpdate})
+	if err := markLauncherUpdateServiceRestart(f.stateDir, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := stageServiceRestartLauncher(f.stateDir, f.launcherPath, f.binary); err != nil {
+		t.Fatal(err)
+	}
+	next := stagedLauncherPath(f.launcherPath)
+	if selected := selectLauncherForStart(f.stateDir, f.launcherPath); selected != next {
+		t.Fatalf("the start selected %s", selected)
+	}
+	binarySum, _ := executableChecksum(f.binary)
+	if nextSum, err := executableChecksum(next); err != nil || nextSum != binarySum {
+		t.Fatalf("the start runs a launcher other than the updated binary (%s, %v)", nextSum, err)
+	}
+	state, err := readLauncherRefreshState(f.stateDir)
+	if err != nil || state.Phase != launcherRefreshPhaseTrial || state.TargetVersion != "v2" || state.Attempts != 1 {
+		t.Fatalf("refresh journal = %+v, %v", state, err)
+	}
+	// A start that comes back (a crash on trial) keeps the attempts counted.
+	if err := stageServiceRestartLauncher(f.stateDir, f.launcherPath, f.binary); err != nil {
+		t.Fatal(err)
+	}
+	if state, err := readLauncherRefreshState(f.stateDir); err != nil || state.Attempts != 1 {
+		t.Fatalf("refresh journal after a second start = %+v, %v", state, err)
+	}
+	// A binary that failed its launcher trial here is not staged again.
+	if err := withLauncherRefreshLock(f.stateDir, func() error {
+		current, err := readLauncherRefreshState(f.stateDir)
+		if err != nil {
+			return err
+		}
+		return abandonLauncherRefresh(f.stateDir, current, "test")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := stageServiceRestartLauncher(f.stateDir, f.launcherPath, f.binary); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(next); !os.IsNotExist(err) {
+		t.Fatalf("an abandoned launcher was staged again: %v", err)
+	}
+}
+
+// Only a start for a service-restart update stages the updated binary: any
+// other pending update keeps the launcher it was staged under.
+func TestUpdateWithoutServiceRestartKeepsTheStagedLauncher(t *testing.T) {
+	f := newServiceRestartFixture(t)
+	f.stageNext(t, launcherBinaryFeatures)
+	before, _ := executableChecksum(stagedLauncherPath(f.launcherPath))
+	if err := stageServiceRestartLauncher(f.stateDir, f.launcherPath, f.binary); err != nil {
+		t.Fatal(err)
+	}
+	if after, _ := executableChecksum(stagedLauncherPath(f.launcherPath)); after != before {
+		t.Fatal("the staged launcher changed for an update without a service restart")
 	}
 }

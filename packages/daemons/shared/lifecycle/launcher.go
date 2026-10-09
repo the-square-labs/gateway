@@ -35,7 +35,10 @@ const (
 var (
 	launcherLocalReadyLimit = 30 * time.Second
 	// A candidate that announced it will report gateway control readiness
-	// must receive its first gateway command within this window.
+	// must receive its first gateway command within this window. Gateway
+	// waits for an updated daemon at least this plus launcherLocalReadyLimit
+	// (LAUNCHER_CANDIDATE_TRIAL_LIMIT_MS in daemon-update.service.ts): change
+	// both together.
 	launcherControlReadyLimit = 3 * time.Minute
 	launcherStabilityWindow   = 30 * time.Second
 	launcherStopGrace         = 15 * time.Second
@@ -162,6 +165,11 @@ func BootstrapLauncher(spec LauncherSpec) error {
 	stateDir, launcherPath, err := ensureStableLauncher(spec.StateDir, spec.DaemonType, executable)
 	if err != nil {
 		return err
+	}
+	// The start after a service restart for an update runs this (updated)
+	// binary's launcher at once (launcher_service_restart.go).
+	if err := stageServiceRestartLauncher(stateDir, launcherPath, executable); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: the updated launcher was not staged for this start; using the launcher staged before: %v\n", err)
 	}
 	// A staged launcher refresh is tried here; the known-good copy is used
 	// whenever the trial is not due, not valid, or an update is pending.
@@ -622,7 +630,13 @@ func superviseLauncherChild(ctx context.Context, spec LauncherSpec, initialState
 	for {
 		select {
 		case <-ctx.Done():
-			return launcherChildOutcome{stop: true, err: terminateLauncherChild(child, done, launcherStopGrace)}
+			err := terminateLauncherChild(child, done, launcherStopGrace)
+			if daemonProcessExitCode(err) == LauncherUpdateExitCode {
+				// The daemon exited for its staged update while the service
+				// stops: a clean stop, the next start takes the update.
+				err = nil
+			}
+			return launcherChildOutcome{stop: true, err: err}
 		case <-readyTimeout:
 			err := terminateLauncherChild(child, done, launcherStopGrace)
 			return launcherChildOutcome{err: handleLauncherCandidateExit(spec, state, "local readiness timeout", err, logger)}

@@ -122,6 +122,46 @@ func TestDaemonExitCodeUsesDedicatedUpdateHandoff(t *testing.T) {
 	if code := DaemonExitCode(context.Canceled); code != 1 {
 		t.Fatalf("ordinary error exit code = %d", code)
 	}
+	// Stopped by the service manager for a whole-service restart: a clean
+	// exit, so the stopping launcher exits cleanly too (O-3).
+	if code := DaemonExitCode(&RestartRequestedError{Message: "updated", serviceStopped: true}); code != 0 {
+		t.Fatalf("service restart exit code = %d", code)
+	}
+}
+
+// A launcher stopped while its daemon exits for a staged update (the daemon
+// of an update that restarts the whole service) stops cleanly: the unit does
+// not record the planned restart as a failure, and the update stays staged
+// for the next start (O-3).
+func TestLauncherStopWhileDaemonExitsForUpdateIsClean(t *testing.T) {
+	restore := useFastLauncherTimings()
+	defer restore()
+	stateDir := t.TempDir()
+	binary := filepath.Join(t.TempDir(), "test-daemon")
+	writeLauncherTestExecutable(t, binary, "v1", true)
+	contents, err := os.ReadFile(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binary, []byte(strings.Replace(string(contents), "trap 'exit 0' TERM INT", "trap 'exit 75' TERM INT", 1)), 0755); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- runLauncher(ctx, LauncherSpec{DaemonType: "docker", StateDir: stateDir, BinaryPath: binary, ChildArgs: []string{"run"}}, discardLauncherLogger())
+	}()
+	waitForLauncherPath(t, filepath.Join(stateDir, "launcher", "owner.json"), true)
+	waitForLauncherChildReady(t, stateDir)
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("launcher stop returned %v, want a clean stop", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("launcher did not stop after context cancellation")
+	}
 }
 
 func TestEnsureLauncherCopyNeverReplacesInvalidExistingLauncher(t *testing.T) {
