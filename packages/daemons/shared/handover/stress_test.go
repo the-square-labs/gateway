@@ -215,10 +215,20 @@ func localPair(t testing.TB, unix bool, small bool) (net.Conn, net.Conn) {
 		t.Fatal(err)
 	}
 	for _, connection := range []net.Conn{client, server} {
+		// Every TCP pair sets its buffers, so the kernel never resizes them.
+		// Linux 6.17 ("tcp: stronger sk_rcvbuf checks", reverted upstream in
+		// 2026) clamps an autotuned receive buffer to what it holds when a
+		// loopback segment does not fit, down to a few KB below one MSS:
+		// under CPU starvation such a stream then crawls on zero-window
+		// probes for minutes and the test failed with "no end" (stand rc.7,
+		// CT 1138 at load 15-50), with every byte still in the sender's
+		// queue. A buffer the application set is never clamped.
+		buffer := 4 << 20
 		if small {
-			_ = connection.(*net.TCPConn).SetReadBuffer(32 * 1024)
-			_ = connection.(*net.TCPConn).SetWriteBuffer(32 * 1024)
+			buffer = 32 * 1024
 		}
+		_ = connection.(*net.TCPConn).SetReadBuffer(buffer)
+		_ = connection.(*net.TCPConn).SetWriteBuffer(buffer)
 	}
 	return client, server
 }

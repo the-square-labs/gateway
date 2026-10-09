@@ -104,6 +104,7 @@ func (l *forwardedEgress) serve(socketPath, id string) {
 
 func (l *forwardedEgress) carry(local net.Conn, socketPath, id string) {
 	defer local.Close()
+	lockBuffers(local)
 	if !l.track(local) {
 		return
 	}
@@ -238,6 +239,7 @@ func (pair *egressHandoverPair) dial() net.Conn {
 	if err != nil {
 		pair.t.Fatal(err)
 	}
+	lockBuffers(app)
 	pair.t.Cleanup(func() { app.Close() })
 	return app
 }
@@ -352,6 +354,16 @@ func TestLiveHandoverReportsLocalConnectionsItLost(t *testing.T) {
 	report := pair.settled()
 	if report.HandedOver != 1 || report.Kept != 0 || report.Cut[handover.CutLocalClosed] != 1 {
 		t.Fatalf("update report %+v, want the connection cut as %s", report, handover.CutLocalClosed)
+	}
+}
+
+// lockBuffers sets a loopback connection's buffers, so the kernel never resizes them: Linux 6.17 clamps an autotuned
+// receive buffer below one MSS when a segment does not fit, and the stream then crawls on zero-window probes
+// (handover stress_test.go localPair).
+func lockBuffers(connection net.Conn) {
+	if tcp, ok := connection.(*net.TCPConn); ok {
+		_ = tcp.SetReadBuffer(4 << 20)
+		_ = tcp.SetWriteBuffer(4 << 20)
 	}
 }
 
