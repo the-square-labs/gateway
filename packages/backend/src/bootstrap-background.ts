@@ -16,6 +16,7 @@ import { logger } from '@/lib/logger.js';
 import { repairDanglingResourceScopes } from '@/lib/resource-scope-cleanup.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { AlertService } from '@/modules/audit/alert.service.js';
+import { AuditService } from '@/modules/audit/audit.service.js';
 import { SiemDeliveryService } from '@/modules/audit/siem-delivery.service.js';
 import { backupRuntime } from '@/modules/backups/backup-runtime.js';
 import { DatabaseMonitoringService } from '@/modules/databases/database-monitoring.service.js';
@@ -79,6 +80,7 @@ import {
 } from '@/services/gateway-identity-renewal.service.js';
 import { GatewayLifecycleService } from '@/services/gateway-lifecycle.service.js';
 import { HousekeepingService } from '@/services/housekeeping.service.js';
+import { ManagedLeftoverRepair } from '@/services/managed-leftover-repair.js';
 import { NginxCertificateDistributionService } from '@/services/nginx-certificate-distribution.service.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
@@ -229,6 +231,44 @@ export async function initializeBackgroundServices(): Promise<void> {
   ).unref?.();
   scheduler.registerInterval('orphaned-container-source-bindings', 60 * 60 * 1000, async () => {
     await orphanedSourceBindings.run();
+  });
+  // What managed databases and storage left on their nodes without a record (a container of a deleted instance, a
+  // record zeroed by a crash): removed once Gateway has no instance of the id in two passes 5+ minutes apart. The
+  // first pass waits a minute for the nodes to connect, the second confirms at +7 minutes, then every 30 minutes.
+  // Daemons without the leftovers action are left alone.
+  const managedLeftovers = new ManagedLeftoverRepair(db, {
+    isNodeOnline: (nodeId) => !!nodeRegistry.getNode(nodeId),
+    listLeftovers: (nodeId, kind) =>
+      kind === 'storage'
+        ? nodeDispatch.sendDockerStorageCommand(nodeId, 'leftovers', '', '', 15_000)
+        : nodeDispatch.sendDockerDatabaseCommand(nodeId, 'leftovers', '', '', 15_000),
+    removeLeftover: (nodeId, kind, id) =>
+      kind === 'storage'
+        ? nodeDispatch.sendDockerStorageCommand(nodeId, 'remove', id, JSON.stringify({ leftover: true }))
+        : nodeDispatch.sendDockerDatabaseCommand(nodeId, 'remove', id, JSON.stringify({ leftover: true })),
+    audit: async ({ nodeId, kind, leftover }) => {
+      await container.resolve(AuditService).log({
+        userId: null,
+        action: 'node.managed_leftover.removed',
+        resourceType: 'node',
+        resourceId: nodeId,
+        details: {
+          kind,
+          instanceId: leftover.id,
+          record: leftover.record,
+          containers: leftover.containers ?? [],
+          imageBytes: leftover.imageBytes,
+          allocatedBytes: leftover.allocatedBytes,
+        },
+      });
+    },
+  });
+  const runManagedLeftovers = () =>
+    managedLeftovers.run().catch((error) => logger.warn('Failed to check managed leftovers on nodes', { error }));
+  setTimeout(() => void runManagedLeftovers(), 60 * 1000).unref?.();
+  setTimeout(() => void runManagedLeftovers(), 7 * 60 * 1000).unref?.();
+  scheduler.registerInterval('managed-leftovers', 30 * 60 * 1000, async () => {
+    await managedLeftovers.run();
   });
   scheduler.registerInterval('system-certificate-crl-retry', 5 * 60 * 1000, async () => {
     await systemCertificateLifecycleService.retryPendingCRLs();
