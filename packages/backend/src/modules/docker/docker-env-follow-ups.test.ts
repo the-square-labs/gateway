@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { recreateWithConfig, updateContainer, updateContainerEnv } from './docker-container-mutation-operations.js';
+import {
+  recordNodeLostTask,
+  recreateWithConfig,
+  updateContainer,
+  updateContainerEnv,
+} from './docker-container-mutation-operations.js';
 import {
   DAEMON_ERROR,
   type FakeDockerNodeOptions,
@@ -8,6 +13,7 @@ import {
   memoryEnvironmentStore,
   memoryTaskStore,
 } from './docker-env-follow-ups.test-helpers.js';
+import { nodeLossHttpError, withNodeLossAnswer } from './docker-node-loss.js';
 import { DockerTaskReconciler } from './docker-task-reconciler.js';
 
 const NODE = '00000000-0000-4000-8000-0000000000a1';
@@ -304,6 +310,63 @@ describe('the API answer of an update whose node is lost', () => {
       error: 'The node lost its connection before the update was sent; the container was not changed',
     });
     expect(t.environment.stored.get('api')).toEqual(STORED);
+  });
+});
+
+describe('the API answer of an env update or recreate whose node is lost', () => {
+  it('keeps the service error for internal callers and answers API callers with the task settled with the node', async () => {
+    const env = setup({ answer: 'disconnected' });
+    const envError = await updateContainerEnv(
+      env.first.ctx,
+      NODE,
+      'api',
+      { API_KEY: NEW_SECRET },
+      undefined,
+      'user-1'
+    ).catch((caught) => caught);
+    // The core and internal rollouts match on the service error: unchanged.
+    expect(envError).toBeInstanceOf(Error);
+    expect(envError.message).toBe('Node disconnected');
+    expect(await nodeLossHttpError(envError, 'env update')).toMatchObject({
+      statusCode: 504,
+      code: 'NODE_ANSWER_LOST',
+      details: { taskId: env.only().id },
+    });
+    expect(env.only().status).toBe('running');
+
+    const recreate = setup({ answer: 'disconnected' });
+    const recreateError = await withNodeLossAnswer('recreate', () =>
+      recreateWithConfig(recreate.first.ctx, NODE, 'api', { image: 'registry.local/app:2' }, 'user-1', {
+        skipImagePull: true,
+      })
+    ).catch((caught) => caught);
+    expect(recreateError).toMatchObject({
+      statusCode: 504,
+      code: 'NODE_ANSWER_LOST',
+      message: expect.stringContaining('did not answer the recreate'),
+      details: { taskId: recreate.only().id },
+    });
+    expect(recreate.only().detachedAt).toBeInstanceOf(Date);
+  });
+
+  it('answers that nothing was changed and records a failed task when the node drops before the env update is sent', async () => {
+    const t = setup({ answer: 'dropped-before' });
+    const error = await withNodeLossAnswer(
+      'env update',
+      () => updateContainerEnv(t.first.ctx, NODE, 'api', { API_KEY: NEW_SECRET }, undefined, 'user-1'),
+      (message) => recordNodeLostTask(t.first.ctx, NODE, 'api', 'update', message)
+    ).catch((caught) => caught);
+    const task = t.only();
+    expect(error).toMatchObject({ statusCode: 503, code: 'NODE_UNAVAILABLE', details: { taskId: task.id } });
+    expect(task).toMatchObject({
+      status: 'failed',
+      error: 'The node lost its connection before the env update was sent; the container was not changed',
+    });
+    expect(t.environment.stored.get('api')).toEqual(STORED);
+  });
+
+  it('leaves every other error as it is', async () => {
+    expect(await nodeLossHttpError(new Error('pull access denied'), 'recreate')).toBeNull();
   });
 });
 

@@ -75,6 +75,7 @@ import {
 import { DockerDeploymentService } from '@/modules/docker/docker-deployment.service.js';
 import { presentDeploymentForCaller } from '@/modules/docker/docker-deployment-redaction.js';
 import { inspectUserContainer } from '@/modules/docker/docker-internal-containers.js';
+import { withNodeLossAnswer } from '@/modules/docker/docker-node-loss.js';
 import { DockerInternalRegistryService } from '@/modules/docker/docker-registry-internal.service.js';
 import { sanitizeContainerInspect } from '@/modules/docker/docker-snapshot.service.js';
 import { assertNotPendingSourceContainer } from '@/modules/docker/docker-source.service.js';
@@ -492,15 +493,14 @@ export async function executeDockerTool(
       const lastSlash = currentImage.lastIndexOf('/');
       const imageName = lastColon > lastSlash ? currentImage.slice(0, lastColon) : currentImage;
       const targetRef = `${imageName}:${a.imageTag}`;
-      const data = await context.dockerService.recreateWithConfig(
-        a.nodeId,
-        a.containerId,
-        { image: targetRef },
-        user.id,
-        {
-          actorScopes: user.scopes,
-          backgroundImagePull: true,
-        }
+      const data = await withNodeLossAnswer(
+        'recreate',
+        () =>
+          context.dockerService.recreateWithConfig(a.nodeId, a.containerId, { image: targetRef }, user.id, {
+            actorScopes: user.scopes,
+            backgroundImagePull: true,
+          }),
+        (message) => context.dockerService.recordNodeLostTask(a.nodeId, a.containerId, 'recreate', message)
       );
       return {
         success: true,

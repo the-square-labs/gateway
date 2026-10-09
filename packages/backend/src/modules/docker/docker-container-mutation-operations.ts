@@ -38,6 +38,7 @@ import type {
   DockerTransitionTrackingHint,
 } from './docker-lifecycle-watch.js';
 import { assertManagedMountMutation } from './docker-managed-mounts.js';
+import { noteNodeLoss, withNodeLossAnswer } from './docker-node-loss.js';
 import { hasRequestedSpecificPortBindIp } from './docker-port-bindings.js';
 import { assertContainerNotUsedByProxy } from './docker-proxy-link.guard.js';
 import type { DockerRegistryAuthCandidate, DockerRegistryService } from './docker-registry.service.js';
@@ -1089,27 +1090,11 @@ export async function duplicateContainer(
   return data && typeof data === 'object' ? { ...data, id: newId, name } : { id: newId, name };
 }
 
-/** The node's control stream dropped, did not answer in time, or is not connected: no answer from the node. */
-function isNodeConnectionError(error: unknown): boolean {
-  if (error instanceof AppError) return false;
-  const message = error instanceof Error ? error.message : String(error);
-  return isLostTrackError(error) || /^Node \S+ is not connected$/.test(message);
-}
-
-/** The update was sent, but the node's answer was lost: it may run there, and its task is settled with the node. */
-function updateAnswerLostError(taskId: string): AppError {
-  return new AppError(
-    504,
-    'NODE_ANSWER_LOST',
-    `The node did not answer the update; it may still run there. Gateway settles task ${taskId} with the node once it is connected again.`,
-    { taskId }
-  );
-}
-
 /**
- * POST .../update. The node lost before the update was sent (its control stream dropped while Gateway read the
- * container) answers 503 NODE_UNAVAILABLE and records a failed task: nothing was changed. A lost answer once it was
- * sent answers 504 NODE_ANSWER_LOST with the task that is settled with the node.
+ * POST .../update and the AI update. The node lost before the update was sent (its control stream dropped while
+ * Gateway read the container) answers 503 NODE_UNAVAILABLE and records a failed task: nothing was changed. A lost
+ * answer once it was sent answers 504 NODE_ANSWER_LOST with the task that is settled with the node (see
+ * nodeLossHttpError).
  */
 export async function updateContainer(
   ctx: DockerContainerMutationContext,
@@ -1119,25 +1104,25 @@ export async function updateContainer(
   userId: string,
   actorScopes: string[] = []
 ) {
-  try {
-    return await updateContainerOnNode(ctx, nodeId, containerId, config, userId, actorScopes);
-  } catch (error) {
-    if (!isNodeConnectionError(error)) throw error;
-    const message = 'The node lost its connection before the update was sent; the container was not changed';
-    let taskId: string | undefined;
-    try {
-      const task = await ctx.taskService?.create({ nodeId, containerId, type: 'update' });
-      if (task) {
-        await ctx.taskService?.update(task.id, { status: 'failed', error: message, completedAt: new Date() });
-        taskId = task.id;
-      }
-    } catch (recordError) {
-      logger.warn('Could not record an update the node was lost before', { nodeId, containerId, error: recordError });
-    }
-    throw new AppError(503, 'NODE_UNAVAILABLE', `${message}. Try again once the node is online.`, {
-      ...(taskId ? { taskId } : {}),
-    });
-  }
+  return withNodeLossAnswer(
+    'update',
+    () => updateContainerOnNode(ctx, nodeId, containerId, config, userId, actorScopes),
+    (message) => recordNodeLostTask(ctx, nodeId, containerId, 'update', message)
+  );
+}
+
+/** A failed task for an operation the node was lost before it was sent; its ID. */
+export async function recordNodeLostTask(
+  ctx: Pick<DockerContainerMutationContext, 'taskService'>,
+  nodeId: string,
+  containerId: string,
+  type: string,
+  message: string
+): Promise<string | undefined> {
+  const task = await ctx.taskService?.create({ nodeId, containerId, type });
+  if (!task) return undefined;
+  await ctx.taskService?.update(task.id, { status: 'failed', error: message, completedAt: new Date() });
+  return task.id;
 }
 
 async function updateContainerOnNode(
@@ -1250,19 +1235,12 @@ async function updateContainerOnNode(
       await ctx.accessResourceService?.preserveContainerRuntimeId(nodeId, name, newRuntimeId);
     }
   } catch (err) {
-    if (await leaveToTheNode(ctx, followUps, task?.id, err, nodeId, name)) throw updateAnswerLostError(task!.id);
+    if (await leaveToTheNode(ctx, followUps, task?.id, err, nodeId, name)) {
+      throw noteNodeLoss(err, { kind: 'answer-lost', taskId: task?.id });
+    }
     if (hasEnvChange) await ctx.environmentService?.replace(nodeId, name, storedEnv).catch(() => undefined);
     await ctx.failTask(task?.id, err instanceof Error ? err.message : 'Failed to update container', nodeId, name);
-    // The task records the outcome already; the connection error is not recorded a second time.
-    if (isNodeConnectionError(err)) {
-      throw new AppError(
-        503,
-        'NODE_UNAVAILABLE',
-        `The node lost its connection while the update was sent: ${err instanceof Error ? err.message : String(err)}`,
-        task?.id ? { taskId: task.id } : undefined
-      );
-    }
-    throw err;
+    throw noteNodeLoss(err, { kind: 'failed', taskId: task?.id });
   }
   const daemonTaskId = asyncDaemonTaskId(data, 'update');
   ctx.watchRecreateByName(
@@ -1545,7 +1523,10 @@ export async function recreateWithConfig(
         ? { ...data, taskId: task?.id, containerId, name }
         : { taskId: task?.id, containerId, name };
     } catch (err) {
-      if (await leaveToTheNode(ctx, followUps, task?.id, err, nodeId, name)) throw err;
+      // The error keeps its message (internal rollouts match on it); API callers answer it with nodeLossHttpError.
+      if (await leaveToTheNode(ctx, followUps, task?.id, err, nodeId, name)) {
+        throw noteNodeLoss(err, { kind: 'answer-lost', taskId: task?.id });
+      }
       ctx.clearTransition(nodeId, name);
       if (task && ctx.taskService) {
         await ctx.taskService
@@ -1556,7 +1537,7 @@ export async function recreateWithConfig(
           })
           .catch(() => {});
       }
-      throw err;
+      throw noteNodeLoss(err, { kind: 'failed', taskId: task?.id });
     }
   };
 
@@ -1756,7 +1737,10 @@ export async function updateContainerEnv(
     );
     data = ctx.parseResult(result);
   } catch (err) {
-    if (await leaveToTheNode(ctx, followUps, task?.id, err, nodeId, name)) throw err;
+    // The error keeps its message (the core matches on it); API callers answer it with nodeLossHttpError.
+    if (await leaveToTheNode(ctx, followUps, task?.id, err, nodeId, name)) {
+      throw noteNodeLoss(err, { kind: 'answer-lost', taskId: task?.id });
+    }
     await ctx.environmentService?.replace(nodeId, name, storedEnv).catch(() => undefined);
     ctx.clearTransition(nodeId, name);
     if (task && ctx.taskService) {
@@ -1768,7 +1752,7 @@ export async function updateContainerEnv(
         })
         .catch(() => {});
     }
-    throw err;
+    throw noteNodeLoss(err, { kind: 'failed', taskId: task?.id });
   }
   const daemonTaskId = asyncDaemonTaskId(data, 'update');
   ctx.watchRecreateByName(

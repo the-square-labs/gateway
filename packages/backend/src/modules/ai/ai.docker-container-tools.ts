@@ -22,6 +22,7 @@ import {
 import { DockerDeploymentService } from '@/modules/docker/docker-deployment.service.js';
 import { ImageCleanupUpsertSchema } from '@/modules/docker/docker-image-cleanup.schemas.js';
 import { DockerImageCleanupService } from '@/modules/docker/docker-image-cleanup.service.js';
+import { withNodeLossAnswer } from '@/modules/docker/docker-node-loss.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import type { User } from '@/types.js';
 import {
@@ -100,10 +101,15 @@ export async function manageDockerContainerTool(
       const containerId = requiredToolString(args.containerId, 'containerId');
       const config = ContainerRecreateSchema.parse(pickDefinedArguments(args, RECREATE_FIELDS));
       await assertDockerContainerRecreateAccess(dockerService, user, nodeId, containerId, config);
-      const data = await dockerService.recreateWithConfig(nodeId, containerId, config, user.id, {
-        actorScopes: user.scopes,
-        backgroundImagePull: true,
-      });
+      const data = await withNodeLossAnswer(
+        'recreate',
+        () =>
+          dockerService.recreateWithConfig(nodeId, containerId, config, user.id, {
+            actorScopes: user.scopes,
+            backgroundImagePull: true,
+          }),
+        (message) => dockerService.recordNodeLostTask(nodeId, containerId, 'recreate', message)
+      );
       return { success: true, message: 'Container recreate accepted', data };
     }
     case 'live_update': {

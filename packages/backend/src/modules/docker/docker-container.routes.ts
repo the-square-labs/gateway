@@ -103,6 +103,7 @@ import {
 import { assertDockerCreationAccess } from './docker-creation-access.js';
 import { DOCKER_DEPLOYMENT_MANAGED_LABEL } from './docker-deployment-labels.js';
 import { assertUserContainerAccessible } from './docker-internal-containers.js';
+import { withNodeLossAnswer } from './docker-node-loss.js';
 import { resolveDockerContainerByName } from './docker-route-resolvers.js';
 import { DockerSecretService } from './docker-secret.service.js';
 import { DockerSnapshotService, sanitizeContainerInspect } from './docker-snapshot.service.js';
@@ -739,10 +740,15 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const body = await c.req.json();
       const config = ContainerRecreateSchema.parse(body);
       await assertAdditionalContainerScopes(c, containerRecreateRequiredScopes(config));
-      const data = await service.recreateWithConfig(nodeId, containerId, config, user.id, {
-        actorScopes: c.get('effectiveScopes') || [],
-        backgroundImagePull: true,
-      });
+      const data = await withNodeLossAnswer(
+        'recreate',
+        () =>
+          service.recreateWithConfig(nodeId, containerId, config, user.id, {
+            actorScopes: c.get('effectiveScopes') || [],
+            backgroundImagePull: true,
+          }),
+        (message) => service.recordNodeLostTask(nodeId, containerId, 'recreate', message)
+      );
       return c.json({ data });
     }
   );
@@ -810,7 +816,11 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       await assertComposeChildMutationAllowed(nodeId, containerId);
       const body = await c.req.json();
       const { env, removeEnv } = EnvUpdateSchema.parse(body);
-      const data = await service.updateContainerEnv(nodeId, containerId, env, removeEnv, user.id);
+      const data = await withNodeLossAnswer(
+        'env update',
+        () => service.updateContainerEnv(nodeId, containerId, env, removeEnv, user.id),
+        (message) => service.recordNodeLostTask(nodeId, containerId, 'update', message)
+      );
       return c.json({ data });
     }
   );

@@ -45,6 +45,7 @@ import {
   duplicateContainer as duplicateDockerContainer,
   imageRefWithTag,
   liveUpdateContainer as liveUpdateDockerContainer,
+  recordNodeLostTask as recordDockerNodeLostTask,
   recreateWithConfig as recreateDockerContainerWithConfig,
   removeContainer as removeDockerContainerMutation,
   renameContainer as renameDockerContainer,
@@ -1755,6 +1756,11 @@ export class DockerManagementService {
         ? async (newContainerId) => this.containerRecreateCompletedHandler?.(nodeId, newContainerId)
         : undefined,
     });
+  }
+
+  /** A failed task for an operation the node was lost before it was sent (see nodeLossHttpError); its ID. */
+  recordNodeLostTask(nodeId: string, containerId: string, type: string, message: string) {
+    return recordDockerNodeLostTask({ taskService: this.taskService }, nodeId, containerId, type, message);
   }
 
   async updateContainerEnv(

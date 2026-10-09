@@ -17,6 +17,7 @@ import type { DockerManagementService } from '@/modules/docker/docker.service.js
 import { dockerScopedNodeIds } from '@/modules/docker/docker-access-resource.service.js';
 import { DOCKER_DEPLOYMENT_MANAGED_LABEL } from '@/modules/docker/docker-deployment-labels.js';
 import { inspectUserContainer } from '@/modules/docker/docker-internal-containers.js';
+import { withNodeLossAnswer } from '@/modules/docker/docker-node-loss.js';
 import { FILE_UPLOAD_MAX_BYTES } from '@/modules/settings/general-settings.service.js';
 import type { User } from '@/types.js';
 import {
@@ -139,7 +140,11 @@ export async function manageDockerContainerConfigTool(
     const input = EnvUpdateSchema.parse(args);
     // Same guard as the env route: Compose-managed containers change through their project.
     await assertComposeChildMutationAllowed(nodeId, containerId);
-    return context.dockerService.updateContainerEnv(nodeId, containerId, input.env, input.removeEnv, user.id);
+    return withNodeLossAnswer(
+      'env update',
+      () => context.dockerService.updateContainerEnv(nodeId, containerId, input.env, input.removeEnv, user.id),
+      (message) => context.dockerService.recordNodeLostTask(nodeId, containerId, 'update', message)
+    );
   }
   if (CONTAINER_FILE_OPERATIONS.has(operation)) {
     const fileScope = CONTAINER_FILE_READ_OPERATIONS.has(operation)
