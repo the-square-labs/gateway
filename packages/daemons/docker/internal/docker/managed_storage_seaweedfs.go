@@ -190,6 +190,38 @@ func seaweedfsHealthcheck(tlsEnabled bool) *container.HealthConfig {
 	}
 }
 
+// seaweedfsTCPReceiveBuffers is the container's net.ipv4.tcp_rmem. SeaweedFS
+// moves every chunk of an S3 upload over loopback to its own volume server;
+// with the kernel's 128 KiB initial receive buffer the volume server's socket
+// pruned and dropped 64 KiB loopback segments whenever its reader paused (a
+// volume filling up), and the upload sat in TCP retransmission backoff: every
+// PUT that crossed a full volume took 26-30 s whatever its size. A 1-2 MiB
+// initial buffer removed every stall (stand, 9 runs of 8 x 256 MiB + 1 GiB).
+const seaweedfsTCPReceiveBuffers = "4096 2097152 16777216"
+
+func seaweedfsSysctls() map[string]string {
+	return map[string]string{"net.ipv4.tcp_rmem": seaweedfsTCPReceiveBuffers}
+}
+
+// seaweedfsSysctlsOutdated reports a container created without the current
+// sysctls (by an older daemon).
+func seaweedfsSysctlsOutdated(current map[string]string) bool {
+	for name, value := range seaweedfsSysctls() {
+		if current[name] != value {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *managedStorageManager) seaweedfsContainerOutdated(ctx context.Context, record managedStorageRecord) bool {
+	inspect, err := m.client.cli.ContainerInspect(ctx, record.ContainerID, mobyclient.ContainerInspectOptions{})
+	if err != nil || inspect.Container.HostConfig == nil {
+		return false
+	}
+	return seaweedfsSysctlsOutdated(inspect.Container.HostConfig.Sysctls)
+}
+
 func (m *managedStorageManager) createSeaweedFSContainer(ctx context.Context, record *managedStorageRecord, input managedStorageCommand) (string, error) {
 	image := record.Image
 	if image == "" {
@@ -226,6 +258,7 @@ func (m *managedStorageManager) createSeaweedFSContainer(ctx context.Context, re
 		LogConfig:     container.LogConfig{Type: "json-file", Config: map[string]string{"max-size": "10m", "max-file": "3"}},
 		CapDrop:       []string{"ALL"},
 		SecurityOpt:   []string{"no-new-privileges:true"},
+		Sysctls:       seaweedfsSysctls(),
 	}
 	if record.PublishS3 {
 		containerCfg.ExposedPorts = network.PortSet{s3Port: {}}

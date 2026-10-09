@@ -711,6 +711,14 @@ func (m *managedStorageManager) update(ctx context.Context, record *managedStora
 		return m.recreate(ctx, record, input)
 	}
 	if record.engine() == managedStorageEngineSeaweedFS {
+		// A container an older daemon created lacks the receive buffers that
+		// keep uploads from stalling: the update recreates it (data kept)
+		// when it carries what a recreation needs, else a later one does.
+		if m.seaweedfsContainerOutdated(ctx, *record) {
+			if _, err := m.recreateInput(*record, input); err == nil {
+				return m.recreate(ctx, record, input)
+			}
+		}
 		return m.updateSeaweedFSInPlace(ctx, record, input)
 	}
 	if input.FTP != nil && (record.FTPPort != input.FTP.Port || record.FTPPassiveStart != input.FTP.PassivePortStart || record.FTPPassiveCount != input.FTP.PassivePortCount) {
