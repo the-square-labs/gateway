@@ -264,7 +264,7 @@ export const uploadObjectRoute = appRoute({
   tags: [TAG],
   summary: 'Upload an object',
   description:
-    'The raw request body is the object; it is streamed into storage. The body may be as large as the file upload limit in Settings (not the general API request body limit).',
+    'The raw request body is the object; it is streamed into storage. One object may be as large as the file upload limit in Settings (`fileUploadMaxBytes` of GET /api/system/config; 100 MB unless changed, at most 500 MB), not the general API request body limit. A larger body is refused with 413 STORAGE_UPLOAD_TOO_LARGE, whose `details.maxBytes` is the limit. The MCP upload_storage_object tool takes the same limit.',
   request: {
     params: IdParamSchema,
     query: ObjectMetadataQuerySchema.extend({ contentType: z.string().max(255).optional() }),

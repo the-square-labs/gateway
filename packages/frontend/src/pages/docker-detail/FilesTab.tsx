@@ -1086,6 +1086,7 @@ export function FilesTab({
           canRead={canReadFiles}
           canOpen={canOpenFiles}
           openMaxBytes={openMaxBytes}
+          uploadMaxBytes={uploadMaxBytes}
           visible={isContextMenuVisible}
           onCreateFile={(directory) => openCreateDialog("file", directory)}
           onCreateFolder={(directory) => openCreateDialog("folder", directory)}
@@ -1141,6 +1142,7 @@ function FileContextMenu({
   canRead,
   canOpen: canOpenInViewer,
   openMaxBytes,
+  uploadMaxBytes,
   visible,
   onCreateFile,
   onCreateFolder,
@@ -1157,6 +1159,8 @@ function FileContextMenu({
   canRead: boolean;
   canOpen: boolean;
   openMaxBytes: number;
+  /** The file upload limit, shown on the upload item: larger files are refused before they are sent. */
+  uploadMaxBytes: number;
   visible: boolean;
   onCreateFile: (directory: string) => void;
   onCreateFolder: (directory: string) => void;
@@ -1215,6 +1219,7 @@ function FileContextMenu({
       <FileContextMenuItem
         icon={<Upload />}
         label="Upload file"
+        hint={`up to ${formatBytes(uploadMaxBytes)}`}
         disabled={!canMutate}
         onSelect={() => onUpload(targetDirectory)}
       />
@@ -1258,12 +1263,15 @@ function FileContextMenuSeparator() {
 function FileContextMenuItem({
   icon,
   label,
+  hint,
   disabled,
   destructive,
   onSelect = () => {},
 }: {
   icon?: ReactNode;
   label: string;
+  /** Muted text at the end of the item, as a dropdown menu shortcut. */
+  hint?: string;
   disabled?: boolean;
   destructive?: boolean;
   onSelect?: () => void;
@@ -1280,6 +1288,7 @@ function FileContextMenuItem({
     >
       {icon}
       {label}
+      {hint && <span className="ml-auto pl-4 text-xs text-muted-foreground">{hint}</span>}
     </button>
   );
 }

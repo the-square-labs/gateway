@@ -211,6 +211,35 @@ function requestBodyLimitDynamicExcept(
   };
 }
 
+/**
+ * The raw body of an object upload is the object: it may be as large as the file upload limit itself (the MCP upload
+ * and the file managers use the same limit), and a larger one is refused with that limit named.
+ */
+function objectUploadBodyLimit(): MiddlewareHandler<AppEnv> {
+  return async (c, next) => {
+    let maxBytes = FILE_UPLOAD_DEFAULT_BYTES;
+    try {
+      maxBytes = (await container.resolve(GeneralSettingsService).getConfig()).fileUploadMaxBytes;
+    } catch {
+      /* the default limit */
+    }
+    const limit = `${Math.round((maxBytes / (1024 * 1024)) * 10) / 10} MB`;
+    const limited = bodyLimit({
+      maxSize: maxBytes,
+      onError: (ctx) =>
+        ctx.json(
+          {
+            code: 'STORAGE_UPLOAD_TOO_LARGE',
+            message: `The object is larger than the file upload limit of ${limit} set in Settings`,
+            details: { maxBytes },
+          },
+          413
+        ),
+    }) as MiddlewareHandler<AppEnv>;
+    return limited(c, next);
+  };
+}
+
 async function getFileUploadMaxBodyBytes(): Promise<number> {
   try {
     return await container.resolve(GeneralSettingsService).getFileUploadMaxBodyBytes();
@@ -634,10 +663,7 @@ export function createApp(): GatewayAppRuntime {
   );
   app.use('/api/pages-deploy/uploads/:id/chunks', requestBodyLimit(PAGE_UPLOAD_CHUNK_MAX_BYTES));
   // An object upload streams the file into storage: it takes the file upload limit, not the JSON body limit.
-  app.use(
-    '/api/object-storage/:id/objects/upload',
-    requestBodyLimitDynamic(() => getFileUploadMaxBodyBytes())
-  );
+  app.use('/api/object-storage/:id/objects/upload', objectUploadBodyLimit());
   app.use('/api/setup/*', setupApiDisabledMiddleware);
   app.use(
     '/api/*',

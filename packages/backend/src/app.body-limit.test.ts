@@ -5,6 +5,7 @@ import {
   DEFAULT_ENVIRONMENT_SETTINGS,
   EnvironmentSettingsService,
 } from '@/modules/settings/environment-settings.service.js';
+import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { createApp } from './app.js';
 
 beforeAll(() => {
@@ -149,6 +150,33 @@ describe('request body limits', () => {
       'x'.repeat(3_000_000)
     );
     await expectPayloadTooLarge('/api/object-storage/storage-1/objects/prefix', 'POST', 'x'.repeat(3_000_000));
+  });
+
+  it('refuses an object larger than the file upload limit with that limit, and takes one exactly as large', async () => {
+    const maxBytes = 1024 * 1024;
+    const upload = async (bytes: number) => {
+      container.registerInstance(GeneralSettingsService, {
+        getConfig: async () => ({ fileUploadMaxBytes: maxBytes }),
+      } as unknown as GeneralSettingsService);
+      const { app } = createApp();
+      return app.request('/api/object-storage/storage-1/objects/upload?bucket=app&key=large.bin', {
+        method: 'POST',
+        headers: {
+          host: 'gateway.test',
+          'content-type': 'application/octet-stream',
+          'content-length': String(bytes),
+        },
+        body: 'x'.repeat(bytes),
+      });
+    };
+    const refused = await upload(maxBytes + 1);
+    expect(refused.status).toBe(413);
+    expect(await refused.json()).toMatchObject({
+      code: 'STORAGE_UPLOAD_TOO_LARGE',
+      message: 'The object is larger than the file upload limit of 1 MB set in Settings',
+      details: { maxBytes },
+    });
+    expect((await upload(maxBytes)).status).not.toBe(413);
   });
 
   it('uses the Pages chunk limit instead of the global API body limit', async () => {
