@@ -154,6 +154,15 @@ export class NodeRegistryService {
     return this.updatingNodeIds.has(nodeId);
   }
 
+  /**
+   * The node is away because a daemon update restarts it (the update keeps its status until it settles, see
+   * markDisconnectedOffline): it reads as reconnecting, not offline, for the whole trial (stand rc.8, O-3).
+   */
+  isAwayForUpdate(nodeId: string, metadata?: unknown): boolean {
+    if (this.nodes.has(nodeId)) return false;
+    return this.updatingNodeIds.has(nodeId) || hasUpdateInProgress(metadata);
+  }
+
   private isNodeUpdateProtected(nodeId: string, metadata: unknown): boolean {
     if (metadata && typeof metadata === 'object') {
       const protectedByMetadata = hasUpdateInProgress(metadata);

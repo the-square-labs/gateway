@@ -250,12 +250,8 @@ export class NodesService {
         ...row,
         publicServiceAddresses: row.type === 'nginx' ? getReportedPublicNodeAddresses(row) : undefined,
         effectiveServiceAddress: getEffectiveServiceAddressForNode(row),
-        // A stream that closed moments ago keeps its status through the reconnect grace, as the DB does, and so does a
-        // node that has not reconnected yet to a Gateway that started moments ago.
-        status:
-          row.status === 'online' && !isConnected && !this.registry.isReconnecting(row.id) ? 'offline' : row.status,
+        ...this.liveStatus(row, isConnected),
         isConnected,
-        reconnecting: this.awaitsLocalRelay(row.status, row.id),
       };
     });
 
@@ -271,6 +267,26 @@ export class NodesService {
   /** An online node away only because the local relay restarts, or restarted moments ago (local-relay-outage). */
   private awaitsLocalRelay(status: string, nodeId: string): boolean {
     return status === 'online' && this.registry.isAwaitingLocalRelay(nodeId);
+  }
+
+  /**
+   * The status a node is shown with. A stream that closed moments ago keeps its status through the reconnect grace,
+   * as the DB does, and so does a node that has not reconnected yet to a Gateway that started moments ago; a node
+   * away for its daemon update stays reconnecting for the whole update, as does one away while the local relay
+   * restarts.
+   */
+  private liveStatus(
+    node: { id: string; status: string; metadata?: unknown },
+    isConnected: boolean
+  ): { status: string; reconnecting: boolean } {
+    const awayForUpdate = node.status === 'online' && this.registry.isAwayForUpdate(node.id, node.metadata);
+    return {
+      status:
+        node.status === 'online' && !isConnected && !awayForUpdate && !this.registry.isReconnecting(node.id)
+          ? 'offline'
+          : node.status,
+      reconnecting: awayForUpdate || this.awaitsLocalRelay(node.status, node.id),
+    };
   }
 
   async get(id: string) {
@@ -296,10 +312,8 @@ export class NodesService {
         ...node,
         lastHealthReport: connectedNode?.lastHealthReport ?? node.lastHealthReport,
       }),
-      status:
-        node.status === 'online' && !isConnected && !this.registry.isReconnecting(node.id) ? 'offline' : node.status,
+      ...this.liveStatus(node, isConnected),
       isConnected,
-      reconnecting: this.awaitsLocalRelay(node.status, node.id),
       liveHealthReport: connectedNode?.lastHealthReport ?? null,
       liveStatsReport: connectedNode?.lastStatsReport ?? null,
     };
@@ -328,10 +342,8 @@ export class NodesService {
         ...node,
         lastHealthReport: connectedNode?.lastHealthReport ?? node.lastHealthReport,
       }),
-      status:
-        node.status === 'online' && !isConnected && !this.registry.isReconnecting(node.id) ? 'offline' : node.status,
+      ...this.liveStatus(node, isConnected),
       isConnected,
-      reconnecting: this.awaitsLocalRelay(node.status, node.id),
       liveHealthReport: connectedNode?.lastHealthReport ?? null,
       liveStatsReport: connectedNode?.lastStatsReport ?? null,
     };
