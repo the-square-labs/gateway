@@ -15,6 +15,7 @@ import {
 } from "@/components/common/scope-list-helpers";
 import { extractBaseScope } from "@/lib/scope-utils";
 import { api } from "@/services/api";
+import { useAuthStore } from "@/stores/auth";
 import type { GitScopeProvider, Node } from "@/types";
 import {
   ACCESS_TYPES,
@@ -47,13 +48,39 @@ async function list<T>(name: string, load: () => Promise<T[]>): Promise<T[]> {
   }
 }
 
-/** The resources of the eight types the signed-in user can see. */
-export async function loadAccessResources(): Promise<AccessResource[]> {
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** The nodes Docker scopes name (`<nodeId>/<resourceId>`, `<nodeId>`, `node/<nodeId>`). */
+function dockerScopeNodeIds(scopes: readonly string[]) {
+  const ids = new Set<string>();
+  for (const scope of scopes) {
+    const base = extractBaseScope(scope);
+    if (base === scope || !base.startsWith("docker:")) continue;
+    const target = scope.slice(base.length + 1);
+    const nodeId = target.startsWith("node/") ? target.slice(5) : target.split("/")[0]!;
+    if (UUID_PATTERN.test(nodeId)) ids.add(nodeId);
+  }
+  return [...ids];
+}
+
+/**
+ * The resources of the eight types the signed-in user can see. Without `nodes:details` the node list is not readable:
+ * the Docker nodes come from the user's scopes and from `mentionedScopes` (the lines shown), so a token or group line
+ * still names its containers (only the ones the user may view).
+ */
+export async function loadAccessResources(
+  mentionedScopes: readonly string[] = []
+): Promise<AccessResource[]> {
   const nodes = canLoadScopeResource("nodes:details")
     ? await list("nodes", () => allResourcePages((page) => api.listNodes({ page, limit: 100 })))
-    : [];
-  const dockerNodes = nodes.filter((node: Node) => node.type === "docker");
-  const nodeLabel = (node: Node) => node.displayName || node.hostname;
+    : null;
+  const dockerNodes: Array<Pick<Node, "id"> & Partial<Pick<Node, "displayName" | "hostname">>> =
+    nodes?.filter((node: Node) => node.type === "docker") ??
+    dockerScopeNodeIds([...(useAuthStore.getState().user?.scopes ?? []), ...mentionedScopes]).map(
+      (id) => ({ id })
+    );
+  const nodeLabel = (node: (typeof dockerNodes)[number]) =>
+    node.displayName || node.hostname || "a node";
   const loads: Promise<AccessResource[]>[] = [
     ...dockerNodes.map(async (node) =>
       canLoadScopeResource("docker:containers:view", node.id)
@@ -195,6 +222,8 @@ export function useAccessCatalog(open: boolean, scopes: readonly string[]): Acce
   const [resources, setResources] = useState<AccessResource[] | null>(null);
   const resourcesRequested = useRef(false);
   const scopesKey = [...scopes].sort().join("\n");
+  const scopesRef = useRef(scopes);
+  scopesRef.current = scopes;
 
   useEffect(() => {
     if (!open) {
@@ -220,7 +249,7 @@ export function useAccessCatalog(open: boolean, scopes: readonly string[]): Acce
   const loadResources = useCallback(() => {
     if (resourcesRequested.current) return;
     resourcesRequested.current = true;
-    void loadAccessResources().then(setResources);
+    void loadAccessResources(scopesRef.current).then(setResources);
   }, []);
 
   useEffect(() => {

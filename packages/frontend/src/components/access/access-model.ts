@@ -779,10 +779,22 @@ export function coversLabel(types: readonly AccessTypeId[]) {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+/** A Docker resource whose name is not known here (`<nodeId>/<resourceId>`): its kind and short ID, not both IDs. */
+function unnamedResourceLabel(type: AccessTypeId, id: string) {
+  const slash = id.indexOf("/");
+  if (slash < 0) return id;
+  const resourceId = id.slice(slash + 1);
+  return `${type === "compose" ? "Compose project" : "container"} ${resourceId.slice(0, 12)}`;
+}
+
 function resourceNames(where: Extract<AccessWhere, { kind: "resources" }>, labels: AccessLabels) {
   return (Object.keys(where.ids) as AccessTypeId[])
     .sort(typeOrder)
-    .flatMap((type) => (where.ids[type] ?? []).map((id) => labels.resource?.(type, id) ?? id));
+    .flatMap((type) =>
+      (where.ids[type] ?? []).map(
+        (id) => labels.resource?.(type, id) ?? unnamedResourceLabel(type, id)
+      )
+    );
 }
 
 /** "everywhere", "in folder orders / staging", "on orders-api, orders-web" or "on 3 resources". */
