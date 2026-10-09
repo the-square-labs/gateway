@@ -120,3 +120,33 @@ describe('managed workload delete whose Gateway-side cleanup fails', () => {
     expect(store.delete).toHaveBeenCalledWith('storage');
   });
 });
+
+describe('managed storage update the node refused, with the labels Gateway runs storage with', () => {
+  it('records the refusal with the prefix the core answers 409 MANAGED_STORAGE_UPDATE_REFUSED by (rc.8 F-6)', async () => {
+    const { STORAGE_WORKLOAD_LABELS } = await import('@/modules/storage/storage-workload-labels.js');
+    const { UPDATE_REFUSED_PREFIX } = await import('./managed-workload-refusal.js');
+    const row = {
+      id: 'storage',
+      nodeId: 'node',
+      status: 'updating',
+      updatedById: null,
+      pendingOperation: { id: 'op', action: 'update', previousStatus: 'ready' },
+    };
+    const writes: Array<Record<string, unknown>> = [];
+    const lifecycle = new ManagedWorkloadLifecycle(
+      {
+        setStatus: vi.fn(async (_id: string, patch: Record<string, unknown>) => {
+          writes.push(patch);
+          return { ...row, ...patch };
+        }),
+      } as never,
+      { emit: vi.fn(), toView: (current: unknown) => current } as never,
+      STORAGE_WORKLOAD_LABELS
+    );
+    await lifecycle.markError(row as never, 'update', 'insufficient managed storage capacity after reserve: 1 GiB');
+    expect(writes[0]).toMatchObject({
+      status: 'ready',
+      lastError: `${UPDATE_REFUSED_PREFIX}insufficient managed storage capacity after reserve: 1 GiB`,
+    });
+  });
+});

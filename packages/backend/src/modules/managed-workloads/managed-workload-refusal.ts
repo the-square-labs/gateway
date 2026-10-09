@@ -10,6 +10,12 @@
 const REFUSED_BEFORE_CHANGE =
   /insufficient (?:database|managed) storage capacity|cannot be reduced|outside the supported range|disk is being repaired/i;
 
+/**
+ * How the lastError of an update the node refused before it changed anything starts. The commercial core answers such
+ * an update 409 (MANAGED_STORAGE_UPDATE_REFUSED, MANAGED_DATABASE_UPDATE_REFUSED) by this prefix.
+ */
+export const UPDATE_REFUSED_PREFIX = 'The node refused the update and changed nothing: ';
+
 export function isUpdateRefusedBeforeChange(detail: string | undefined): boolean {
   return Boolean(detail && REFUSED_BEFORE_CHANGE.test(detail));
 }
