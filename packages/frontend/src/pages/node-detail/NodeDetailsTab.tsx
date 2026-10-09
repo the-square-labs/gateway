@@ -847,6 +847,7 @@ export function NodeDetailsTab({
                 <span className="flex flex-col items-end gap-0.5">
                   <span>
                     {lastUpdate.targetVersion}
+                    {lastUpdate.rolledBackTo ? `, rolled back to ${lastUpdate.rolledBackTo}` : ""}
                     {lastUpdate.completedAt ? (
                       <>
                         {" "}

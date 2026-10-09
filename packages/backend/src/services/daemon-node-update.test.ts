@@ -237,6 +237,7 @@ describe('connections of the last update', () => {
     const connections = lastUpdateConnectionsToRecord({ lastUpdate }, report);
     expect(connections).toEqual({
       fromVersion: 'v2.12.0',
+      toVersion: 'v2.12.1',
       finishedAtUnixMs: 1_800_000_004_000,
       handover: true,
       handedOver: 40,
@@ -254,6 +255,79 @@ describe('connections of the last update', () => {
     expect(lastUpdateConnectionsToRecord({ updateInProgress: true, updateTargetVersion: 'v2.12.1' }, report)).toBe(
       'pending'
     );
+  });
+
+  it('keeps a report of something later on the same version away from an older result', () => {
+    const lastUpdate = { targetVersion: 'v2.12.1', completedAt: '2027-01-15T08:00:00.000Z', warnings: [] };
+    const later = { ...report, startedAtUnixMs: Date.parse('2027-01-15T18:30:00.000Z') };
+    expect(lastUpdateConnectionsToRecord({ lastUpdate }, later)).toBe('skip');
+  });
+
+  // Stand rc.8 O-2: an update rc.7 -> rc.8 rolled back; the restored rc.7 cut every link connection of its workloads
+  // (rc.7's start order) and reported them kept, and the report landed on the result of the update to rc.7 ten hours
+  // before.
+  it('records a rollback as the result, with what the previous daemon cannot account for as cut', async () => {
+    const { service, node, sqlWrites } = harness({
+      metadata: {
+        lastUpdate: { targetVersion: 'v2.11.4-rc.7', completedAt: '2026-10-09T10:10:13.000Z', warnings: [] },
+        updateInProgress: true,
+        updateOperationId: 'op-1',
+        updateTargetVersion: 'v2.11.4-rc.8',
+        updatePhase: 'reconnecting',
+        updateReconnectStartedAt: '2026-10-09T20:36:05.000Z',
+      },
+    });
+    const rolledBack = {
+      fromVersion: 'v2.11.4-rc.8',
+      toVersion: 'v2.11.4-rc.7',
+      startedAtUnixMs: Date.parse('2026-10-09T20:39:05.459Z'),
+      finishedAtUnixMs: Date.parse('2026-10-09T20:39:09.000Z'),
+      handover: true,
+      handedOver: 37,
+      kept: 37,
+      cut: {},
+      pauseP50Ms: 1000,
+      pauseP99Ms: 1300,
+      pauseMaxMs: 1300,
+    };
+    // Its report comes while Gateway still waits for the update: it may belong to it.
+    await expect(service.recordLastUpdateConnections(NODE_ID, rolledBack)).resolves.toBe(false);
+    const cameBack = new Date('2026-10-09T20:39:08.000Z');
+    await expect(service.clearNodeUpdateInProgressOnReconnect(NODE_ID, 'v2.11.4-rc.7', cameBack)).resolves.toBe(true);
+    expect(node.metadata.updateInProgress).toBeUndefined();
+    expect(String(node.metadata.updateLastError)).toContain('rolled back');
+    expect(node.metadata.lastUpdate).toEqual({
+      targetVersion: 'v2.11.4-rc.8',
+      rolledBackTo: 'v2.11.4-rc.7',
+      completedAt: cameBack.toISOString(),
+      warnings: [],
+    });
+    expect(lastUpdateConnectionsToRecord(node.metadata, rolledBack)).toEqual({
+      fromVersion: 'v2.11.4-rc.8',
+      toVersion: 'v2.11.4-rc.7',
+      finishedAtUnixMs: rolledBack.finishedAtUnixMs,
+      handover: true,
+      handedOver: 37,
+      kept: 0,
+      cut: { unverified: 37 },
+      pauseP50Ms: 0,
+      pauseP99Ms: 0,
+      pauseMaxMs: 0,
+    });
+    await expect(service.recordLastUpdateConnections(NODE_ID, rolledBack)).resolves.toBe(true);
+    expect(sqlWrites).toHaveLength(1);
+    // A rollback to a daemon that accounts for its connections keeps its counts.
+    const accounted = {
+      ...rolledBack,
+      fromVersion: 'v2.11.5',
+      toVersion: 'v2.11.4',
+      kept: 30,
+      cut: { local_closed: 7 },
+    };
+    const record = {
+      lastUpdate: { targetVersion: 'v2.11.5', rolledBackTo: 'v2.11.4', completedAt: cameBack.toISOString() },
+    };
+    expect(lastUpdateConnectionsToRecord(record, accounted)).toMatchObject({ kept: 30, cut: { local_closed: 7 } });
   });
 
   it('waits for the update to complete before it records its report', async () => {

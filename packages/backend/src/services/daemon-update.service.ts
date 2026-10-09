@@ -72,6 +72,11 @@ const NODE_UPDATE_METADATA_KEYS = [
 /** What the node keeps of its last completed daemon update (metadata.lastUpdate). */
 export interface NodeLastUpdate {
   targetVersion: string;
+  /**
+   * The update was rolled back: the launcher put this previous daemon back (it came back on it instead of the target).
+   * completedAt is when Gateway saw it come back, and the connections are what the rollback did to them.
+   */
+  rolledBackTo?: string;
   completedAt: string;
   /** The update went ahead while long tasks of the node ran (wait timed out, or "update now"). */
   warnings: string[];
@@ -86,6 +91,8 @@ export interface NodeLastUpdate {
 
 export interface NodeLastUpdateConnections {
   fromVersion: string;
+  /** The daemon that took the connections over and reported them (the previous one after a rollback). */
+  toVersion?: string;
   /** Identifies the daemon's report. */
   finishedAtUnixMs: number;
   handover: boolean;
@@ -96,6 +103,19 @@ export interface NodeLastUpdateConnections {
   pauseP99Ms: number;
   pauseMaxMs: number;
 }
+
+/**
+ * The first daemon release that counts a handed over connection whose local side closed during the update as cut
+ * (local_closed). An older daemon that takes connections over counts every stream that resumed as kept, even when
+ * its own start cut the local connection (stand rc.7 F-1), so its kept count says nothing.
+ */
+export const DAEMON_ACCOUNTS_LOCAL_CONNECTIONS_VERSION = 'v2.11.4-rc.8';
+
+/** The cut class of connections a daemon that cannot account for them handed over reports as kept. */
+export const UNVERIFIED_KEPT_CUT_CLASS = 'unverified';
+
+/** A report may start this much after Gateway completed its update (clocks of node and Gateway differ). */
+const UPDATE_REPORT_CLOCK_SLACK_MS = 2 * 60 * 1000;
 
 function sameVersion(a: unknown, b: unknown): boolean {
   return typeof a === 'string' && typeof b === 'string' && a.replace(/^v/, '') === b.replace(/^v/, '');
@@ -116,18 +136,45 @@ export function lastUpdateConnectionsToRecord(
   metadata: Record<string, unknown>,
   report: NodeUpdateConnectionResult
 ): NodeLastUpdateConnections | 'pending' | 'skip' {
+  // While an update runs, a report may belong to it, also one from the daemon a rollback puts back: try again once
+  // the update ended.
+  if (metadata.updateInProgress === true) return 'pending';
   const lastUpdate =
     metadata.lastUpdate && typeof metadata.lastUpdate === 'object'
       ? (metadata.lastUpdate as Partial<NodeLastUpdate>)
       : null;
-  if (!lastUpdate || !sameVersion(lastUpdate.targetVersion, report.toVersion)) {
-    return metadata.updateInProgress === true && sameVersion(metadata.updateTargetVersion, report.toVersion)
-      ? 'pending'
-      : 'skip';
-  }
+  if (!lastUpdate) return 'skip';
+  // The daemon the result left running reports it: the target, or the previous one after a rollback.
+  const resultVersion =
+    typeof lastUpdate.rolledBackTo === 'string' ? lastUpdate.rolledBackTo : lastUpdate.targetVersion;
+  if (!sameVersion(resultVersion, report.toVersion)) return 'skip';
+  // A report of something later on the same version (a rollback to the version of an older result) is not this
+  // result's (stand rc.8 O-2: a rollback's report was kept with an update completed ten hours before).
+  const completedAt = typeof lastUpdate.completedAt === 'string' ? Date.parse(lastUpdate.completedAt) : Number.NaN;
+  if (Number.isFinite(completedAt) && report.startedAtUnixMs > completedAt + UPDATE_REPORT_CLOCK_SLACK_MS)
+    return 'skip';
   if (lastUpdate.connections?.finishedAtUnixMs === report.finishedAtUnixMs) return 'skip';
+  const accounts =
+    parseSemver(report.toVersion) === null ||
+    compareSemver(report.toVersion, DAEMON_ACCOUNTS_LOCAL_CONNECTIONS_VERSION) >= 0;
+  if (!accounts && report.kept > 0) {
+    // What it calls kept may have been cut by its own start: never shown as kept.
+    return {
+      fromVersion: report.fromVersion,
+      toVersion: report.toVersion,
+      finishedAtUnixMs: report.finishedAtUnixMs,
+      handover: report.handover,
+      handedOver: report.handedOver,
+      kept: 0,
+      cut: { ...report.cut, [UNVERIFIED_KEPT_CUT_CLASS]: (report.cut[UNVERIFIED_KEPT_CUT_CLASS] ?? 0) + report.kept },
+      pauseP50Ms: 0,
+      pauseP99Ms: 0,
+      pauseMaxMs: 0,
+    };
+  }
   return {
     fromVersion: report.fromVersion,
+    toVersion: report.toVersion,
     finishedAtUnixMs: report.finishedAtUnixMs,
     handover: report.handover,
     handedOver: report.handedOver,
@@ -568,11 +615,30 @@ export class DaemonUpdateService {
   }
 
   /** Ends a queued or running update that could not complete and keeps the reason on the node. */
-  async failNodeUpdate(nodeId: string, operationId: string, error: string): Promise<boolean> {
+  async failNodeUpdate(
+    nodeId: string,
+    operationId: string,
+    error: string,
+    rollback?: { to: string; observedAt: Date }
+  ): Promise<boolean> {
     const [node] = await this.db.select({ metadata: nodes.metadata }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
     if (!node) return false;
     const metadata = { ...((node.metadata ?? {}) as Record<string, unknown>) };
     if (metadata.updateInProgress !== true || metadata.updateOperationId !== operationId) return false;
+    if (rollback && typeof metadata.updateTargetVersion === 'string' && metadata.updateTargetVersion) {
+      // The node's result is the rollback now: what it ran, since when, and (once the daemon reports them final) what
+      // it did to the connections. A result of an earlier update must not take this update's report.
+      const lastUpdate: NodeLastUpdate = {
+        targetVersion: metadata.updateTargetVersion,
+        rolledBackTo: rollback.to,
+        completedAt: rollback.observedAt.toISOString(),
+        warnings: updateWarnings(metadata),
+        ...(typeof metadata.updateServiceRestart === 'string' && metadata.updateServiceRestart
+          ? { serviceRestart: metadata.updateServiceRestart }
+          : {}),
+      };
+      metadata.lastUpdate = lastUpdate;
+    }
     for (const key of NODE_UPDATE_METADATA_KEYS) delete metadata[key];
     metadata.updateLastError = error;
     metadata.updateLastErrorAt = new Date().toISOString();
@@ -845,7 +911,8 @@ export class DaemonUpdateService {
       return this.failNodeUpdate(
         nodeId,
         operationId,
-        `The daemon came back on ${reportedVersion} instead of ${targetVersion}: the update was rolled back or not installed`
+        `The daemon came back on ${reportedVersion} instead of ${targetVersion}: the update was rolled back or not installed`,
+        { to: reportedVersion, observedAt: registrationObservedAt }
       );
     }
     if (Number.isFinite(startedAt) && observedAt < startedAt) return false;
@@ -919,8 +986,9 @@ export class DaemonUpdateService {
     if (connections === 'pending') return false;
     this.settledUpdateReports.set(nodeId, reportKey);
     if (connections === 'skip') return false;
-    const targetVersion = (metadata.lastUpdate as NodeLastUpdate).targetVersion;
-    // Only the result's own key changes: an update that starts meanwhile keeps its metadata.
+    const { targetVersion, completedAt } = metadata.lastUpdate as NodeLastUpdate;
+    // Only the result's own key changes, and only on that result: an update that starts or ends meanwhile keeps its
+    // metadata.
     const updated = await this.db
       .update(nodes)
       .set({
@@ -932,7 +1000,15 @@ export class DaemonUpdateService {
         )`,
         updatedAt: new Date(),
       })
-      .where(and(eq(nodes.id, nodeId), sql`${nodes.metadata}->'lastUpdate'->>'targetVersion' = ${targetVersion}`))
+      .where(
+        and(
+          eq(nodes.id, nodeId),
+          sql`${nodes.metadata}->'lastUpdate'->>'targetVersion' = ${targetVersion}`,
+          typeof completedAt === 'string'
+            ? sql`${nodes.metadata}->'lastUpdate'->>'completedAt' = ${completedAt}`
+            : undefined
+        )
+      )
       .returning({ id: nodes.id });
     if (updated.length === 0) return false;
     this.emitNodeUpdated(nodeId);

@@ -149,6 +149,8 @@ export interface NodeUpdateTask {
 /** The result of the node's last completed daemon update (metadata.lastUpdate). */
 export interface NodeLastUpdate {
   targetVersion: string;
+  /** The update was rolled back to this previous daemon version. */
+  rolledBackTo: string | null;
   completedAt: string | null;
   warnings: string[];
   /** The daemon's note when its launcher predated self-update: the whole service restarted once, or why not. */
@@ -327,6 +329,10 @@ export function getNodeLastUpdate(node: Node | NodeDetail): NodeLastUpdate | nul
       : null;
   return {
     targetVersion: lastUpdate.targetVersion,
+    rolledBackTo:
+      typeof lastUpdate.rolledBackTo === "string" && lastUpdate.rolledBackTo
+        ? lastUpdate.rolledBackTo
+        : null,
     completedAt: typeof lastUpdate.completedAt === "string" ? lastUpdate.completedAt : null,
     warnings: Array.isArray(lastUpdate.warnings)
       ? lastUpdate.warnings.filter((warning): warning is string => typeof warning === "string")
