@@ -437,7 +437,7 @@ An alert rule has a message for when its alert fires and a **Resolve Message Tem
 
 Each webhook sends its notifications one at a time, in the order the alerts fired and resolved. When a webhook's target cannot be reached (network or DNS error, timeout, `408`, `425` or `5xx`), the whole webhook pauses and tries the same notification again after 15 seconds, 30 seconds, 1, 2 and then every 5 minutes; nothing behind it is sent meanwhile, and the queue continues in order once the target answers. A `429` pauses the webhook for as long as the target asks (`Retry-After`, or Discord's `retry_after`). Any other `4xx`, or a target the outbound webhook policy refuses, fails that notification only. A notification still queued 24 hours later fails. The queue is kept in the database, so it continues after a Gateway restart.
 
-A firing notification that has not gone out yet is not sent once its alert has resolved, and neither is that resolve: the reader never saw the alert, so there is nothing to resolve. The **Delivery Log** shows both as **Not sent** with the reason.
+A firing notification that could not go out because the webhook's target could not be reached is not sent once its alert has resolved, and neither is that resolve: the reader never saw the alert, so there is nothing to resolve. The **Delivery Log** shows both as **Not sent** with the reason. A webhook that rate-limits (`429`) is up, so it gets both the firing and the resolve, in order, once it takes deliveries again.
 
 ### One Cause, One Alert
 

@@ -193,6 +193,40 @@ describe.skipIf(!url)('Notification delivery queue on disposable PostgreSQL', ()
     ]);
   });
 
+  it('sends a firing and its resolve in order when the webhook was only rate limited', async () => {
+    const service = dispatcher();
+    const short = await newState();
+    answers = [{ status: 429, headers: { 'Retry-After': '120' } }];
+    await enqueue(service, short, 'alert.fired', 'short fired');
+    await service.drainWebhook(webhookId);
+    await enqueue(service, short, 'alert.resolved', 'short resolved');
+    expect(sent).toEqual(['short fired']);
+
+    await unpause();
+    await service.drainWebhook(webhookId);
+    expect(sent).toEqual(['short fired', 'short fired', 'short resolved']);
+    expect((await rows()).map((row) => [row.request_body, row.status, row.attempt])).toEqual([
+      ['short fired', 'success', 2],
+      ['short resolved', 'success', 1],
+    ]);
+  });
+
+  it('a rate limit after an outage resets the backoff, so the backlog is no longer treated as late', async () => {
+    const service = dispatcher();
+    const alert = await newState();
+    answers = [new Error('connect ECONNREFUSED'), { status: 429, headers: { 'Retry-After': '60' } }];
+    await enqueue(service, alert, 'alert.fired', 'fired');
+    await service.drainWebhook(webhookId);
+    await unpause();
+    await service.drainWebhook(webhookId);
+    const [webhook] = (await q(`select delivery_failures from notification_webhooks where id = $1`, [webhookId])).rows;
+    expect(webhook.delivery_failures).toBe(0);
+    await enqueue(service, alert, 'alert.resolved', 'resolved');
+    await unpause();
+    await service.drainWebhook(webhookId);
+    expect(sent).toEqual(['fired', 'fired', 'resolved']);
+  });
+
   it('sends a resolve after its delivered firing, and drops a resolve whose firing was rejected', async () => {
     const service = dispatcher();
     const delivered = await newState();

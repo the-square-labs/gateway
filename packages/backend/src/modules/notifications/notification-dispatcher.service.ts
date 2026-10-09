@@ -111,6 +111,18 @@ export function classifyDeliveryResult(result: QueuedSendResult): DeliveryOutcom
   return { kind: 'rejected' };
 }
 
+/** Whether a delivery's last try found its webhook unreachable (no answer, 5xx, 408, 425). */
+function lastTryUnreachable(delivery: DeliveryRow): boolean {
+  if (delivery.attempt <= 0) return false;
+  return (
+    classifyDeliveryResult({
+      statusCode: delivery.responseStatus ?? undefined,
+      error: delivery.error ?? undefined,
+      responseTimeMs: 0,
+    }).kind === 'unreachable'
+  );
+}
+
 export interface DispatchResult {
   success: boolean;
   statusCode?: number;
@@ -375,9 +387,11 @@ export class NotificationDispatcherService {
    * - Any other non-2xx answer: the target rejected this delivery; it fails and the queue moves on.
    * - A delivery still queued MAX_QUEUED_MS after it was created fails without another try.
    *
-   * Alert notifications are matched by alert state (see supersededReason): a firing that has not gone out once its
-   * resolve is queued is dropped with the resolve (status superseded): the reader never saw the alert, so there is
-   * nothing to resolve. A firing folded under another alert that this webhook gets is dropped as well.
+   * Alert notifications are matched by alert state (see supersededReason): a firing that could not go out because
+   * the webhook was unreachable, and whose resolve is queued by now, is dropped with the resolve (status superseded):
+   * the reader never saw the alert, so there is nothing to resolve. A webhook that answered but asked to wait (429)
+   * was up: its firing and resolve both go out, in order. A firing folded under another alert that this webhook gets
+   * is dropped as well.
    */
   async drainWebhook(webhookId: string): Promise<void> {
     for (let round = 0; round < 2; round++) {
@@ -385,10 +399,13 @@ export class NotificationDispatcherService {
       if (!(await this.claimWebhook(webhookId, token))) return;
       try {
         await this.expireStaleDeliveries(webhookId);
+        // The queue waited because the webhook could not be reached (not for a rate limit): its backlog is late.
+        let backlogAfterOutage: boolean | null = null;
         for (let sent = 0; sent < MAX_DELIVERIES_PER_DRAIN; sent++) {
           // Renewing the lease also reads the webhook as it is configured now.
           const webhook = await this.renewWebhookLease(webhookId, token);
           if (!webhook) return;
+          backlogAfterOutage ??= webhook.deliveryFailures > 0;
           const [delivery] = await this.db
             .select()
             .from(notificationDeliveryLog)
@@ -401,7 +418,7 @@ export class NotificationDispatcherService {
             .orderBy(asc(notificationDeliveryLog.seq))
             .limit(1);
           if (!delivery) break;
-          if ((await this.deliverHead(webhook, delivery)) === 'stop') return;
+          if ((await this.deliverHead(webhook, delivery, backlogAfterOutage)) === 'stop') return;
         }
       } finally {
         await this.db
@@ -492,14 +509,17 @@ export class NotificationDispatcherService {
 
   /**
    * Whether an alert notification at the head of a webhook's queue is moot, by its alert state:
-   * - a firing whose resolve is queued behind it: both are dropped, the reader never saw the alert;
+   * - a firing whose resolve is queued behind it while the webhook could not be reached (no answer, 5xx; this
+   *   firing's own last try, or the backlog this drain sends after an outage): both are dropped, the reader never saw
+   *   the alert. A webhook that answered 429 was up, so its firing and resolve are both sent;
    * - a firing folded under another alert (Gateway lost outbound connectivity, its node is down) whose own firing
    *   this webhook gets: the parent alert stands for it;
    * - a resolve whose firing never went out to this webhook (failed or dropped): there is nothing to resolve.
    */
   private async supersededReason(
     webhookId: string,
-    delivery: DeliveryRow
+    delivery: DeliveryRow,
+    backlogAfterOutage: boolean
   ): Promise<{ ids: string[]; reason: string } | null> {
     const stateId = delivery.alertStateId;
     if (!stateId) return null;
@@ -514,7 +534,7 @@ export class NotificationDispatcherService {
         .select({ id: notificationDeliveryLog.id })
         .from(notificationDeliveryLog)
         .where(and(sameAlert('alert.resolved'), inArray(notificationDeliveryLog.status, [...OPEN_DELIVERY_STATUSES])));
-      if (resolves.length > 0) {
+      if (resolves.length > 0 && (backlogAfterOutage || lastTryUnreachable(delivery))) {
         return {
           ids: [delivery.id, ...resolves.map((row) => row.id)],
           reason: 'Not sent: the alert resolved before this webhook could be reached',
@@ -555,7 +575,11 @@ export class NotificationDispatcherService {
   }
 
   /** Send the delivery at the head of a webhook's queue; 'stop' when the queue must wait. */
-  private async deliverHead(webhook: WebhookRow, delivery: DeliveryRow): Promise<'continue' | 'stop'> {
+  private async deliverHead(
+    webhook: WebhookRow,
+    delivery: DeliveryRow,
+    backlogAfterOutage = false
+  ): Promise<'continue' | 'stop'> {
     // Credentials belong to the webhook as configured now. Never send them to a URL the webhook no
     // longer points at, and stop delivering once the webhook is switched off.
     if (!webhook.enabled) {
@@ -574,7 +598,7 @@ export class NotificationDispatcherService {
       await this.closeDelivery([delivery.id], 'failed', 'Webhook URL changed after this delivery was queued');
       return 'continue';
     }
-    const superseded = await this.supersededReason(webhook.id, delivery);
+    const superseded = await this.supersededReason(webhook.id, delivery, backlogAfterOutage);
     if (superseded) {
       await this.closeDelivery(superseded.ids, 'superseded', superseded.reason);
       return 'continue';
@@ -619,7 +643,8 @@ export class NotificationDispatcherService {
         await sleep(outcome.waitMs);
         continue;
       }
-      const failures = outcome.kind === 'rate_limited' ? webhook.deliveryFailures : webhook.deliveryFailures + 1;
+      // A 429 is an answer: the target is up, so the unreachable backoff starts over.
+      const failures = outcome.kind === 'rate_limited' ? 0 : webhook.deliveryFailures + 1;
       const pauseSeconds =
         outcome.kind === 'rate_limited'
           ? Math.ceil(outcome.waitMs / 1000)

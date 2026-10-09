@@ -14,7 +14,7 @@ An alert rule has:
 
 ## Webhooks
 
-A webhook has a URL, method, a Handlebars body template (Discord, Slack, Telegram, generic JSON, and plain-text presets), custom headers, and optional HMAC-SHA256 signing. Each webhook sends its notifications one at a time in order; while its target cannot be reached (network/DNS error, timeout, 5xx) the whole webhook pauses and resumes in order, and a 429 pauses it for the time the target asks. A firing that has not gone out once its alert resolved is not sent, and neither is that resolve (delivery status `superseded`, shown as Not sent, with the reason in `error`). `list_webhook_deliveries` and `get_delivery_stats` show results; `test_webhook` sends a test.
+A webhook has a URL, method, a Handlebars body template (Discord, Slack, Telegram, generic JSON, and plain-text presets), custom headers, and optional HMAC-SHA256 signing. Each webhook sends its notifications one at a time in order; while its target cannot be reached (network/DNS error, timeout, 5xx) the whole webhook pauses and resumes in order, and a 429 pauses it for the time the target asks. A firing that could not go out because the target was unreachable is not sent once its alert resolved, and neither is that resolve (delivery status `superseded`, shown as Not sent, with the reason in `error`); a rate-limited (429) webhook still gets both, in order. `list_webhook_deliveries` and `get_delivery_stats` show results; `test_webhook` sends a test.
 
 Webhook URLs and headers often embed credentials. `notifications:webhooks:manage` reveals them; never repeat them in chat, and never ask the user to paste a signing secret or token URL into chat. Let the user enter those in the Console.
 
