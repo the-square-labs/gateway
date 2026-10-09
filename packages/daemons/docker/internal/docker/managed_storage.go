@@ -190,6 +190,11 @@ func (p *DockerPlugin) handleManagedStorageCommand(cmd *pb.DockerStorageCommand,
 }
 
 func (m *managedStorageManager) handle(ctx context.Context, action, id, configJSON string) (string, error) {
+	if action == "leftovers" {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.leftovers(ctx)
+	}
 	if !managedStorageIDPattern.MatchString(id) {
 		return "", errors.New("managed storage id must be a UUID")
 	}
@@ -342,6 +347,13 @@ func (m *managedStorageManager) handle(ctx context.Context, action, id, configJS
 			if json.Unmarshal([]byte(configJSON), &lifecycle) == nil {
 				deleteData = lifecycle.DeleteData
 			}
+		}
+		if isLeftoverRemove(configJSON) {
+			// Gateway has no instance of the id (see managed_leftovers.go).
+			if err := m.removeLeftover(ctx, id); err != nil {
+				return "", err
+			}
+			return `{"status":"missing"}`, nil
 		}
 		record, err := m.loadRecord(id)
 		if errors.Is(err, os.ErrNotExist) {
