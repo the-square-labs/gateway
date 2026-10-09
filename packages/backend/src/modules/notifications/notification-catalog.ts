@@ -484,6 +484,12 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
         supportsThreshold: true,
       },
       { id: 'job.failing', label: 'Background Job Failing', defaultSeverity: 'warning', supportsThreshold: true },
+      {
+        id: 'outbound.unavailable',
+        label: 'Gateway Lost Outbound Connectivity',
+        defaultSeverity: 'critical',
+        supportsThreshold: true,
+      },
       { id: 'relay.recovering', label: 'Relay Recovering', defaultSeverity: 'warning', supportsThreshold: true },
       { id: 'relay.unavailable', label: 'Relay Unavailable', defaultSeverity: 'critical', supportsThreshold: true },
       {
@@ -525,6 +531,7 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
       { name: '{{details.state}}', description: 'Container state or health (container.unhealthy)' },
       { name: '{{details.job}}', description: 'Background job name (job.failing)' },
       { name: '{{details.failures_in_a_row}}', description: 'Failed runs in a row (job.failing)' },
+      { name: '{{details.targets}}', description: 'Hosts Gateway could not reach (outbound.unavailable)' },
     ],
   },
   {

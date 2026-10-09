@@ -439,6 +439,17 @@ Each webhook sends its notifications one at a time, in the order the alerts fire
 
 A firing notification that has not gone out yet is not sent once its alert has resolved, and neither is that resolve: the reader never saw the alert, so there is nothing to resolve. The **Delivery Log** shows both as **Not sent** with the reason.
 
+### One Cause, One Alert
+
+Gateway checks its own outbound connectivity every 20 seconds by resolving and connecting to the hosts of the enabled webhooks and two public endpoints (`one.one.one.one` and `dns.google`); webhooks on private addresses are not counted. When none can be reached, the built-in rule **Gateway lost outbound connectivity** (Gateway category, event `outbound.unavailable`, after 40 seconds) fires, and it resolves once Gateway reaches them again. A Gateway that has not reached any of them since it started, such as an air-gapped install, does not report it. The upgrade creates this rule enabled, notifying the webhooks the existing proxy and node rules notify; on a new install, pick its webhooks in **Notifications > Alerts**.
+
+A proxy host health alert (offline or degraded) is folded under another alert that explains it:
+
+- the proxy host's node is down: a node **offline** alert fires for the node serving the proxy host (its nginx node or a member of its ingress group) or for the node running its container upstream;
+- Gateway lost outbound connectivity, and the proxy host's health probe was sent by Gateway itself and got no answer (DNS, connect or timeout errors).
+
+A folded alert is not sent to a webhook that gets the alert it is folded under; a webhook that does not get that alert still gets it. It resolves together with that alert, without a separate message. An alert that fires later still folds the proxy host alerts it explains if they have not gone out yet. For 2 minutes after that alert resolves, the proxy host alerts it explains are not raised, so proxy hosts that come back right after their node or Gateway's connectivity do not alert; a proxy host still down after that alerts on its own. While Gateway cannot reach its webhooks, their notifications wait and go out in order as soon as it can.
+
 ### SIEM Audit Export
 
 Configure SIEM collectors in **Notifications → SIEM**. Gateway keeps delivery in the main app process: no separate Compose service or worker container is required. A scheduler claims durable outbox rows every 30 seconds with database leases, so duplicate scheduler execution is safe if more than one app process is present. This lease safety applies only to SIEM delivery; horizontal Gateway application clustering is not currently a supported deployment mode.

@@ -174,6 +174,7 @@ export class HealthCheckJob {
         status: checkStatus,
         responseMs,
         members: memberSamples,
+        unreachable,
       } = await this.checkHost(host, availabilityMembers.get(host.id), servingNodes.get(host));
 
       if (relayBacked && this.relayUnavailable) {
@@ -270,7 +271,11 @@ export class HealthCheckJob {
           id: host.id,
           name: host.domainNames?.[0] ?? host.id,
         },
-        { health_status: newStatus },
+        // A probe Gateway sent itself that got no answer (DNS, connect, timeout): a route alert it raises folds
+        // under "Gateway lost outbound connectivity" while that alert fires.
+        newStatus === 'offline' && unreachable
+          ? { health_status: newStatus, probe_failure: 'unreachable' }
+          : { health_status: newStatus },
         undefined,
         // Alert windows need the previous sample as an anchor; keep it for at least the check interval.
         Math.max(5, host.healthCheckInterval ?? 30) * 1000
@@ -448,6 +453,8 @@ export class HealthCheckJob {
     status: 'online' | 'offline' | 'degraded' | 'skipped' | 'deferred' | 'unknown';
     responseMs?: number;
     members?: GroupRouteHealth['members'];
+    /** Gateway probed the upstream itself and got no answer. */
+    unreachable?: boolean;
   }> {
     if (!host.ingressGroupId || !servingNodeIds || servingNodeIds.length === 0) {
       return this.checkHostOnNode(host, host.nodeId, memberLinkIds);
@@ -486,14 +493,18 @@ export class HealthCheckJob {
         serving: ingressHealthOf(nodeRows.find((row) => row.id === nodeId)?.lastHealthReport)?.serving ?? null,
       }))
     );
-    return { ...combined, responseMs: upstream.responseMs };
+    return { ...combined, responseMs: upstream.responseMs, unreachable: upstream.unreachable };
   }
 
   private async checkHostOnNode(
     host: typeof proxyHosts.$inferSelect,
     nodeId: string | null,
     memberLinkIds?: string[]
-  ): Promise<{ status: 'online' | 'offline' | 'skipped' | 'deferred' | 'unknown'; responseMs?: number }> {
+  ): Promise<{
+    status: 'online' | 'offline' | 'skipped' | 'deferred' | 'unknown';
+    responseMs?: number;
+    unreachable?: boolean;
+  }> {
     if (host.upstreamKind === 'pages') {
       const domain = resolvePagesRouteProbeDomain(host);
       if (!nodeId || !this.nodeDispatch || !domain) return { status: 'unknown' };
@@ -623,6 +634,10 @@ export class HealthCheckJob {
         error: probe.error,
       });
     }
-    return { status: probe.status, responseMs: probe.responseMs };
+    return {
+      status: probe.status,
+      responseMs: probe.responseMs,
+      unreachable: probe.status === 'offline' && probe.httpStatus === undefined,
+    };
   }
 }

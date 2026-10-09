@@ -53,6 +53,10 @@ import { LoggingClickHouseService } from '@/modules/logging/logging-clickhouse.s
 import { LoggingEnvironmentService } from '@/modules/logging/logging-environment.service.js';
 import { LoggingMaintenanceService } from '@/modules/logging/logging-maintenance.service.js';
 import { NODE_MONITORING_CADENCE_MS } from '@/modules/nodes/node-monitoring.service.js';
+import {
+  GatewayOutboundMonitor,
+  OUTBOUND_CHECK_INTERVAL_MS,
+} from '@/modules/notifications/gateway-outbound-monitor.js';
 import { NotificationAlertRuleService } from '@/modules/notifications/notification-alert-rule.service.js';
 import { NotificationDeliveryService } from '@/modules/notifications/notification-delivery.service.js';
 import { NotificationDispatcherService } from '@/modules/notifications/notification-dispatcher.service.js';
@@ -424,6 +428,10 @@ export async function initializeBackgroundServices(): Promise<void> {
   // Notification webhook retry job (every 30 seconds)
   const notifRetryJob = new NotificationRetryJob(notifDeliveryService, notifDispatcherService);
   scheduler.registerInterval('notification-retry', 30000, () => notifRetryJob.run());
+  // Gateway's own outbound connectivity: the "Gateway lost outbound connectivity" alert, the route alerts it explains
+  // fold under it, and paused webhooks resume as soon as it is back.
+  const outboundMonitor = new GatewayOutboundMonitor(db, notifEvaluatorService, notifDispatcherService);
+  scheduler.registerInterval('gateway-outbound-check', OUTBOUND_CHECK_INTERVAL_MS, () => outboundMonitor.run());
   const siemDeliveryJob = new SiemDeliveryJob(siemDeliveryService, generalSettingsService);
   scheduler.registerInterval('siem-delivery', 30000, () => siemDeliveryJob.run());
   container.resolve<CommercialEditionRuntime>(TOKENS.CommercialEdition).registerJobs(scheduler);

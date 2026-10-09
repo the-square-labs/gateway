@@ -203,3 +203,30 @@ describe('route health job: relayed routes while the local relay settles', () =>
     expect((await (job as any).checkHostOnNode(host, 'ingress-1')).status).toBe('offline');
   });
 });
+
+describe('route health job: probes Gateway sends itself', () => {
+  const offlineContext = async (deps: ConstructorParameters<typeof HealthCheckJob>[2]) => {
+    const t = setup();
+    Object.assign(t.host, { forwardHost: 'app.pages.dev', forwardPort: 443, forwardScheme: 'https' });
+    const job = new HealthCheckJob((t.job as any).db, undefined, deps);
+    job.setEvaluator(t.evaluator as any);
+    await job.run();
+    await job.run();
+    return (t.evaluator.observeStatefulEvent.mock.calls as unknown[][]).at(-1)?.[3];
+  };
+
+  it('marks an offline sample whose probe got no answer, so its alert can fold under a Gateway outbound loss', async () => {
+    const context = await offlineContext({
+      checkTarget: async (url) => ({ url, resolvedAddresses: [], allowed: false, reason: 'did not resolve' }),
+    });
+    expect(context).toEqual({ health_status: 'offline', probe_failure: 'unreachable' });
+  });
+
+  it('does not mark an offline sample whose upstream answered', async () => {
+    const context = await offlineContext({
+      checkTarget: async (url) => ({ url, resolvedAddresses: ['203.0.113.7'], allowed: true }),
+      request: async () => ({ status: 503, text: async () => '' }),
+    });
+    expect(context).toEqual({ health_status: 'offline' });
+  });
+});

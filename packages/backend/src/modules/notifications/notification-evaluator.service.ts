@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, lt, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, lt, or, type SQL, sql } from 'drizzle-orm';
 import type { DrizzleClient, DrizzleTransaction } from '@/db/client.js';
 import {
   databaseConnections,
@@ -7,15 +7,18 @@ import {
   nodes,
   notificationAlertRules,
   notificationAlertStates,
+  notificationDeliveryLog,
   proxyHosts,
   sslCertificates,
 } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { HostingAccountObservation } from '@/modules/hosting/hosting-observations.service.js';
+import { resolveIngressNodesForMany } from '@/modules/ingress-groups/ingress-nodes.js';
 import { recordNodeCapacitySample } from '@/modules/monitoring/dashboard-attention.js';
 import type { CacheService, RedisClient } from '@/services/cache.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
+import { GATEWAY_OUTBOUND_RESOURCE_ID } from './gateway-outbound-monitor.js';
 import {
   EVENT_BUS_MAPPINGS,
   evaluateThreshold,
@@ -28,11 +31,13 @@ import {
   type WindowProbeSample,
 } from './notification.constants.js';
 import type { NotificationAlertRuleService } from './notification-alert-rule.service.js';
-import type {
-  DispatchResult,
-  DispatchWebhook,
-  NotificationDispatcherService,
+import {
+  type DispatchResult,
+  type DispatchWebhook,
+  type NotificationDispatcherService,
+  OPEN_DELIVERY_STATUSES,
 } from './notification-dispatcher.service.js';
+import { type FoldedUnder, foldedUnder } from './notification-folding.js';
 import { defaultResolveMessage, resolveTemplateOf } from './notification-resolve-messages.js';
 import {
   buildNotificationTemplateContext,
@@ -66,6 +71,22 @@ const MEMORY_PROBE_SAMPLE_LIMIT = 1_000;
 const GATEWAY_SAMPLING_MS = 60_000;
 /** A held state is observed again this long after a rule's window can be covered by it. */
 const HELD_STATE_SLACK_MS = 1_000;
+/** Route alerts explained by a parent that resolved this recently are held, see foldingParent. */
+const FOLD_GRACE_MS = 2 * 60_000;
+/** Route health events that fold under a parent alert. */
+const FOLDABLE_ROUTE_EVENTS = ['health.offline', 'health.degraded'] as const;
+
+function isFoldableRouteRule(rule: { category?: string; eventPattern?: string | null }): boolean {
+  return rule.category === 'proxy' && FOLDABLE_ROUTE_EVENTS.includes(rule.eventPattern as never);
+}
+
+/** The kind of parent a rule's alerts are, if route alerts fold under them. */
+function foldingParentKind(rule: { category?: string; eventPattern?: string | null }): FoldedUnder['kind'] | null {
+  if (rule.category === 'node' && rule.eventPattern === 'offline') return 'node';
+  if (rule.category === 'gateway' && rule.eventPattern === 'outbound.unavailable') return 'gateway_outbound';
+  return null;
+}
+
 /** Resource keys of Gateway's own alerts (category gateway). */
 export const GATEWAY_RESOURCE_ID = 'gateway';
 export const GATEWAY_POSTGRES_RESOURCE_ID = 'gateway-postgres';
@@ -1611,6 +1632,14 @@ export class NotificationEvaluatorService {
     resourceName: string,
     details: TemplateDetails
   ): Promise<void> {
+    const parent = await this.foldingParent(rule, resourceType, resourceKey, details);
+    if (parent === 'hold') {
+      logger.debug('Route alert held: the alert explaining it resolved just now', {
+        ruleId: rule.id,
+        resourceId: resourceKey,
+      });
+      return;
+    }
     const event = this.buildFiredEvent(rule, resourceType, resourceKey, resourceName, details);
 
     const fired = await this.commitWithDeliveries(rule, event, async (tx) => {
@@ -1623,7 +1652,7 @@ export class NotificationEvaluatorService {
           resourceId: resourceKey,
           status: 'firing',
           severity: rule.severity,
-          context: details,
+          context: parent ? { ...details, folded: parent } : details,
         })
         .onConflictDoNothing()
         .returning({ id: notificationAlertStates.id });
@@ -1639,7 +1668,19 @@ export class NotificationEvaluatorService {
       resourceId: resourceKey,
     });
 
-    logger.info('Alert fired', { ruleId: rule.id, ruleName: rule.name, resourceType, resourceId: resourceKey });
+    if (parent) {
+      logger.info('Alert fired, folded under another alert', {
+        ruleId: rule.id,
+        ruleName: rule.name,
+        resourceType,
+        resourceId: resourceKey,
+        foldedUnder: parent.label,
+      });
+    } else {
+      logger.info('Alert fired', { ruleId: rule.id, ruleName: rule.name, resourceType, resourceId: resourceKey });
+    }
+    const parentKind = foldingParentKind(rule);
+    if (parentKind) await this.foldFiringRouteAlerts(fired, parentKind, rule, resourceKey, resourceName);
   }
 
   private async resolveAlert(
@@ -1652,7 +1693,7 @@ export class NotificationEvaluatorService {
     options: { notify?: boolean } = {}
   ): Promise<void> {
     const [state] = await this.db
-      .select({ firedAt: notificationAlertStates.firedAt })
+      .select({ firedAt: notificationAlertStates.firedAt, context: notificationAlertStates.context })
       .from(notificationAlertStates)
       .where(eq(notificationAlertStates.id, stateId))
       .limit(1);
@@ -1667,16 +1708,23 @@ export class NotificationEvaluatorService {
       };
     }
     const event = this.buildResolvedEvent(rule, resourceType, resourceKey, resourceName, details);
+    // A folded alert resolves only where its own firing went out (or is still queued, where both are dropped).
+    const onlyWebhookIds = foldedUnder(state?.context) ? await this.webhooksWithFiring(stateId) : undefined;
 
     // Health reports and sweeps race on the same state: only the caller that flips it notifies.
-    const resolved = await this.commitWithDeliveries(rule, options.notify === false ? null : event, async (tx) => {
-      const rows = await tx
-        .update(notificationAlertStates)
-        .set({ status: 'resolved', resolvedAt: new Date() })
-        .where(and(eq(notificationAlertStates.id, stateId), eq(notificationAlertStates.status, 'firing')))
-        .returning({ id: notificationAlertStates.id });
-      return rows[0]?.id ?? null;
-    });
+    const resolved = await this.commitWithDeliveries(
+      rule,
+      options.notify === false ? null : event,
+      async (tx) => {
+        const rows = await tx
+          .update(notificationAlertStates)
+          .set({ status: 'resolved', resolvedAt: new Date() })
+          .where(and(eq(notificationAlertStates.id, stateId), eq(notificationAlertStates.status, 'firing')))
+          .returning({ id: notificationAlertStates.id });
+        return rows[0]?.id ?? null;
+      },
+      onlyWebhookIds
+    );
     if (!resolved) return;
 
     this.eventBus?.publish('alert.resolved', {
@@ -1687,6 +1735,192 @@ export class NotificationEvaluatorService {
     });
 
     logger.info('Alert resolved', { ruleId: rule.id, ruleName: rule.name, resourceType, resourceId: resourceKey });
+    if (foldingParentKind(rule)) await this.resolveFoldedAlerts(stateId);
+  }
+
+  // ── Alert folding ───────────────────────────────────────────────────
+  //
+  // One cause should be one alert. A route (proxy host) health alert is folded under a parent alert that explains it:
+  // - the route's node is down: a node "offline" alert fires for the node serving the route (its nginx node or a
+  //   member of its ingress group) or running its container upstream;
+  // - Gateway lost outbound connectivity: the "outbound.unavailable" gateway alert fires and the route's failing probe
+  //   was sent by Gateway itself and got no answer (DNS, connect, timeout).
+  // A folded alert is recorded as usual, with context.folded naming the parent. Its firing is not sent to a webhook
+  // that gets the parent's firing (the dispatcher drops it there, see supersededReason); a webhook that does not get
+  // the parent still gets it. It resolves together with the parent, quietly, and its resolve goes only where its
+  // firing went. A parent that fires later folds the route alerts already firing that it explains. For FOLD_GRACE_MS
+  // after a parent resolves, the route alerts it explains are held (not raised), so routes coming back right after
+  // their node or Gateway's connectivity do not alert; a route still down after that alerts on its own.
+
+  /** The parent alert a route alert folds under, 'hold' while one resolved within FOLD_GRACE_MS, or null. */
+  private async foldingParent(
+    rule: any,
+    resourceType: string,
+    resourceKey: string,
+    details: TemplateDetails
+  ): Promise<FoldedUnder | 'hold' | null> {
+    if (!isFoldableRouteRule(rule) || resourceType !== 'proxy') return null;
+    const unreachable = details.details?.probe_failure === 'unreachable';
+    const nodeIds = await this.routeNodeIds(resourceKey);
+    const sources: SQL[] = [];
+    if (nodeIds.length > 0) {
+      sources.push(
+        and(
+          eq(notificationAlertRules.category, 'node'),
+          eq(notificationAlertRules.eventPattern, 'offline'),
+          eq(notificationAlertStates.resourceType, 'node'),
+          inArray(notificationAlertStates.resourceId, nodeIds)
+        )!
+      );
+    }
+    if (unreachable) {
+      sources.push(
+        and(
+          eq(notificationAlertStates.resourceType, 'gateway'),
+          eq(notificationAlertStates.resourceId, GATEWAY_OUTBOUND_RESOURCE_ID)
+        )!
+      );
+    }
+    if (sources.length === 0) return null;
+    const parents = await this.db
+      .select({
+        id: notificationAlertStates.id,
+        status: notificationAlertStates.status,
+        resourceType: notificationAlertStates.resourceType,
+        resourceId: notificationAlertStates.resourceId,
+        ruleName: notificationAlertRules.name,
+      })
+      .from(notificationAlertStates)
+      .innerJoin(notificationAlertRules, eq(notificationAlertRules.id, notificationAlertStates.ruleId))
+      .where(
+        and(
+          or(...sources),
+          or(
+            eq(notificationAlertStates.status, 'firing'),
+            gt(notificationAlertStates.resolvedAt, new Date(Date.now() - FOLD_GRACE_MS))
+          )
+        )
+      );
+    const firing = parents.find((parent) => parent.status === 'firing');
+    if (firing) {
+      const outbound = firing.resourceType === 'gateway';
+      return {
+        stateId: firing.id,
+        kind: outbound ? 'gateway_outbound' : 'node',
+        label: `${firing.ruleName} (${outbound ? 'Gateway' : this.getNodeName(firing.resourceId)})`,
+      };
+    }
+    return parents.length > 0 ? 'hold' : null;
+  }
+
+  /** The nodes a route depends on: its nginx node or ingress group members, and the node running its container. */
+  private async routeNodeIds(proxyHostId: string): Promise<string[]> {
+    if (!UUID_PATTERN.test(proxyHostId)) return [];
+    const [host] = await this.db
+      .select({
+        nodeId: proxyHosts.nodeId,
+        ingressGroupId: proxyHosts.ingressGroupId,
+        dockerNodeId: proxyHosts.dockerNodeId,
+      })
+      .from(proxyHosts)
+      .where(eq(proxyHosts.id, proxyHostId))
+      .limit(1);
+    if (!host) return [];
+    const serving = (await resolveIngressNodesForMany(this.db, [host])).get(host) ?? [];
+    return [...new Set([...serving, ...(host.dockerNodeId ? [host.dockerNodeId] : [])])];
+  }
+
+  /** A parent alert fired: fold the route alerts already firing that it explains. */
+  private async foldFiringRouteAlerts(
+    parentStateId: string,
+    kind: FoldedUnder['kind'],
+    parentRule: any,
+    parentResourceKey: string,
+    parentResourceName: string
+  ): Promise<void> {
+    const candidates = await this.db
+      .select({ state: notificationAlertStates, rule: notificationAlertRules })
+      .from(notificationAlertStates)
+      .innerJoin(notificationAlertRules, eq(notificationAlertRules.id, notificationAlertStates.ruleId))
+      .where(
+        and(
+          eq(notificationAlertStates.status, 'firing'),
+          eq(notificationAlertStates.resourceType, 'proxy'),
+          eq(notificationAlertRules.category, 'proxy'),
+          inArray(notificationAlertRules.eventPattern, [...FOLDABLE_ROUTE_EVENTS]),
+          sql`${notificationAlertStates.context} -> 'folded' is null`
+        )
+      );
+    const folded: FoldedUnder = {
+      stateId: parentStateId,
+      kind,
+      label: `${parentRule.name} (${kind === 'gateway_outbound' ? 'Gateway' : parentResourceName})`,
+    };
+    for (const { state } of candidates) {
+      const context = (state.context ?? {}) as TemplateDetails;
+      const explained =
+        kind === 'gateway_outbound'
+          ? context.details?.probe_failure === 'unreachable'
+          : (await this.routeNodeIds(state.resourceId)).includes(parentResourceKey);
+      if (!explained) continue;
+      await this.db
+        .update(notificationAlertStates)
+        .set({ context: { ...context, folded } })
+        .where(and(eq(notificationAlertStates.id, state.id), eq(notificationAlertStates.status, 'firing')));
+      logger.info('Route alert folded under an alert that fired after it', {
+        stateId: state.id,
+        resourceId: state.resourceId,
+        foldedUnder: folded.label,
+      });
+    }
+    // Their firings still queued for a webhook that gets the parent are dropped when the queue reaches them.
+  }
+
+  /** A parent alert resolved: the route alerts folded under it resolve with it. */
+  private async resolveFoldedAlerts(parentStateId: string): Promise<void> {
+    const children = await this.db
+      .select({ state: notificationAlertStates, rule: notificationAlertRules })
+      .from(notificationAlertStates)
+      .innerJoin(notificationAlertRules, eq(notificationAlertRules.id, notificationAlertStates.ruleId))
+      .where(
+        and(
+          eq(notificationAlertStates.status, 'firing'),
+          sql`${notificationAlertStates.context} -> 'folded' ->> 'stateId' = ${parentStateId}`
+        )
+      );
+    for (const { state, rule } of children) {
+      const [host] = UUID_PATTERN.test(state.resourceId)
+        ? await this.db
+            .select({ domainNames: proxyHosts.domainNames })
+            .from(proxyHosts)
+            .where(eq(proxyHosts.id, state.resourceId))
+            .limit(1)
+        : [];
+      const context = (state.context ?? {}) as TemplateDetails;
+      await this.resolveAlert(
+        state.id,
+        rule,
+        state.resourceType,
+        state.resourceId,
+        host?.domainNames?.[0] ?? state.resourceId,
+        { ...context, resourceId: state.resourceId, resolution: { reason: 'resolved_with_parent' } }
+      );
+    }
+  }
+
+  /** Webhooks this alert's firing went out to or is still queued for. */
+  private async webhooksWithFiring(stateId: string): Promise<string[]> {
+    const rows = await this.db
+      .selectDistinct({ webhookId: notificationDeliveryLog.webhookId })
+      .from(notificationDeliveryLog)
+      .where(
+        and(
+          eq(notificationDeliveryLog.alertStateId, stateId),
+          eq(notificationDeliveryLog.eventType, 'alert.fired'),
+          inArray(notificationDeliveryLog.status, ['success', ...OPEN_DELIVERY_STATUSES])
+        )
+      );
+    return rows.map((row) => row.webhookId);
   }
 
   /** The notification for a firing alert, with the rule's message template rendered. */
