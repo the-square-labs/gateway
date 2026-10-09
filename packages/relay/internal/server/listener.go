@@ -87,8 +87,14 @@ func (l *splitListener) run() {
 }
 
 func (l *splitListener) handshake(raw net.Conn) {
-	// Each Write's records leave in one send (tlsbatch).
-	below := tlsbatch.Below(raw)
+	// Each Write's records leave in one send (tlsbatch); the slow start
+	// guard beneath needs the socket peerConn hides from gRPC.
+	var below *tlsbatch.Conn
+	if tcp, ok := tcpConn(raw); ok {
+		below = tlsbatch.BelowSocket(raw, tcp)
+	} else {
+		below = tlsbatch.Below(raw)
+	}
 	connection := tls.Server(below, l.config)
 	ctx, cancel := context.WithTimeout(context.Background(), tlsHandshakeTimeout)
 	err := connection.HandshakeContext(ctx)

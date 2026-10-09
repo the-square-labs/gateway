@@ -18,6 +18,8 @@ import (
 	"net"
 	"sync"
 	"syscall"
+
+	"github.com/wiolett-industries/gateway/daemon-shared/slowstart"
 )
 
 // WriteBuffer is the gRPC write buffer of a daemon's batched relay lane: the
@@ -45,11 +47,20 @@ type Conn struct {
 	collecting int
 	pending    *[]byte
 	err        error
+	// slowStart keeps a lane's slow start after a pause from ending at a
+	// round trip the connection learned long ago (see slowstart).
+	slowStart *slowstart.Guard
 }
 
 // Below wraps the raw connection a TLS connection is made over.
 func Below(raw net.Conn) *Conn {
-	return &Conn{Conn: raw}
+	return &Conn{Conn: raw, slowStart: slowstart.New(raw)}
+}
+
+// BelowSocket is Below for a raw connection that hides its TCP socket (the
+// relay hides it from gRPC): socket is the TCP connection beneath raw.
+func BelowSocket(raw, socket net.Conn) *Conn {
+	return &Conn{Conn: raw, slowStart: slowstart.New(socket)}
 }
 
 // SyscallConn exposes the raw connection's socket (gRPC reads and sets TCP
@@ -91,6 +102,7 @@ func (c *Conn) Write(record []byte) (int, error) {
 }
 
 func (c *Conn) writeLocked(data []byte) (int, error) {
+	c.slowStart.BeforeWrite()
 	n, err := c.Conn.Write(data)
 	if err != nil {
 		c.err = err
