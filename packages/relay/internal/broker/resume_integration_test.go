@@ -33,6 +33,7 @@ import (
 
 	"github.com/wiolett-industries/gateway/daemon-shared/relayresume"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/tlsbatch"
 	"github.com/wiolett-industries/gateway/relay/internal/codec"
 	"github.com/wiolett-industries/gateway/relay/internal/grant"
 	"github.com/wiolett-industries/gateway/relay/internal/identity"
@@ -252,12 +253,12 @@ func (h *rhHarness) startRelay(id string) *rhRelay {
 
 func (r *rhRelay) serve(listener net.Listener) {
 	server := grpc.NewServer(
-		grpc.Creds(credentials.NewTLS(&tls.Config{
+		grpc.Creds(tlsbatch.Credentials(credentials.NewTLS(&tls.Config{
 			Certificates: []tls.Certificate{r.h.serverCert},
 			ClientCAs:    r.h.pki.pool,
 			ClientAuth:   tls.RequireAndVerifyClientCert,
 			MinVersion:   tls.VersionTLS13,
-		})),
+		}))),
 		grpc.ForceServerCodecV2(codec.ServerCodec{}),
 		grpc.MaxRecvMsgSize(4*1024*1024), grpc.MaxSendMsgSize(4*1024*1024),
 	)

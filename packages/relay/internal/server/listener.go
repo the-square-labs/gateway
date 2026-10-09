@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/wiolett-industries/gateway/daemon-shared/tlsbatch"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
@@ -86,7 +87,9 @@ func (l *splitListener) run() {
 }
 
 func (l *splitListener) handshake(raw net.Conn) {
-	connection := tls.Server(raw, l.config)
+	// Each Write's records leave in one send (tlsbatch).
+	below := tlsbatch.Below(raw)
+	connection := tls.Server(below, l.config)
 	ctx, cancel := context.WithTimeout(context.Background(), tlsHandshakeTimeout)
 	err := connection.HandshakeContext(ctx)
 	cancel()
@@ -101,7 +104,8 @@ func (l *splitListener) handshake(raw net.Conn) {
 		return
 	}
 	queue := l.authenticated
-	var handed net.Conn = &handshakenConn{Conn: connection, state: state}
+	batched := tlsbatch.Above(connection, below)
+	var handed net.Conn = &handshakenConn{Conn: batched, state: state}
 	if len(state.VerifiedChains) == 0 {
 		if l.anonymousOpen.Add(1) > maxAnonymousConnections {
 			l.anonymousOpen.Add(-1)
@@ -109,7 +113,7 @@ func (l *splitListener) handshake(raw net.Conn) {
 			return
 		}
 		queue = l.anonymous
-		handed = &handshakenConn{Conn: connection, state: state, release: func() { l.anonymousOpen.Add(-1) }}
+		handed = &handshakenConn{Conn: batched, state: state, release: func() { l.anonymousOpen.Add(-1) }}
 	}
 	select {
 	case queue.conns <- handed:

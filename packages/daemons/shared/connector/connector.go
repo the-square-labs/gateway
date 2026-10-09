@@ -13,6 +13,7 @@ import (
 
 	"github.com/wiolett-industries/gateway/daemon-shared/auth"
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/tlsbatch"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/connectivity"
@@ -127,8 +128,12 @@ func dialOptions(tlsCfg *tls.Config, lane bool) []grpc.DialOption {
 	if lane {
 		keepaliveParams = laneKeepalive
 	}
+	transportCredentials := credentials.NewTLS(tlsCfg)
+	if lane {
+		transportCredentials = tlsbatch.Credentials(transportCredentials)
+	}
 	options := []grpc.DialOption{
-		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+		grpc.WithTransportCredentials(transportCredentials),
 		grpc.WithConnectParams(ReconnectParams),
 		grpc.WithKeepaliveParams(keepaliveParams),
 		grpc.WithDefaultCallOptions(
@@ -137,7 +142,10 @@ func dialOptions(tlsCfg *tls.Config, lane bool) []grpc.DialOption {
 		),
 	}
 	if lane {
-		options = append(options, grpc.WithIdleTimeout(0))
+		options = append(options, grpc.WithIdleTimeout(0),
+			// A bulk stream's frames leave in writes of up to 256 KiB, one
+			// send each (tlsbatch); the buffer is pooled while the lane is idle.
+			grpc.WithWriteBufferSize(tlsbatch.WriteBuffer), grpc.WithSharedWriteBuffer(true))
 	}
 	return options
 }
