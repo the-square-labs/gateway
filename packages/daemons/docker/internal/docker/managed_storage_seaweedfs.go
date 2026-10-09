@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -148,6 +149,8 @@ func seaweedfsCommand(record managedStorageRecord) []string {
 		"-volume.max=" + strconv.FormatInt(sizing.VolumeMax, 10),
 		"-volume.index=memory",
 		"-volume.minFreeSpace=" + strconv.FormatInt(sizing.MinFreeSpaceMiB, 10) + "MiB",
+		"-volume.concurrentUploadLimitMB=" + strconv.FormatInt(seaweedfsTransferLimitMiB(record.MemoryBytes), 10),
+		"-volume.concurrentDownloadLimitMB=" + strconv.FormatInt(seaweedfsTransferLimitMiB(record.MemoryBytes), 10),
 		// Single node: there is no other volume server to drain writes to, so
 		// the default 10 s pre-stop wait only delays restarts.
 		"-volume.preStopSeconds=2",
@@ -214,12 +217,46 @@ func seaweedfsSysctlsOutdated(current map[string]string) bool {
 	return false
 }
 
+// seaweedfsContainerOutdated reports a container an older daemon created:
+// without the current sysctls, engine flags or memory limit of the Go
+// runtime. A recreation (data kept) brings it up to date.
 func (m *managedStorageManager) seaweedfsContainerOutdated(ctx context.Context, record managedStorageRecord) bool {
 	inspect, err := m.client.cli.ContainerInspect(ctx, record.ContainerID, mobyclient.ContainerInspectOptions{})
-	if err != nil || inspect.Container.HostConfig == nil {
+	// An answer without the container's command and environment (never one
+	// of a container this daemon made) cannot be judged.
+	config := inspect.Container.Config
+	if err != nil || inspect.Container.HostConfig == nil || config == nil || len(config.Cmd) == 0 || len(config.Env) == 0 {
 		return false
 	}
-	return seaweedfsSysctlsOutdated(inspect.Container.HostConfig.Sysctls)
+	if seaweedfsSysctlsOutdated(inspect.Container.HostConfig.Sysctls) {
+		return true
+	}
+	if !slices.Equal(config.Cmd, seaweedfsCommand(record)) {
+		return true
+	}
+	return !slices.Contains(config.Env, seaweedfsMemoryLimitEnv(record.MemoryBytes))
+}
+
+// seaweedfsMemoryLimitEnv bounds the Go heap of the engine (master, volume
+// server, filer and S3 share one process) to 60 % of the container's memory.
+// The rest is page cache the container is charged for: an object written to
+// the loop-mounted disk is dirty in the disk's page cache and, on its way
+// through the loop device, in the image file's, and neither can be dropped
+// until it is written back. With the heap allowed 85 % of 768 MiB a 1 GiB
+// upload next to downloads pushed the container over its limit and the
+// kernel killed it. The heap the engine keeps live under that load is about
+// 250 MiB; at 60 % a 1 GiB put/get loop with small requests next to it kept
+// its throughput with half the memory (CT 1138 harness, 1 CPU, 768 MiB).
+func seaweedfsMemoryLimitEnv(memoryBytes int64) string {
+	return "GOMEMLIMIT=" + strconv.FormatInt(max(int64(64), memoryBytes*60/100/mebibyte), 10) + "MiB"
+}
+
+// seaweedfsTransferLimitMiB bounds what the volume server holds in memory for
+// uploads and for downloads at a time (a whole chunk per request); requests
+// past it wait. An eighth of the container's memory each, at least 32 MiB
+// (eight 4 MiB chunks).
+func seaweedfsTransferLimitMiB(memoryBytes int64) int64 {
+	return max(int64(32), memoryBytes/8/mebibyte)
 }
 
 func (m *managedStorageManager) createSeaweedFSContainer(ctx context.Context, record *managedStorageRecord, input managedStorageCommand) (string, error) {
@@ -238,7 +275,7 @@ func (m *managedStorageManager) createSeaweedFSContainer(ctx context.Context, re
 		Entrypoint: []string{"/usr/bin/weed"},
 		Cmd:        seaweedfsCommand(*record),
 		Env: []string{
-			"GOMEMLIMIT=" + strconv.FormatInt(max(int64(64), record.MemoryBytes*85/100/mebibyte), 10) + "MiB",
+			seaweedfsMemoryLimitEnv(record.MemoryBytes),
 			// The S3 listener rereads its certificate files on this interval
 			// (upstream default 5h), so a renewed certificate is served
 			// without a restart (see reloadTLS).

@@ -152,6 +152,24 @@ func (m *managedStorageManager) startStoppedEngine(ctx context.Context, id, cont
 		}
 		return runtimeFilesMissingError("managed storage", missing)
 	}
+	// A SeaweedFS engine the kernel killed for memory in a container an older
+	// daemon made is recreated once with the current settings (memory bounds
+	// among them) instead of being started as it was: it is down anyway, and
+	// the same container would be killed the same way. Other crashes (damaged
+	// data, for one) are not the settings' fault and only start it again.
+	if containerID != "" && run.oomKilled && record.engine() == managedStorageEngineSeaweedFS && m.seaweedfsContainerOutdated(ctx, record) {
+		if _, tried := m.oomRecreated.LoadOrStore(record.ContainerID, true); !tried {
+			input := managedStorageCommand{Engine: managedStorageEngineSeaweedFS, PublishS3: record.PublishS3, PublishedPort: record.PublishedPort}
+			if err := m.recreate(ctx, &record, input); err != nil {
+				// The previous container is back and started (see recreate).
+				m.logger.Warn("managed storage engine killed for memory could not be recreated with the current settings; it was started as it was", "id", id, "error", err)
+				return nil
+			}
+			m.forgetEngineRun(containerID)
+			m.logger.Info("recreated managed storage engine with the current settings after it was killed for memory", "id", id)
+			return m.saveRecord(record)
+		}
+	}
 	if _, err := m.client.cli.ContainerStart(ctx, record.ContainerID, mobyclient.ContainerStartOptions{}); err != nil {
 		return fmt.Errorf("start managed storage container: %w", err)
 	}
@@ -278,7 +296,7 @@ func (p *DockerPlugin) handleEngineStop(ctx context.Context, restarts *engineRes
 		})
 	}
 	if id := message.Actor.Attributes[managedStorageLabel]; id != "" && p.storageManager != nil {
-		p.storageManager.recordEngineStop(containerID, requested)
+		p.storageManager.recordEngineStop(containerID, requested, oom)
 		if !requested {
 			p.storageManager.incidents.record(id, oom)
 			p.logger.Warn("managed storage engine stopped on its own; starting it again", "id", id, "outOfMemory", oom)

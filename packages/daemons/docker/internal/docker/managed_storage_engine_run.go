@@ -19,6 +19,8 @@ type engineRun struct {
 	stopRequested bool
 	// restartedAt: when the supervisor last started it after it stopped.
 	restartedAt time.Time
+	// oomKilled: its last stop was the kernel's out-of-memory kill.
+	oomKilled bool
 }
 
 func (m *managedStorageManager) engineRun(containerID string) engineRun {
@@ -48,9 +50,10 @@ func (m *managedStorageManager) forgetEngineRun(containerID string) {
 
 // recordEngineStop records why an engine container died, as the supervisor's
 // event stream tells it, before the supervisor starts it again.
-func (m *managedStorageManager) recordEngineStop(containerID string, requested bool) {
+func (m *managedStorageManager) recordEngineStop(containerID string, requested, oom bool) {
 	m.updateEngineRun(containerID, func(run engineRun) engineRun {
 		run.stopRequested = requested
+		run.oomKilled = oom && !requested
 		return run
 	})
 }

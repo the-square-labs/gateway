@@ -63,6 +63,9 @@ type managedStorageManager struct {
 	// nobody asked for.
 	repairs   diskRepairs
 	incidents *engineIncidents
+	// oomRecreated holds the engine containers the supervisor tried to
+	// recreate once after an out-of-memory kill.
+	oomRecreated sync.Map
 }
 
 func (m *managedStorageManager) loopHost() *loopHost {

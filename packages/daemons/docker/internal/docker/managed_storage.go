@@ -290,11 +290,24 @@ func (m *managedStorageManager) handle(ctx context.Context, action, id, configJS
 		if action == "restart" && input != nil {
 			operationID = input.OperationID
 		}
-		if action == "restart" && (operationID == "" || operationID != record.OperationID) {
-			_ = m.client.StopContainer(ctx, record.ContainerID, 20)
-		}
-		if err := m.startContainer(ctx, record.ContainerID); err != nil {
-			return "", err
+		restart := action == "restart" && (operationID == "" || operationID != record.OperationID)
+		if restart && record.engine() == managedStorageEngineSeaweedFS && m.seaweedfsContainerOutdated(ctx, record) {
+			// A restart of a container an older daemon made recreates it with
+			// the current settings (data kept).
+			replacement := managedStorageCommand{Engine: managedStorageEngineSeaweedFS, PublishS3: record.PublishS3, PublishedPort: record.PublishedPort}
+			if input != nil {
+				replacement.RootCredentials, replacement.TLS = input.RootCredentials, input.TLS
+			}
+			if err := m.recreate(ctx, &record, replacement); err != nil {
+				return "", err
+			}
+		} else {
+			if restart {
+				_ = m.client.StopContainer(ctx, record.ContainerID, 20)
+			}
+			if err := m.startContainer(ctx, record.ContainerID); err != nil {
+				return "", err
+			}
 		}
 		record.DesiredRunning = true
 		if operationID != "" {

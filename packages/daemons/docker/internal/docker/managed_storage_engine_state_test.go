@@ -278,7 +278,7 @@ func TestStorageEngineStoppedForLongIsStopped(t *testing.T) {
 	if got := inspectStorage(t, m, id); got.Status != "ready" {
 		t.Fatalf("serving: %+v", got)
 	}
-	m.recordEngineStop("s1", true)
+	m.recordEngineStop("s1", true, false)
 	docker.running["s1"] = false
 	docker.finishedAt["s1"] = time.Now().Add(-engineRestartTimeout - time.Second)
 	if got := inspectStorage(t, m, id); got.Status != "stopped" {
@@ -303,7 +303,7 @@ func TestStorageEngineStoppedForLongIsStopped(t *testing.T) {
 	if got := inspectStorage(t, m, id); got.Status != "ready" {
 		t.Fatalf("serving again: %+v", got)
 	}
-	m.recordEngineStop("s1", true)
+	m.recordEngineStop("s1", true, false)
 	if _, err := m.handle(context.Background(), "stop", id, ""); err != nil {
 		t.Fatal(err)
 	}
