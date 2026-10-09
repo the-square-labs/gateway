@@ -27,6 +27,11 @@ export interface RelayRecoveryWait {
   activity: RelayExternalActivity;
   /** How long to leave the relay alone before judging it again. */
   waitMs: number;
+  /**
+   * When the activity began: the run's start (fresh_run), the relay's exit (settling, restarting) or the stop
+   * request (stopping). Null when Docker did not say. The log names this, not the start of an earlier run.
+   */
+  sinceMs: number | null;
 }
 
 function parseTime(value: string | null | undefined): number | null {
@@ -55,30 +60,36 @@ export function relayRecoveryWait(
   now = Date.now()
 ): RelayRecoveryWait | null {
   if (!observed) return null;
-  if (observed.restarting) return { activity: 'restarting', waitMs: readinessWaitMs };
+  if (observed.restarting) {
+    return { activity: 'restarting', waitMs: readinessWaitMs, sinceMs: parseTime(observed.finishedAt) };
+  }
   if (!observed.running) {
     const finishedAt = parseTime(observed.finishedAt);
     if (finishedAt === null) return null;
     const waitMs = Math.min(RELAY_EXIT_SETTLE_MS, finishedAt + RELAY_EXIT_SETTLE_MS - now);
-    return waitMs > 0 ? { activity: 'settling', waitMs } : null;
+    return waitMs > 0 ? { activity: 'settling', waitMs, sinceMs: finishedAt } : null;
   }
   const startedAt = parseTime(observed.startedAt);
   if (startedAt === null) return null;
   if (baselineMs === null || startedAt > baselineMs) {
     const waitMs = Math.min(readinessWaitMs, startedAt + readinessWaitMs - now);
-    if (waitMs > 0) return { activity: 'fresh_run', waitMs };
+    if (waitMs > 0) return { activity: 'fresh_run', waitMs, sinceMs: startedAt };
   }
   // A stop request against the current run that has not finished yet: its kill deadline is the
   // container's stop timeout after the signal. A stop that outlived that is hung, and recovery acts.
   const stopTimeoutMs = (observed.stopTimeoutSeconds ?? DEFAULT_STOP_TIMEOUT_SECONDS) * 1000;
   let stopWaitMs = 0;
+  let stopRequestedAt: number | null = null;
   for (const event of observed.events ?? []) {
     if (event.timeMs < startedAt) continue;
     const signal = event.attributes.signal;
     const stopRequest = event.action === 'kill' ? signal !== undefined && TERMINATING_SIGNALS.has(signal) : false;
     if (!stopRequest) continue;
     const deadline = event.timeMs + (signal === '9' || signal === 'SIGKILL' ? 0 : stopTimeoutMs) + STOP_GRACE_MS;
-    stopWaitMs = Math.max(stopWaitMs, deadline - now);
+    if (deadline - now > stopWaitMs) {
+      stopWaitMs = deadline - now;
+      stopRequestedAt = event.timeMs;
+    }
   }
-  return stopWaitMs > 0 ? { activity: 'stopping', waitMs: stopWaitMs } : null;
+  return stopWaitMs > 0 ? { activity: 'stopping', waitMs: stopWaitMs, sinceMs: stopRequestedAt } : null;
 }

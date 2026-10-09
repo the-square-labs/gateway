@@ -814,9 +814,11 @@ export class RelaySupervisorService implements LocalRelayOutageSignal {
       if (!wait || this.now() >= cap) return { healthy: false, observationKnown: true, observed };
       if (announced !== wait.activity) {
         announced = wait.activity;
+        // `since` is when this activity began (the exit a moment ago for `settling`), not the start of the run
+        // before it, which can be hours old.
         logger.info('Gateway relay is being handled outside the supervisor; waiting instead of restarting it', {
           activity: wait.activity,
-          startedAt: observed?.startedAt,
+          since: wait.sinceMs === null ? null : new Date(wait.sinceMs).toISOString(),
           waitMs: wait.waitMs,
         });
       }
