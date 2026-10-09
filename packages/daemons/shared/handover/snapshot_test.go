@@ -104,3 +104,57 @@ func TestSnapshotRejectsDamage(t *testing.T) {
 		t.Fatal("accepted a truncated snapshot")
 	}
 }
+
+// budgetKeeper takes every file and passes nothing on.
+type budgetKeeper struct{ kept []string }
+
+func (*budgetKeeper) HandsOver() bool { return true }
+func (k *budgetKeeper) Keep(name string, file *os.File) error {
+	k.kept = append(k.kept, name)
+	return nil
+}
+func (*budgetKeeper) Drop(string) error            { return nil }
+func (*budgetKeeper) Take(string) (*os.File, bool) { return nil, false }
+func (*budgetKeeper) Inherited(string) []string    { return nil }
+func (*budgetKeeper) Flush(time.Duration) error    { return nil }
+func (*budgetKeeper) EnvBytes([]string) int        { return 0 }
+
+// budgetItem is a stopped connection without sockets.
+type budgetItem struct{ thawed bool }
+
+func (*budgetItem) freeze()                 {}
+func (i *budgetItem) thaw()                 { i.thawed = true }
+func (*budgetItem) handedOver()             {}
+func (*budgetItem) quiescent() (bool, bool) { return true, true }
+func (*budgetItem) pinned() bool            { return false }
+
+// A handover never writes a snapshot the next process refuses as a whole
+// (maxSnapshotBytes): streams whose state no longer fits (windows up to 32 MiB
+// each way with the window extension) stay with this process, the rest goes.
+func TestKeepSocketsKeepsTheSnapshotReadable(t *testing.T) {
+	saved := snapshotItemBytes
+	snapshotItemBytes = 1000
+	defer func() { snapshotItemBytes = saved }()
+	items := []*budgetItem{{}, {}, {}, {}}
+	sizes := []int{400, 500, 200, 50}
+	var candidates []candidate
+	for i, it := range items {
+		candidates = append(candidates, candidate{it: it, files: 1,
+			snapshot: SnapshotItem{Kind: KindSession, Session: make([]byte, sizes[i])}})
+	}
+	cut := map[string]int{}
+	kept, snapshot := keepSockets(&budgetKeeper{}, candidates, cut, Options{}, time.Now())
+	// 400+256 fits; 344 left: 500+256 and 200+256 do not, 50+256 does.
+	if len(kept) != 2 || kept[0].it != items[0] || kept[1].it != items[3] {
+		t.Fatalf("kept %d items, want the first and the last", len(kept))
+	}
+	if cut[CutOverLimit] != 2 || !items[1].thawed || !items[2].thawed || items[0].thawed || items[3].thawed {
+		t.Fatalf("cut %v, thawed %v %v %v %v", cut, items[0].thawed, items[1].thawed, items[2].thawed, items[3].thawed)
+	}
+	if got := len(snapshot.Encode()); got > 1000+snapshotReserve {
+		t.Fatalf("snapshot of %d bytes", got)
+	}
+	if snapshot.Items[0].Conns[0] != connPrefix+"1" || snapshot.Items[1].Conns[0] != connPrefix+"2" {
+		t.Fatalf("keeper names %v %v", snapshot.Items[0].Conns, snapshot.Items[1].Conns)
+	}
+}

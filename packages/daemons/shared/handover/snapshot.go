@@ -127,6 +127,16 @@ func (s *Snapshot) Encode() []byte {
 	return append(buffer, sum[:]...)
 }
 
+// sizeEstimate bounds the item's encoding from above (Encode's estimate, with
+// the labels).
+func (item *SnapshotItem) sizeEstimate() int {
+	size := len(item.Session) + len(item.Pending[0]) + len(item.Pending[1]) + 256
+	for key, value := range item.Labels {
+		size += len(key) + len(value) + 16
+	}
+	return size
+}
+
 func (item *SnapshotItem) encode() []byte {
 	var buffer []byte
 	buffer = protowire.AppendTag(buffer, itemFieldKind, protowire.VarintType)

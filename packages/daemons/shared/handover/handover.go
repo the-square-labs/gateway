@@ -64,13 +64,22 @@ const (
 	// maxSnapshotBytes bounds the snapshot: the window budget of the
 	// process's streams, with room for the bytes in flight.
 	maxSnapshotBytes = 2*relayresume.DefaultProcessBudget + 64<<20
+	// snapshotReserve is the part of maxSnapshotBytes kept for what is not a
+	// connection's bytes: the tombstones and the header.
+	snapshotReserve = 32 << 20
 )
+
+// snapshotItemBytes bounds the connections' part of a snapshot (a variable for
+// the tests). A stream's state holds up to its window of unacked bytes and its
+// peer's window of received ones (32 MiB each with the window extension), and
+// the next process refuses a snapshot over maxSnapshotBytes as a whole.
+var snapshotItemBytes = maxSnapshotBytes - snapshotReserve
 
 // Cut classes of connections a handover leaves out.
 const (
 	CutBusy       = "busy"        // did not stop at a safe point in time
 	CutHandshake  = "handshake"   // its stream had no HELLO_ACK yet
-	CutOverLimit  = "over_limit"  // beyond what the keeper can pass on
+	CutOverLimit  = "over_limit"  // beyond what the keeper or the snapshot can pass on
 	CutNoSocket   = "no_socket"   // the daemon transforms its bytes (TLS)
 	CutKeepFailed = "keep_failed" // the keeper did not take its socket
 	CutNoHandover = "no_handover" // the update did not hand over at all
@@ -463,9 +472,19 @@ func (r *Registry) collect(frozenAt time.Time, cut map[string]int) ([]candidate,
 func keepSockets(keeper Keeper, candidates []candidate, cut map[string]int, opts Options, frozenAt time.Time) ([]candidate, *Snapshot) {
 	snapshot := &Snapshot{DaemonType: opts.DaemonType, FromVersion: opts.Version, CreatedAt: frozenAt}
 	budget := listenerkeep.MaxEnvBytes - keeper.EnvBytes([]string{stateName})
+	bytes := snapshotItemBytes
 	var kept []candidate
 	next := 1
 	for index, c := range candidates {
+		size := c.snapshot.sizeEstimate()
+		if size > bytes {
+			// Over what the next process reads: this one carries it on, the
+			// others still go.
+			cut[CutOverLimit]++
+			setExcluded(c.it, CutOverLimit)
+			c.it.thaw()
+			continue
+		}
 		names := make([]string, c.files)
 		cost := 0
 		for i := range names {
@@ -507,6 +526,7 @@ func keepSockets(keeper Keeper, candidates []candidate, cut map[string]int, opts
 			continue
 		}
 		budget -= cost
+		bytes -= size
 		next += c.files
 		c.snapshot.Conns, c.snapshot.Inodes = names, inodes
 		snapshot.Items = append(snapshot.Items, c.snapshot)
