@@ -404,6 +404,51 @@ describe('connections of the last update', () => {
     expect(lastUpdateConnectionsToRecord(node.metadata, stale)).toBe('skip');
   });
 
+  // rc.10 upgrade run F-3 with F-2: the new daemon restarts its whole service once right after the update from 2.11.3
+  // and reports that restart as the same update. The record keeps both cuts: one story, not two updates.
+  it('adds the service restart right after an update from a daemon without live handover to its record', async () => {
+    const { deps, node, service } = harness({ daemonVersion: 'v2.11.3', capabilities: { architecture: 'amd64' } });
+    await dispatchNodeDaemonUpdate(NODE_ID, deps);
+    const cameBack = new Date();
+    await expect(service.clearNodeUpdateInProgressOnReconnect(NODE_ID, 'v2.12.1', cameBack)).resolves.toBe(true);
+    const restart = {
+      fromVersion: 'v2.11.3',
+      toVersion: 'v2.12.1',
+      startedAtUnixMs: cameBack.getTime() + 4 * 60_000,
+      finishedAtUnixMs: cameBack.getTime() + 4 * 60_000 + 3_000,
+      handover: false,
+      handedOver: 0,
+      kept: 0,
+      cut: { service_restart: 12, connector_retired: 3 },
+      pauseP50Ms: 0,
+      pauseP99Ms: 0,
+      pauseMaxMs: 0,
+    };
+    const connections = lastUpdateConnectionsToRecord(node.metadata, restart);
+    expect(connections).toEqual({
+      fromVersion: 'v2.11.3',
+      toVersion: 'v2.12.1',
+      finishedAtUnixMs: restart.finishedAtUnixMs,
+      handover: false,
+      handedOver: 0,
+      kept: 0,
+      cut: { uncounted: 1, service_restart: 12 },
+      pauseP50Ms: 0,
+      pauseP99Ms: 0,
+      pauseMaxMs: 0,
+    });
+    await expect(service.recordLastUpdateConnections(NODE_ID, restart)).resolves.toBe(true);
+    const merged = { lastUpdate: { ...(node.metadata.lastUpdate as object), connections } };
+    // Once merged, the same report or a later one of this update changes nothing.
+    expect(lastUpdateConnectionsToRecord(merged, restart)).toBe('skip');
+    expect(
+      lastUpdateConnectionsToRecord(merged, { ...restart, finishedAtUnixMs: restart.finishedAtUnixMs + 60_000 })
+    ).toBe('skip');
+    // A report of another update, or without a service restart, does not join the record.
+    expect(lastUpdateConnectionsToRecord(node.metadata, { ...restart, fromVersion: 'v2.12.0' })).toBe('skip');
+    expect(lastUpdateConnectionsToRecord(node.metadata, { ...restart, cut: { raw_stream: 2 } })).toBe('skip');
+  });
+
   it('leaves the counts to the daemon when the one updated from hands connections over', async () => {
     const { deps, node, service } = harness();
     await dispatchNodeDaemonUpdate(NODE_ID, deps);

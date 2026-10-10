@@ -69,7 +69,12 @@ export function lastUpdateConnectionsText(connections: {
   cut: Record<string, number>;
 }): string {
   if ((connections.cut?.uncounted ?? 0) > 0) {
-    return `Kept ${connections.kept}, cut all connections of the node: the previous daemon version can't hand them over`;
+    const text = `Kept ${connections.kept}, cut all connections of the node: the previous daemon version can't hand them over`;
+    const restart = connections.cut?.service_restart ?? 0;
+    // The service restart right after such an update, for the newer launcher, belongs to the same update.
+    return restart > 0
+      ? `${text}; the whole service then restarted once for the newer launcher and cut ${restart}`
+      : text;
   }
   const total = cutTotal(connections.cut);
   if (total > 0 && total === (connections.cut?.service_restart ?? 0)) {

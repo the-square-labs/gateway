@@ -202,6 +202,51 @@ function updateWarnings(metadata: Record<string, unknown>): string[] {
     : [];
 }
 
+/** The cut class of the connections a daemon cut when it restarted its whole service for a newer launcher. */
+export const SERVICE_RESTART_CUT_CLASS = 'service_restart';
+
+/**
+ * How long after Gateway completed an update from a daemon without live handover the new daemon may restart its whole
+ * service for it: it waits for its update to commit (up to 5 min) and a launcher trial in progress (up to 3 min).
+ */
+const AFTER_UPDATE_RESTART_WINDOW_MS = 15 * 60 * 1000;
+
+/**
+ * An update from a daemon that cannot hand connections over (Gateway's `uncounted` record, see
+ * preHandoverUpdateConnections) is followed by one restart of the whole service: the new daemon starts its own launcher
+ * at once (lifecycle launcher_after_update.go, 2.11.3 to 2.11.4), and reports that restart's cut as the same update's.
+ * The record then tells both: every connection cut by the previous daemon, then the restart's cut. Null for any other
+ * report.
+ */
+function afterUpdateRestartConnections(
+  lastUpdate: Partial<NodeLastUpdate>,
+  completedAt: number,
+  reported: NodeUpdateConnectionResult
+): NodeLastUpdateConnections | null {
+  const recorded = lastUpdate.connections;
+  if (!recorded || recorded.handover !== false || (recorded.cut?.[UNCOUNTED_CUT_CLASS] ?? 0) <= 0) return null;
+  if ((recorded.cut[SERVICE_RESTART_CUT_CLASS] ?? 0) > 0) return null;
+  if ((reported.cut?.[SERVICE_RESTART_CUT_CLASS] ?? 0) <= 0) return null;
+  if (!sameVersion(recorded.fromVersion, reported.fromVersion)) return null;
+  if (!sameVersion(recorded.toVersion ?? reported.toVersion, reported.toVersion)) return null;
+  if (reported.finishedAtUnixMs <= recorded.finishedAtUnixMs) return null;
+  if (Number.isFinite(completedAt) && reported.startedAtUnixMs > completedAt + AFTER_UPDATE_RESTART_WINDOW_MS)
+    return null;
+  const cut = { ...recorded.cut };
+  for (const [connectionClass, count] of Object.entries(withoutConnectorRetired(reported.cut))) {
+    cut[connectionClass] = (cut[connectionClass] ?? 0) + count;
+  }
+  return {
+    ...recorded,
+    finishedAtUnixMs: reported.finishedAtUnixMs,
+    kept: reported.kept,
+    cut,
+    pauseP50Ms: reported.pauseP50Ms,
+    pauseP99Ms: reported.pauseP99Ms,
+    pauseMaxMs: reported.pauseMaxMs,
+  };
+}
+
 /**
  * The connections of a daemon's last update to keep in the node's update result (metadata.lastUpdate.connections).
  * 'pending' while the update the report belongs to has not completed on Gateway's side yet; 'skip' when the result
@@ -226,6 +271,8 @@ export function lastUpdateConnectionsToRecord(
   // A report of something later on the same version (a rollback to the version of an older result) is not this
   // result's (stand rc.8 O-2: a rollback's report was kept with an update completed ten hours before).
   const completedAt = typeof lastUpdate.completedAt === 'string' ? Date.parse(lastUpdate.completedAt) : Number.NaN;
+  const afterUpdateRestart = afterUpdateRestartConnections(lastUpdate, completedAt, reported);
+  if (afterUpdateRestart) return afterUpdateRestart;
   if (Number.isFinite(completedAt) && reported.startedAtUnixMs > completedAt + UPDATE_REPORT_CLOCK_SLACK_MS)
     return 'skip';
   if (lastUpdate.connections?.finishedAtUnixMs === reported.finishedAtUnixMs) return 'skip';

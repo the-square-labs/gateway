@@ -92,6 +92,12 @@ describe("last update connections", () => {
       "Kept 0, cut all connections of the node: the previous daemon version can't hand them over"
     );
   });
+
+  it("adds the service restart right after an update that cut all connections", () => {
+    expect(lastUpdateConnectionsText({ kept: 0, cut: { uncounted: 1, service_restart: 12 } })).toBe(
+      "Kept 0, cut all connections of the node: the previous daemon version can't hand them over; the whole service then restarted once for the newer launcher and cut 12"
+    );
+  });
 });
 
 describe("launcher version unknown reason", () => {
