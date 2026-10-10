@@ -159,7 +159,9 @@ export interface NodeHealthReport {
  * relay stream sessions over to the next process; what it cannot hand over is cut, by class (an open set: raw_stream,
  * postgres_tls, registry, backup, no_handover, service_restart, handshake, over_limit, resume_failed, busy,
  * idle_closed, local_closed, connector_retired, ...). In a last update, `uncounted` stands for every connection of the
- * node: the update handed nothing over and the daemon it left (2.11.4-rc.7 or earlier) did not count what it cut.
+ * node: the update handed nothing over and no daemon counted what it cut, because the daemon updated from (or the one
+ * a rollback put back) cannot hand connections over (2.11.3 and earlier; Gateway records it), or the daemon it left
+ * (2.11.4-rc.7 or earlier) did not count them.
  */
 export interface NodeUpdateConnectionsReport {
   /**

@@ -14,12 +14,20 @@ const BACKUP: NodeLongTask = { kind: 'backup', id: 'run-1', label: 'Backup of or
 const BUILD: NodeLongTask = { kind: 'build', id: 'build-1', label: 'Build of acme/web' };
 
 /** One docker node in memory; where clauses are not evaluated (the flows under test run one step at a time). */
-function harness(options: { tasks?: NodeLongTask[]; leaseMember?: boolean; metadata?: Record<string, unknown> } = {}) {
+function harness(
+  options: {
+    tasks?: NodeLongTask[];
+    leaseMember?: boolean;
+    metadata?: Record<string, unknown>;
+    daemonVersion?: string;
+    capabilities?: Record<string, unknown>;
+  } = {}
+) {
   const node = {
     id: NODE_ID,
     type: 'docker',
-    daemonVersion: 'v2.12.0',
-    capabilities: { architecture: 'amd64' },
+    daemonVersion: options.daemonVersion ?? 'v2.12.0',
+    capabilities: options.capabilities ?? { architecture: 'amd64', capabilities: ['daemon_stream_handover_v1'] },
     metadata: { ...(options.metadata ?? {}) } as Record<string, unknown>,
   };
   const sqlWrites: SQL[] = [];
@@ -362,6 +370,62 @@ describe('connections of the last update', () => {
     expect(lastUpdateConnectionsToRecord(fresh, retired)).toMatchObject({ cut: { raw_stream: 2 } });
     const freshCut = (lastUpdateConnectionsToRecord(fresh, retired) as { cut: object }).cut;
     expect(freshCut).not.toHaveProperty('connector_retired');
+  });
+
+  // rc.10 upgrade run, F-2: a 2.11.3 daemon writes no report, so the update to 2.11.4 that cut every Secure Link stream
+  // showed no kept/cut line at all.
+  it('records an update from a daemon without live handover as cutting all connections of the node', async () => {
+    const { deps, node, service } = harness({ daemonVersion: 'v2.11.3', capabilities: { architecture: 'amd64' } });
+    await dispatchNodeDaemonUpdate(NODE_ID, deps);
+    expect(node.metadata).toMatchObject({ updateFromVersion: 'v2.11.3', updateFromHandover: false });
+    const cameBack = new Date();
+    await expect(service.clearNodeUpdateInProgressOnReconnect(NODE_ID, 'v2.12.1', cameBack)).resolves.toBe(true);
+    expect(node.metadata.lastUpdate).toEqual({
+      targetVersion: 'v2.12.1',
+      completedAt: cameBack.toISOString(),
+      warnings: [],
+      connections: {
+        fromVersion: 'v2.11.3',
+        toVersion: 'v2.12.1',
+        finishedAtUnixMs: cameBack.getTime(),
+        handover: false,
+        handedOver: 0,
+        kept: 0,
+        cut: { uncounted: 1 },
+        pauseP50Ms: 0,
+        pauseP99Ms: 0,
+        pauseMaxMs: 0,
+      },
+    });
+    expect(node.metadata).not.toHaveProperty('updateFromVersion');
+    expect(node.metadata).not.toHaveProperty('updateFromHandover');
+    // A report the new daemon kept from an earlier update does not replace it.
+    const stale = { ...report, toVersion: 'v2.12.1', finishedAtUnixMs: cameBack.getTime() - 60_000 };
+    expect(lastUpdateConnectionsToRecord(node.metadata, stale)).toBe('skip');
+  });
+
+  it('leaves the counts to the daemon when the one updated from hands connections over', async () => {
+    const { deps, node, service } = harness();
+    await dispatchNodeDaemonUpdate(NODE_ID, deps);
+    expect(node.metadata).toMatchObject({ updateFromVersion: 'v2.12.0', updateFromHandover: true });
+    await expect(service.clearNodeUpdateInProgressOnReconnect(NODE_ID, 'v2.12.1')).resolves.toBe(true);
+    expect(node.metadata.lastUpdate).not.toHaveProperty('connections');
+    const fresh = { ...report, startedAtUnixMs: Date.now(), finishedAtUnixMs: Date.now() + 5_000 };
+    expect(lastUpdateConnectionsToRecord(node.metadata, fresh)).toMatchObject({ kept: 38 });
+  });
+
+  it('records a rollback onto a daemon without live handover as cutting all connections', async () => {
+    const { deps, node, service } = harness({ daemonVersion: 'v2.11.3', capabilities: { architecture: 'amd64' } });
+    await dispatchNodeDaemonUpdate(NODE_ID, deps);
+    node.metadata.updatePhase = 'reconnecting';
+    node.metadata.updateReconnectStartedAt = new Date(Date.now() - 1_000).toISOString();
+    const cameBack = new Date();
+    await expect(service.clearNodeUpdateInProgressOnReconnect(NODE_ID, 'v2.11.3', cameBack)).resolves.toBe(true);
+    expect(node.metadata.lastUpdate).toMatchObject({
+      targetVersion: 'v2.12.1',
+      rolledBackTo: 'v2.11.3',
+      connections: { fromVersion: 'v2.12.1', toVersion: 'v2.11.3', kept: 0, cut: { uncounted: 1 } },
+    });
   });
 
   it('waits for the update to complete before it records its report', async () => {

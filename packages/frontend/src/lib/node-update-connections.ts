@@ -61,14 +61,15 @@ export function describeCut(cut: Record<string, number> | undefined): string {
 
 /**
  * The connection line of the node's last update: "Kept 61, cut 0", "Kept 0, cut 22 (…)". An update the previous
- * daemon did not count (it handed nothing over, so it cut every connection) says so instead of a number.
+ * daemon did not count (it could not hand connections over, so it cut every one, e.g. the first update from 2.11.3)
+ * says so instead of a number.
  */
 export function lastUpdateConnectionsText(connections: {
   kept: number;
   cut: Record<string, number>;
 }): string {
   if ((connections.cut?.uncounted ?? 0) > 0) {
-    return `Kept ${connections.kept}, cut all connections of the node`;
+    return `Kept ${connections.kept}, cut all connections of the node: the previous daemon version can't hand them over`;
   }
   const total = cutTotal(connections.cut);
   if (total > 0 && total === (connections.cut?.service_restart ?? 0)) {

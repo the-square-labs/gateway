@@ -67,7 +67,15 @@ const NODE_UPDATE_METADATA_KEYS = [
   'updateNow',
   'updateWarnings',
   'updateServiceRestart',
+  'updateFromVersion',
+  'updateFromHandover',
 ] as const;
+
+/** The capability of a daemon that hands its connections over to the next process when it is updated. */
+export const DAEMON_STREAM_HANDOVER_CAPABILITY = 'daemon_stream_handover_v1';
+
+/** The cut class of an update that cut every connection of the node and whose daemons did not count them. */
+export const UNCOUNTED_CUT_CLASS = 'uncounted';
 
 /** What the node keeps of its last completed daemon update (metadata.lastUpdate). */
 export interface NodeLastUpdate {
@@ -148,6 +156,39 @@ function withoutConnectorRetired(cut: Record<string, number>): Record<string, nu
   return rest;
 }
 
+/**
+ * The connections of an update whose daemon could not hand them over (it predates daemon_stream_handover_v1, or the
+ * one a rollback put back does): it cut every connection of the node, and no daemon reports it, since the stopping
+ * one wrote no report (2.11.3 and earlier) or the one taking over cannot read it. Gateway records it as all connections
+ * cut (class uncounted), so the update never shows without its cut. Null when the daemon it updated from hands over,
+ * or when that is unknown (an update started before Gateway recorded it).
+ */
+export function preHandoverUpdateConnections(
+  metadata: Record<string, unknown>,
+  fromVersion: string,
+  toVersion: string,
+  at: Date
+): NodeLastUpdateConnections | null {
+  if (metadata.updateFromHandover !== false) return null;
+  return {
+    fromVersion,
+    toVersion,
+    finishedAtUnixMs: at.getTime(),
+    handover: false,
+    handedOver: 0,
+    kept: 0,
+    cut: { [UNCOUNTED_CUT_CLASS]: 1 },
+    pauseP50Ms: 0,
+    pauseP99Ms: 0,
+    pauseMaxMs: 0,
+  };
+}
+
+function hasHandoverCapability(capabilities: unknown): boolean {
+  const advertised = (capabilities as { capabilities?: unknown } | null | undefined)?.capabilities;
+  return Array.isArray(advertised) && advertised.includes(DAEMON_STREAM_HANDOVER_CAPABILITY);
+}
+
 /** A report may start this much after Gateway completed its update (clocks of node and Gateway differ). */
 const UPDATE_REPORT_CLOCK_SLACK_MS = 2 * 60 * 1000;
 
@@ -188,6 +229,9 @@ export function lastUpdateConnectionsToRecord(
   if (Number.isFinite(completedAt) && reported.startedAtUnixMs > completedAt + UPDATE_REPORT_CLOCK_SLACK_MS)
     return 'skip';
   if (lastUpdate.connections?.finishedAtUnixMs === reported.finishedAtUnixMs) return 'skip';
+  // A report that finished before the recorded one is older than this result (a report a daemon kept from an earlier
+  // update, after Gateway recorded an update that cut everything).
+  if (lastUpdate.connections && reported.finishedAtUnixMs < lastUpdate.connections.finishedAtUnixMs) return 'skip';
   // A result that holds this update's counts already is final: a later report of it (a connector replacement added to
   // its cut, see CONNECTOR_RETIRED_CUT_CLASS) does not change it.
   const recorded = lastUpdate.connections;
@@ -506,7 +550,18 @@ export class DaemonUpdateService {
       warnings?: string[];
     } = {}
   ): Promise<string> {
-    let [node] = await this.db.select({ metadata: nodes.metadata }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
+    const selectNode = () =>
+      this.db
+        .select({
+          metadata: nodes.metadata,
+          type: nodes.type,
+          daemonVersion: nodes.daemonVersion,
+          capabilities: nodes.capabilities,
+        })
+        .from(nodes)
+        .where(eq(nodes.id, nodeId))
+        .limit(1);
+    let [node] = await selectNode();
     if (!node) throw new AppError(404, 'NOT_FOUND', 'Node not found');
 
     let metadata = { ...((node.metadata ?? {}) as Record<string, unknown>) };
@@ -514,7 +569,7 @@ export class DaemonUpdateService {
       if (!(await this.expireNodeUpdateIfDue(nodeId, metadata))) {
         throw new AppError(409, 'NODE_UPDATING', 'Node daemon update is already in progress');
       }
-      [node] = await this.db.select({ metadata: nodes.metadata }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
+      [node] = await selectNode();
       if (!node) throw new AppError(404, 'NOT_FOUND', 'Node not found');
       metadata = { ...((node.metadata ?? {}) as Record<string, unknown>) };
     }
@@ -550,6 +605,12 @@ export class DaemonUpdateService {
       metadata.updateTaskWaitStartedAt = new Date(taskWaitStartedAt).toISOString();
     }
     if (options.warnings?.length) metadata.updateWarnings = options.warnings;
+    // Whether the daemon updated from hands its connections over: when it does not, the update cuts them all and only
+    // Gateway can report it (see preHandoverUpdateConnections). Monitoring and relay daemons carry none.
+    if (node.type === 'docker' || node.type === 'nginx') {
+      if (node.daemonVersion) metadata.updateFromVersion = node.daemonVersion;
+      metadata.updateFromHandover = hasHandoverCapability(node.capabilities);
+    }
 
     const updated = await this.db
       .update(nodes)
@@ -681,6 +742,14 @@ export class DaemonUpdateService {
           ? { serviceRestart: metadata.updateServiceRestart }
           : {}),
       };
+      // The daemon put back is the one updated from: one that cannot take connections over cut them all.
+      const connections = preHandoverUpdateConnections(
+        metadata,
+        metadata.updateTargetVersion,
+        rollback.to,
+        rollback.observedAt
+      );
+      if (connections) lastUpdate.connections = connections;
       metadata.lastUpdate = lastUpdate;
     }
     for (const key of NODE_UPDATE_METADATA_KEYS) delete metadata[key];
@@ -962,6 +1031,13 @@ export class DaemonUpdateService {
     if (Number.isFinite(startedAt) && observedAt < startedAt) return false;
 
     // The update's result: its target and warnings now, the daemon's connection counts once it reports them final.
+    // An update from a daemon that cannot hand connections over cut them all, which no daemon reports.
+    const connections = preHandoverUpdateConnections(
+      metadata,
+      typeof metadata.updateFromVersion === 'string' ? metadata.updateFromVersion : '',
+      reportedVersion,
+      registrationObservedAt
+    );
     const lastUpdate: NodeLastUpdate = {
       targetVersion: targetVersion || reportedVersion,
       completedAt: registrationObservedAt.toISOString(),
@@ -969,6 +1045,7 @@ export class DaemonUpdateService {
       ...(typeof metadata.updateServiceRestart === 'string' && metadata.updateServiceRestart
         ? { serviceRestart: metadata.updateServiceRestart }
         : {}),
+      ...(connections ? { connections } : {}),
     };
     for (const key of NODE_UPDATE_METADATA_KEYS) delete metadata[key];
     metadata.lastUpdate = lastUpdate;

@@ -89,7 +89,7 @@ describe("last update connections", () => {
 
   it("says all connections when the previous daemon did not count them", () => {
     expect(lastUpdateConnectionsText({ kept: 0, cut: { uncounted: 1 } })).toBe(
-      "Kept 0, cut all connections of the node"
+      "Kept 0, cut all connections of the node: the previous daemon version can't hand them over"
     );
   });
 });
