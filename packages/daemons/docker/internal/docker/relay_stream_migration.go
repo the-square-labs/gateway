@@ -40,6 +40,12 @@ func (p *DockerPlugin) relayStreams() *relayStreamSides {
 	sides := &relayStreamSides{sources: relayresume.NewManager(budget), targets: relayresume.NewTargetTable(budget)}
 	sides.sources.OnMigration = func(event relayresume.MigrationEvent) {
 		tag, _ := event.Session.Tag().(relaySourceTag)
+		if event.Trigger == relayresume.TriggerLane {
+			// Moves off a replaced lane connection are housekeeping (relay_lanes.go).
+			p.logger.Debug("relay stream moved to the lane's new connection", "owner_kind", tag.ownerKind, "owner_id", tag.ownerID,
+				"ok", event.OK, "stall", event.Stall.Round(time.Millisecond).String(), "error", event.Err)
+			return
+		}
 		if event.OK {
 			p.logger.Info("relay stream moved", "owner_kind", tag.ownerKind, "owner_id", tag.ownerID, "trigger", string(event.Trigger),
 				"from_relay", event.From, "to_relay", event.To, "stall", event.Stall.Round(time.Millisecond).String())
@@ -128,7 +134,8 @@ func (p *DockerPlugin) makeResumable(tunnel *relaySourceTunnel, assignment *pb.R
 	}
 	tag := relaySourceTag{ownerKind: assignment.GetOwnerKind(), ownerID: assignment.GetOwnerId(), routeID: assignment.GetRouteId()}
 	session, err := sides.sources.NewSource(p.relaySourceConfig(tag, assignment), relayresume.OpenedPath{Stream: tunnel.stream,
-		Cancel: tunnel.cancel, CloseSend: tunnel.closeSend, RelayID: tunnel.router.targetID, MaxFrame: tunnel.maxFrame, Generation: tunnel.generation})
+		Cancel: tunnel.cancel, CloseSend: tunnel.closeSend, RelayID: tunnel.router.targetID, MaxFrame: tunnel.maxFrame, Generation: tunnel.generation,
+		Lane: tunnel.lane})
 	if err != nil {
 		p.logger.Warn("relay stream could not be made resumable", "owner_kind", tag.ownerKind, "owner_id", tag.ownerID, "error", err)
 		return
@@ -197,7 +204,7 @@ func (p *DockerPlugin) relaySourceDialer(tag relaySourceTag) relayresume.Dialer 
 			if router == nil || !router.connected() {
 				continue
 			}
-			if request.Avoid == "" && request.FromGeneration != 0 && candidate.GetRelayInstanceId() == request.FromRelay &&
+			if !request.NewPath && request.Avoid == "" && request.FromGeneration != 0 && candidate.GetRelayInstanceId() == request.FromRelay &&
 				candidate.GetAssignmentGeneration() == request.FromGeneration {
 				return relayresume.OpenedPath{}, relayresume.ErrStay
 			}
@@ -208,7 +215,7 @@ func (p *DockerPlugin) relaySourceDialer(tag relaySourceTag) relayresume.Dialer 
 				continue
 			}
 			return relayresume.OpenedPath{Stream: tunnel.stream, Cancel: tunnel.cancel, CloseSend: tunnel.closeSend,
-				RelayID: router.targetID, MaxFrame: tunnel.maxFrame, Generation: candidate.GetAssignmentGeneration()}, nil
+				RelayID: router.targetID, MaxFrame: tunnel.maxFrame, Generation: candidate.GetAssignmentGeneration(), Lane: tunnel.lane}, nil
 		}
 		return relayresume.OpenedPath{}, err
 	}
@@ -513,6 +520,8 @@ func (p *DockerPlugin) relayStreamStats() *pb.RelayStreamStats {
 		MigrationStallP50Ms:     uint32(source.StallP50.Milliseconds()),
 		MigrationStallP95Ms:     uint32(source.StallP95.Milliseconds()),
 		ResumeRefusedTotal:      target.Refused,
+		LaneRotationsTotal:      laneRotations.Load(),
+		LaneMovesTotal:          source.LaneMoves,
 	}
 	relays := make([]string, 0, len(source.ByRelay))
 	for relay := range source.ByRelay {

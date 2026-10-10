@@ -340,6 +340,8 @@ export function gatewayStreamReport(
     migrationStallP50Ms: stats.migrationStallMs.p50,
     migrationStallP95Ms: stats.migrationStallMs.p95,
     resumeRefusedTotal: 0,
+    laneRotationsTotal: 0,
+    laneMovesTotal: 0,
     byRelay: [...byRelay].map(([relayInstanceId, counts]) => ({ relayInstanceId, ...counts })),
   };
 }

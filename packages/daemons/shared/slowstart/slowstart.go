@@ -141,3 +141,40 @@ func slowStartAhead(cwnd, ssthresh, unacked, lastDataSentMs, rtoUs uint32) bool 
 	idle := unacked == 0 && uint64(lastDataSentMs)*1000 >= uint64(rtoUs)
 	return idle && max(ssthresh, cwnd/4*3) > initialWindow
 }
+
+// State is what a connection learned of its path so far (TCP_INFO).
+type State struct {
+	// SlowStartThreshold is in segments; InfiniteThreshold before the
+	// connection ever left a slow start (no loss, no HyStart exit).
+	SlowStartThreshold uint32
+	// Bytes the connection sent (acknowledged) and received.
+	BytesAcked, BytesReceived uint64
+	// RTTUs is the smoothed round trip of what the connection sent, RcvRTTUs
+	// the receiver's estimate from what it received (0 before any), in
+	// microseconds. A connection that only acknowledges what it receives has
+	// an RTTUs inflated by the peer's delayed acks.
+	RTTUs, RcvRTTUs uint32
+}
+
+const (
+	// CollapsedThreshold and CollapsedRTT define a sender whose congestion
+	// state collapsed: a slow start threshold of a few segments (left by a
+	// retransmission timeout, or learned on a LAN) on a path long enough that
+	// growing out of it takes seconds to tens of seconds; a new connection
+	// starts without one.
+	CollapsedThreshold = 64
+	CollapsedRTT       = 10 * time.Millisecond
+)
+
+// Collapsed reports a sender whose congestion state collapsed (see
+// CollapsedThreshold).
+func (s State) Collapsed() bool {
+	return s.SlowStartThreshold < CollapsedThreshold && time.Duration(s.RTTUs)*time.Microsecond >= CollapsedRTT
+}
+
+// InfiniteThreshold is Linux's slow start threshold of a connection that never
+// left a slow start.
+const InfiniteThreshold = 0x7fffffff
+
+// ReadState reads conn's TCP state; false where the system does not tell.
+func ReadState(conn net.Conn) (State, bool) { return readState(conn) }

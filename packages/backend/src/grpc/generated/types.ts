@@ -297,6 +297,10 @@ export interface RelayStreamStats {
   byRelay?: RelayStreamRelaySessions[];
   /** Target side: resumes this daemon refused. */
   resumeRefusedTotal?: number | string;
+  /** Relay lane connections replaced because their TCP state collapsed or learned a much shorter round trip. */
+  laneRotationsTotal?: number | string;
+  /** Resumable streams moved off a replaced lane connection (housekeeping, not counted as migrations). */
+  laneMovesTotal?: number | string;
 }
 
 export interface RelayStreamRelaySessions {

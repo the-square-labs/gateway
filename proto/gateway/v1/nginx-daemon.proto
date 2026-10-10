@@ -266,6 +266,12 @@ message RelayStreamStats {
   repeated RelayStreamRelaySessions by_relay = 11;
   // Target side: resumes this daemon refused.
   uint64 resume_refused_total = 12;
+  // Relay lane connections replaced because their TCP state collapsed or
+  // learned a much shorter round trip (since the daemon started).
+  uint64 lane_rotations_total = 13;
+  // Resumable streams moved off a replaced lane connection (housekeeping,
+  // not counted as migrations).
+  uint64 lane_moves_total = 14;
 }
 
 message RelayStreamRelaySessions {

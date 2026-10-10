@@ -35,7 +35,7 @@ func (d *generationDialer) dial(ctx context.Context, request DialRequest) (Opene
 		}
 	}
 	generation := d.generation.Load()
-	if request.Avoid == "" && best == request.FromRelay && generation == request.FromGeneration {
+	if !request.NewPath && request.Avoid == "" && best == request.FromRelay && generation == request.FromGeneration {
 		return OpenedPath{}, ErrStay
 	}
 	// The harness dial takes the first live relay other than the one it avoids.
@@ -109,6 +109,37 @@ func TestRepathKeepsTheStreamOnItsRelayUnderTheNewGrant(t *testing.T) {
 		t.Fatalf("re-path request %+v", last)
 	}
 	if stats := h.mgr.Stats(); stats.MigrationsOK != 1 || stats.MigrationsFailed != 0 {
+		t.Fatalf("stats %+v", stats)
+	}
+	session.Abort(RstAborted, "done")
+}
+
+// A move off a replaced lane connection opens a new path on the same relay
+// under the same grant (the dialer gets NewPath) and is housekeeping: a lane
+// move, not a migration.
+func TestMoveOffLaneOpensANewPathOnTheSameRelay(t *testing.T) {
+	h := newHarness(t, "relay-a", "relay-b")
+	dialer, session := newGenerationStream(t, h)
+	waitPath(t, session, "relay-a", 1)
+	h.mgr.MoveOffLane(session)
+	deadline := time.Now().Add(5 * time.Second)
+	for h.mgr.Stats().LaneMoves != 1 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	waitPath(t, session, "relay-a", 1)
+	dialer.mu.Lock()
+	last := dialer.requests[len(dialer.requests)-1]
+	dialer.mu.Unlock()
+	if !last.NewPath || last.Avoid != "" || last.FromRelay != "relay-a" {
+		t.Fatalf("move request %+v", last)
+	}
+	for h.relay("relay-a").live() != 1 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if live := h.relay("relay-a").live(); live != 1 {
+		t.Fatalf("relay-a carries %d tunnels, want only the new path", live)
+	}
+	if stats := h.mgr.Stats(); stats.LaneMoves != 1 || stats.MigrationsOK != 0 || stats.MigrationsFailed != 0 {
 		t.Fatalf("stats %+v", stats)
 	}
 	session.Abort(RstAborted, "done")

@@ -186,6 +186,16 @@ func runRelayPoolTarget(
 				}
 				liveRelayTransports.add(target.ID, conn)
 				connections = append(connections, conn)
+				if dialerPlugin, ok := plugin.(RelayLaneDialerPlugin); ok {
+					// Another connection like this lane, for a plugin that replaces a lane's connection while it runs.
+					dialTarget, dialAddresses := target, addresses
+					dialerPlugin.RelayLaneDialer(conn, func(dialCtx context.Context) (*grpc.ClientConn, error) {
+						if len(dialAddresses) == 0 {
+							return connector.ConnectLaneWithRetry(dialCtx)
+						}
+						return connector.ConnectTargetAttempt(dialCtx, dialAddresses, dialTarget.CertificateIdentity, dialTarget.CertificateFingerprint)
+					})
+				}
 				go keepRelayLaneConnected(targetCtx, conn, laneDropped, laneLeftReady(plugin, target.ID, conn), laneReached(target.ID))
 				go func() {
 					plugin.RunRelayTargetTunnels(targetCtx, conn, nodeID, target.ID)
@@ -264,12 +274,16 @@ func runRelayPoolTarget(
 		liveRelayTransports.remove(target.ID, connections)
 		for _, conn := range connections {
 			_ = conn.Close()
+			forgetLane(conn)
 		}
 		if ctx.Err() == nil && !waitForControlSessionReconnect(ctx) {
 			return
 		}
 	}
 }
+
+// forgetLane drops a closed lane's socket holder (connector.LaneSocket).
+var forgetLane = connector.ForgetLane
 
 const (
 	// relayLaneRetryDelay spaces the attempts to open the lanes of a target that failed to open.

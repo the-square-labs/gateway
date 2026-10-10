@@ -13,8 +13,16 @@ func Credentials(inner credentials.TransportCredentials) credentials.TransportCr
 	return batchedCredentials{TransportCredentials: inner}
 }
 
+// CredentialsWithHook is Credentials that also hands each client connection's
+// raw side to dialed once its handshake succeeded (a relay lane keeps the
+// socket beneath it to renew it).
+func CredentialsWithHook(inner credentials.TransportCredentials, dialed func(*Conn)) credentials.TransportCredentials {
+	return batchedCredentials{TransportCredentials: inner, dialed: dialed}
+}
+
 type batchedCredentials struct {
 	credentials.TransportCredentials
+	dialed func(*Conn)
 }
 
 func (c batchedCredentials) ClientHandshake(ctx context.Context, authority string, raw net.Conn) (net.Conn, credentials.AuthInfo, error) {
@@ -22,6 +30,9 @@ func (c batchedCredentials) ClientHandshake(ctx context.Context, authority strin
 	conn, info, err := c.TransportCredentials.ClientHandshake(ctx, authority, below)
 	if err != nil {
 		return nil, nil, err
+	}
+	if c.dialed != nil {
+		c.dialed(below)
 	}
 	return Above(conn, below), info, nil
 }
@@ -36,5 +47,5 @@ func (c batchedCredentials) ServerHandshake(raw net.Conn) (net.Conn, credentials
 }
 
 func (c batchedCredentials) Clone() credentials.TransportCredentials {
-	return batchedCredentials{TransportCredentials: c.TransportCredentials.Clone()}
+	return batchedCredentials{TransportCredentials: c.TransportCredentials.Clone(), dialed: c.dialed}
 }

@@ -81,3 +81,28 @@ func restart(fd int) bool {
 	}
 	return true
 }
+
+func readState(conn net.Conn) (State, bool) {
+	sc, ok := conn.(syscall.Conn)
+	if !ok {
+		return State{}, false
+	}
+	raw, err := sc.SyscallConn()
+	if err != nil {
+		return State{}, false
+	}
+	var state State
+	read := false
+	if err := raw.Control(func(fd uintptr) {
+		info, err := unix.GetsockoptTCPInfo(int(fd), unix.IPPROTO_TCP, unix.TCP_INFO)
+		if err != nil {
+			return
+		}
+		state = State{SlowStartThreshold: info.Snd_ssthresh, BytesAcked: info.Bytes_acked, BytesReceived: info.Bytes_received, RTTUs: info.Rtt,
+			RcvRTTUs: info.Rcv_rtt}
+		read = true
+	}); err != nil {
+		return State{}, false
+	}
+	return state, read
+}

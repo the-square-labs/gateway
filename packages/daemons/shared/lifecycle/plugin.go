@@ -185,6 +185,12 @@ type RelayPoolTunnelPlugin interface {
 	RunRelayTargetTunnels(ctx context.Context, conn *grpc.ClientConn, nodeID, relayInstanceID string)
 }
 
+// RelayLaneDialerPlugin is told, before RunRelayTargetTunnels runs a lane, how to dial another connection like it
+// (the same relay, address and identity), to replace the lane's connection while it runs.
+type RelayLaneDialerPlugin interface {
+	RelayLaneDialer(conn *grpc.ClientConn, dial func(context.Context) (*grpc.ClientConn, error))
+}
+
 type RelayCandidateProbePlugin interface {
 	ProbeRelayCandidate(command *pb.ProbeRelayCandidateCommand) (detail string, err error)
 }

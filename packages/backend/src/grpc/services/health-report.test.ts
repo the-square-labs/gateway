@@ -114,6 +114,8 @@ describe('relayStreamHealth', () => {
         migrationStallP50Ms: 0,
         migrationStallP95Ms: 35,
         resumeRefusedTotal: 0,
+        laneRotationsTotal: 0,
+        laneMovesTotal: 0,
         byRelay: [{ relayInstanceId: 'relay-1', resumable: 12, legacy: 1 }],
       },
     });

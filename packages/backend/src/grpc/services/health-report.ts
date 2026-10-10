@@ -145,6 +145,8 @@ export function relayStreamHealth(raw: unknown): { relayStreams?: NodeRelayStrea
       migrationStallP50Ms: count(value.migrationStallP50Ms),
       migrationStallP95Ms: count(value.migrationStallP95Ms),
       resumeRefusedTotal: count(value.resumeRefusedTotal),
+      laneRotationsTotal: count(value.laneRotationsTotal),
+      laneMovesTotal: count(value.laneMovesTotal),
       byRelay,
     },
   };

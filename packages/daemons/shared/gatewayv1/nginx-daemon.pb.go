@@ -1743,8 +1743,14 @@ type RelayStreamStats struct {
 	ByRelay                 []*RelayStreamRelaySessions `protobuf:"bytes,11,rep,name=by_relay,json=byRelay,proto3" json:"by_relay,omitempty"`
 	// Target side: resumes this daemon refused.
 	ResumeRefusedTotal uint64 `protobuf:"varint,12,opt,name=resume_refused_total,json=resumeRefusedTotal,proto3" json:"resume_refused_total,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Relay lane connections replaced because their TCP state collapsed or
+	// learned a much shorter round trip (since the daemon started).
+	LaneRotationsTotal uint64 `protobuf:"varint,13,opt,name=lane_rotations_total,json=laneRotationsTotal,proto3" json:"lane_rotations_total,omitempty"`
+	// Resumable streams moved off a replaced lane connection (housekeeping,
+	// not counted as migrations).
+	LaneMovesTotal uint64 `protobuf:"varint,14,opt,name=lane_moves_total,json=laneMovesTotal,proto3" json:"lane_moves_total,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *RelayStreamStats) Reset() {
@@ -1857,6 +1863,20 @@ func (x *RelayStreamStats) GetByRelay() []*RelayStreamRelaySessions {
 func (x *RelayStreamStats) GetResumeRefusedTotal() uint64 {
 	if x != nil {
 		return x.ResumeRefusedTotal
+	}
+	return 0
+}
+
+func (x *RelayStreamStats) GetLaneRotationsTotal() uint64 {
+	if x != nil {
+		return x.LaneRotationsTotal
+	}
+	return 0
+}
+
+func (x *RelayStreamStats) GetLaneMovesTotal() uint64 {
+	if x != nil {
+		return x.LaneMovesTotal
 	}
 	return 0
 }
@@ -13438,7 +13458,7 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"pauseMaxMs\x1a6\n" +
 	"\bCutEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\rR\x05value:\x028\x01\"\xdc\x04\n" +
+	"\x05value\x18\x02 \x01(\rR\x05value:\x028\x01\"\xb8\x05\n" +
 	"\x10RelayStreamStats\x12-\n" +
 	"\x12resumable_sessions\x18\x01 \x01(\x04R\x11resumableSessions\x12'\n" +
 	"\x0flegacy_sessions\x18\x02 \x01(\x04R\x0elegacySessions\x12-\n" +
@@ -13452,7 +13472,9 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\x16migration_stall_p95_ms\x18\n" +
 	" \x01(\rR\x13migrationStallP95Ms\x12?\n" +
 	"\bby_relay\x18\v \x03(\v2$.gateway.v1.RelayStreamRelaySessionsR\abyRelay\x120\n" +
-	"\x14resume_refused_total\x18\f \x01(\x04R\x12resumeRefusedTotal\"|\n" +
+	"\x14resume_refused_total\x18\f \x01(\x04R\x12resumeRefusedTotal\x120\n" +
+	"\x14lane_rotations_total\x18\r \x01(\x04R\x12laneRotationsTotal\x12(\n" +
+	"\x10lane_moves_total\x18\x0e \x01(\x04R\x0elaneMovesTotal\"|\n" +
 	"\x18RelayStreamRelaySessions\x12*\n" +
 	"\x11relay_instance_id\x18\x01 \x01(\tR\x0frelayInstanceId\x12\x1c\n" +
 	"\tresumable\x18\x02 \x01(\x04R\tresumable\x12\x16\n" +

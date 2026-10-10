@@ -29,6 +29,9 @@ type DialRequest struct {
 	// A dialer whose best path is that same path answers ErrStay.
 	FromRelay      string
 	FromGeneration uint64
+	// NewPath: the move leaves the connection the path runs on (TriggerLane):
+	// the dialer opens a new path even when the relay and generation stay.
+	NewPath bool
 }
 
 // ErrStay is a dialer's answer to a planned move when the stream's current
@@ -62,6 +65,10 @@ const (
 	// TriggerReturn moves a stream from a standby or farther relay back to
 	// the nearest one.
 	TriggerReturn Trigger = "return"
+	// TriggerLane moves a stream to a new path because the connection its
+	// path runs on is replaced (its TCP state learned a path that changed).
+	// Housekeeping: not counted as a migration.
+	TriggerLane Trigger = "lane"
 )
 
 // MigrationEvent reports one finished migration attempt series (logs,
@@ -102,6 +109,7 @@ type Manager struct {
 
 	migrationsOK     atomic.Uint64
 	migrationsFailed atomic.Uint64
+	laneMoves        atomic.Uint64
 	cut              atomic.Uint64
 	retransmitted    atomic.Uint64
 	// exiting: the process exits (BeginExit); a stream it ends from now on
@@ -143,6 +151,8 @@ type plannedMove struct {
 	avoid   string
 	from    *Path
 	at      time.Time
+	// newPath: DialRequest.NewPath.
+	newPath bool
 }
 
 // stale reports a move whose stream already left what it was asked to leave.
@@ -417,10 +427,16 @@ func (m *Manager) migrate(s *Session, trigger Trigger, unplanned bool, move plan
 	// loop takes over.
 	st.observeLocked(s)
 	s.mu.Unlock()
-	if ok {
+	switch {
+	case trigger == TriggerLane:
+		// Housekeeping, not a migration a user would see.
+		if ok {
+			m.laneMoves.Add(1)
+		}
+	case ok:
 		m.migrationsOK.Add(1)
 		m.recordStall(stall)
-	} else if err != nil {
+	case err != nil:
 		m.migrationsFailed.Add(1)
 	}
 	if m.OnMigration != nil && (ok || err != nil) {
@@ -485,6 +501,7 @@ func (m *Manager) attempts(s *Session, unplanned bool, move plannedMove) (bool, 
 		}
 		if !unplanned && current != nil {
 			request.FromRelay, request.FromGeneration = current.RelayID(), currentGeneration
+			request.NewPath = move.newPath
 		}
 		ok, to, err := m.attempt(s, unplanned, request)
 		if ok {
@@ -607,6 +624,18 @@ func (m *Manager) Repath(s *Session, trigger Trigger, at time.Time) {
 		return
 	}
 	s.source.requestLocked(s, plannedMove{trigger: trigger, from: s.core.Current(), at: at})
+}
+
+// MoveOffLane moves s to a new path at once, on the same relay when that one
+// stays the best, because the connection its path runs on is replaced
+// (TriggerLane). Planned: the stream stays where it is when no path opens.
+func (m *Manager) MoveOffLane(s *Session) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.source == nil || s.core.Current() == nil {
+		return
+	}
+	s.source.requestLocked(s, plannedMove{trigger: TriggerLane, from: s.core.Current(), at: time.Now(), newPath: true})
 }
 
 // DrainRelay moves every resumable stream off relayID, spread until
@@ -738,11 +767,13 @@ func (m *Manager) recordStall(stall time.Duration) {
 // SourceStats are the source-side counters (each stream counted once, at
 // the daemon that opened it).
 type SourceStats struct {
-	Resumable          uint64
-	Legacy             uint64
-	Suspended          uint64
-	MigrationsOK       uint64
-	MigrationsFailed   uint64
+	Resumable        uint64
+	Legacy           uint64
+	Suspended        uint64
+	MigrationsOK     uint64
+	MigrationsFailed uint64
+	// LaneMoves counts moves off a replaced connection (TriggerLane).
+	LaneMoves          uint64
 	Cut                uint64
 	Retransmitted      uint64
 	Unacked            uint64
@@ -752,7 +783,7 @@ type SourceStats struct {
 
 // Stats snapshots the counters.
 func (m *Manager) Stats() SourceStats {
-	stats := SourceStats{ByRelay: map[string][2]uint64{}, MigrationsOK: m.migrationsOK.Load(), MigrationsFailed: m.migrationsFailed.Load(),
+	stats := SourceStats{ByRelay: map[string][2]uint64{}, MigrationsOK: m.migrationsOK.Load(), MigrationsFailed: m.migrationsFailed.Load(), LaneMoves: m.laneMoves.Load(),
 		Cut: m.cut.Load(), Retransmitted: m.retransmitted.Load()}
 	sessions := m.Sessions()
 	for _, s := range sessions {

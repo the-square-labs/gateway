@@ -67,6 +67,12 @@ type relayTunnelRouter struct {
 	lanesMu     sync.Mutex
 	primaryLane *relaySourceLane
 	extraLanes  []*relaySourceLane
+	// Lane rotation (relay_lanes.go), under lanesMu: lanes replaced and still carrying tunnels, when each pool lane's
+	// slot was last rotated, and whether a rotation of this relay's lanes runs.
+	retiringLanes []*relaySourceLane
+	laneRotatedAt map[*relaySourceLane]time.Time
+	rotating      bool
+	lastRotation  time.Time
 }
 
 type relayEndpointRegistration struct {
@@ -138,6 +144,7 @@ func (p *DockerPlugin) RunRelayTargetTunnels(ctx context.Context, conn *grpc.Cli
 	p.relayTunnels[relayInstanceID] = router
 	p.relayTunnelMu.Unlock()
 	go router.watchTransport(ctx, conn)
+	go router.rotateLanes(ctx)
 	defer func() {
 		router.stop()
 		p.relayTunnelMu.Lock()
@@ -527,6 +534,11 @@ func (r *relayTunnelRouter) acceptIncoming(ctx context.Context, assignment *pb.R
 		r.tunnelFailed(assignment, "ready", err)
 		return
 	}
+	if lane.socket != nil {
+		if header, headerErr := stream.Header(); headerErr == nil {
+			r.noteLaneHint(lane, header)
+		}
+	}
 	var tunnel relayFrameStream = stream
 	if request, ok := r.plugin.targetResumeRequest(assignment, incoming, r.targetID); ok {
 		accepted := r.plugin.relayStreams().targets.Accept(relayresume.OpenedPath{Stream: stream, Cancel: cancel, CloseSend: stream.CloseSend,
@@ -843,6 +855,8 @@ type relaySourceTunnel struct {
 	// update) and names the class it is counted under (live_handover.go).
 	labels   handover.Labels
 	cutClass string
+	// lane is the lane the tunnel opened on (lane rotation moves resumable streams off it).
+	lane *relaySourceLane
 }
 
 // openSource opens a source tunnel with grant and waits until the relay admits it, at most relaySourceOpenTimeout.
@@ -868,6 +882,11 @@ func (r *relayTunnelRouter) openSourceWithin(grant *pb.RelaySignedGrant, timeout
 	if err == nil {
 		first, err = stream.Recv()
 	}
+	if err == nil && lane.socket != nil {
+		if header, headerErr := stream.Header(); headerErr == nil {
+			r.noteLaneHint(lane, header)
+		}
+	}
 	if err == nil && first.GetReady() == nil {
 		err = errors.New("relay sent no ready frame")
 		if relayErr := first.GetError(); relayErr != nil {
@@ -883,7 +902,7 @@ func (r *relayTunnelRouter) openSourceWithin(grant *pb.RelaySignedGrant, timeout
 		return nil, err
 	}
 	return &relaySourceTunnel{router: r, stream: stream, closeSend: stream.CloseSend, cancel: cancel, maxFrame: int(first.GetReady().MaxFrameBytes),
-		idle: relayTunnelIdleLimit}, nil
+		idle: relayTunnelIdleLimit, lane: lane}, nil
 }
 
 // bridge carries connection over the tunnel until either side ends it.

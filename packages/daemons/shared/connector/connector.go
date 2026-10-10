@@ -103,7 +103,18 @@ func (c *Connector) connectTarget(ctx context.Context, address, serverName, cert
 		}
 		return nil
 	}
-	return grpc.NewClient(address, dialOptions(tlsCfg, true)...)
+	return newLane(address, tlsCfg)
+}
+
+// newLane dials a relay lane and keeps the socket beneath it (LaneSocket).
+func newLane(address string, tlsCfg *tls.Config) (*grpc.ClientConn, error) {
+	socket := &LaneSocket{}
+	conn, err := grpc.NewClient(address, dialOptionsWith(tlsCfg, true, socket.attach)...)
+	if err != nil {
+		return nil, err
+	}
+	laneSockets.Store(conn, socket)
+	return conn, nil
 }
 
 func (c *Connector) connect(ctx context.Context, address, serverName string, lane bool) (*grpc.ClientConn, error) {
@@ -113,6 +124,9 @@ func (c *Connector) connect(ctx context.Context, address, serverName string, lan
 	}
 
 	tlsCfg.ServerName = serverName
+	if lane {
+		return newLane(address, tlsCfg)
+	}
 	conn, err := grpc.NewClient(address, dialOptions(tlsCfg, lane)...)
 	if err != nil {
 		return nil, err
@@ -129,13 +143,18 @@ func LaneDialOptions(tlsCfg *tls.Config) []grpc.DialOption { return dialOptions(
 // and is selected by whether it is connected) and is closed once the relay
 // stops acknowledging it.
 func dialOptions(tlsCfg *tls.Config, lane bool) []grpc.DialOption {
+	return dialOptionsWith(tlsCfg, lane, nil)
+}
+
+// dialOptionsWith is dialOptions whose lane hands each new socket to dialed.
+func dialOptionsWith(tlsCfg *tls.Config, lane bool, dialed func(*tlsbatch.Conn)) []grpc.DialOption {
 	keepaliveParams := sessionKeepalive
 	if lane {
 		keepaliveParams = laneKeepalive
 	}
 	transportCredentials := credentials.NewTLS(tlsCfg)
 	if lane {
-		transportCredentials = tlsbatch.Credentials(transportCredentials)
+		transportCredentials = tlsbatch.CredentialsWithHook(transportCredentials, dialed)
 	}
 	options := []grpc.DialOption{
 		grpc.WithTransportCredentials(transportCredentials),
@@ -173,6 +192,7 @@ func (c *Connector) ConnectTargetAttempt(ctx context.Context, addresses []string
 				return conn, nil
 			}
 			_ = conn.Close()
+			ForgetLane(conn)
 		}
 		lastErr = err
 	}
@@ -205,6 +225,7 @@ func (c *Connector) connectWithRetry(ctx context.Context, lane bool) (*grpc.Clie
 				return conn, nil
 			}
 			_ = conn.Close()
+			ForgetLane(conn)
 		}
 
 		delay := Jitter(backoff, rand.Float64)

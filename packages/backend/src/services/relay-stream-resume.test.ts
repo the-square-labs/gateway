@@ -198,6 +198,8 @@ describe('relay stream reports', () => {
     migrationStallP50Ms: 0,
     migrationStallP95Ms: 0,
     resumeRefusedTotal: 0,
+    laneRotationsTotal: 0,
+    laneMovesTotal: 0,
     byRelay: byRelay.map(([relayInstanceId, resumable, legacy]) => ({ relayInstanceId, resumable, legacy })),
   });
 

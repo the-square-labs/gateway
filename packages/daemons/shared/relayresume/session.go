@@ -32,6 +32,9 @@ type OpenedPath struct {
 	// of the grant it was opened with (0 unknown). Planned moves pass it back
 	// in DialRequest.FromGeneration.
 	Generation uint64
+	// Lane is the driver's label of the connection the path runs on (opaque
+	// here; Session.CurrentLane).
+	Lane any
 }
 
 type queued struct {
@@ -800,6 +803,17 @@ func (s *Session) Moving() bool {
 }
 
 // runOf is the driver state of path (mu held).
+// CurrentLane is the driver's lane label of the current path (OpenedPath.Lane;
+// nil while suspended).
+func (s *Session) CurrentLane() any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if run := s.runOf(s.core.Current()); run != nil {
+		return run.op.Lane
+	}
+	return nil
+}
+
 func (s *Session) runOf(path *Path) *pathRun {
 	return s.paths[path]
 }

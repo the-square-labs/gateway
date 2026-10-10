@@ -207,6 +207,12 @@ export interface NodeRelayStreamReport {
   migrationStallP95Ms: number;
   /** Target side: resumes the daemon refused. */
   resumeRefusedTotal: number;
+  /**
+   * Relay lane connections the daemon replaced because their TCP state collapsed or learned a much shorter round trip
+   * (since the daemon started), and the resumable streams it moved off them (not migrations). Older daemons: 0.
+   */
+  laneRotationsTotal: number;
+  laneMovesTotal: number;
   /** Open sessions per relay they currently run through. */
   byRelay: Array<{ relayInstanceId: string; resumable: number; legacy: number }>;
 }
