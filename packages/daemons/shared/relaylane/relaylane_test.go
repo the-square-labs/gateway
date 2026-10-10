@@ -179,3 +179,37 @@ func TestFarLaneAfterRoundTripGrowthIsRotated(t *testing.T) {
 		}
 	}
 }
+
+// Inside Every a lane rotates again only when that moves no stream carrying data, and not before EveryCheap (stand
+// rc.9 F-4).
+func TestMayRotate(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	cheap := func() bool { return true }
+	costly := func() bool { return false }
+	switch {
+	case !MayRotate(time.Time{}, now, costly):
+		t.Fatal("a lane never rotated")
+	case !MayRotate(now.Add(-Every), now, costly):
+		t.Fatal("a lane rotated Every ago")
+	case MayRotate(now.Add(-EveryCheap+time.Second), now, cheap):
+		t.Fatal("a cheap lane before EveryCheap")
+	case !MayRotate(now.Add(-EveryCheap), now, cheap):
+		t.Fatal("a cheap lane after EveryCheap")
+	case MayRotate(now.Add(-5*time.Minute), now, costly):
+		t.Fatal("a lane moving busy streams inside Every")
+	}
+}
+
+// An idle lane whose round trip grew to a far path (srtt 61 ms, the kernel's minimum still the LAN's) with a
+// threshold learned on the LAN is rotated before its next transfer starts.
+func TestIdleLaneAfterRoundTripGrowthIsRotated(t *testing.T) {
+	grown := slowstart.State{SlowStartThreshold: 300, BytesAcked: 5 << 20, RTTUs: 61_000, MinRTTUs: 900, MSS: 1448}
+	if why := idleLooks(&Trigger{}, grown); why != "collapsed" {
+		t.Fatalf("idle lane after the round trip grew: %q", why)
+	}
+	fresh := grown
+	fresh.SlowStartThreshold = slowstart.InfiniteThreshold
+	if why := idleLooks(&Trigger{}, fresh); why != "" {
+		t.Fatalf("idle grown lane that never left a slow start: %q", why)
+	}
+}

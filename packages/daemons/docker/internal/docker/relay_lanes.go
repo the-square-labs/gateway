@@ -192,7 +192,10 @@ func (r *relayTunnelRouter) laneToRotate(now time.Time) (*relaySourceLane, strin
 			continue
 		}
 		r.lanesMu.Lock()
-		recent := now.Sub(r.laneRotatedAt[lane.origin]) < relaylane.Every && !r.laneRotatedAt[lane.origin].IsZero()
+		rotatedAt := r.laneRotatedAt[lane.origin]
+		r.lanesMu.Unlock()
+		recent := !relaylane.MayRotate(rotatedAt, now, func() bool { return r.cheapToRotate(lane, now) })
+		r.lanesMu.Lock()
 		if !recent {
 			if _, ok := laneDialers.Load(lane.origin.conn); ok && lane.connected() {
 				chosen, reason = lane, why
@@ -207,6 +210,23 @@ func (r *relayTunnelRouter) laneToRotate(now time.Time) (*relaySourceLane, strin
 		}
 	}
 	return chosen, reason
+}
+
+// cheapToRotate reports a lane whose rotation moves no stream that carries data (relaylane.MayRotate).
+func (r *relayTunnelRouter) cheapToRotate(lane *relaySourceLane, now time.Time) bool {
+	sides := r.plugin.relayStreamsIfAny()
+	if sides == nil {
+		return true
+	}
+	for _, sessions := range [][]*relayresume.Session{sides.sources.Sessions(), sides.targets.Sessions()} {
+		for _, session := range sessions {
+			if current, _ := session.CurrentLane().(*relaySourceLane); current == lane &&
+				!session.CheapToMove(now, relaylane.CheapQuiet, relaylane.CheapBytes) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // rotateLane dials a replacement for lane, puts it in lane's place and moves lane's resumable source streams to new

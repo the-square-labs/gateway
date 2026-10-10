@@ -168,13 +168,21 @@ type State struct {
 	LastDataSentMs uint32
 }
 
-// PathRTT is the round trip a sender's window turns over at: the kernel's
-// recent minimum where known, else the smoothed round trip.
+// FarRTT is a smoothed round trip no queue on a LAN host reaches (stand
+// rc.9: 5-19 ms on loaded hosts): at or above it the smoothed round trip is
+// the path's, also right after the path grew (the kernel's minimum still
+// holds the shorter path's for minutes then).
+const FarRTT = 30 * time.Millisecond
+
+// PathRTT is the round trip a sender's window turns over at: the smoothed
+// round trip from FarRTT on, below it the kernel's recent minimum where known
+// (what is left of a LAN round trip without the host's queues).
 func (s State) PathRTT() time.Duration {
-	if s.MinRTTUs != 0 && (s.RTTUs == 0 || s.MinRTTUs < s.RTTUs) {
-		return time.Duration(s.MinRTTUs) * time.Microsecond
+	srtt := time.Duration(s.RTTUs) * time.Microsecond
+	if srtt >= FarRTT || s.MinRTTUs == 0 || (s.RTTUs != 0 && s.MinRTTUs >= s.RTTUs) {
+		return srtt
 	}
-	return time.Duration(s.RTTUs) * time.Microsecond
+	return time.Duration(s.MinRTTUs) * time.Microsecond
 }
 
 const (

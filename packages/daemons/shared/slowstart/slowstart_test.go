@@ -80,6 +80,11 @@ func TestStaleAtThePathsRoundTrip(t *testing.T) {
 	if slow := (State{SlowStartThreshold: 411, RTTUs: 150_000, MinRTTUs: 148_000, MSS: 1448}); !slow.Slow() {
 		t.Fatal("a LAN-learned threshold on a 150 ms path is not slow")
 	}
+	// Right after the path grew the kernel's minimum still holds the LAN's; the smoothed round trip from FarRTT on is
+	// the path's.
+	if grown := (State{SlowStartThreshold: 26, RTTUs: 61_000, MinRTTUs: 900, MSS: 1448}); grown.PathRTT() != 61*time.Millisecond || !grown.Stale() {
+		t.Fatalf("grown path: %v", grown.PathRTT())
+	}
 	busy := State{DeliveryRate: 110 << 20, LastDataSentMs: 3}
 	if !busy.Busy() {
 		t.Fatal("sender at 110 MB/s is not busy")

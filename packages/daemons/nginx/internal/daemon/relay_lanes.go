@@ -115,12 +115,17 @@ func (p *NginxPlugin) relayLaneToRotate(origin *nginxRelayTunnel, now time.Time)
 		return nil, ""
 	}
 	p.relayTunnelMu.Lock()
+	rotatedAt := p.relayLaneRotatedAt[origin]
+	p.relayTunnelMu.Unlock()
+	// Outside relayTunnelMu: the sessions' locks are taken while it is free.
+	allowed := relaylane.MayRotate(rotatedAt, now, func() bool { return p.cheapToRotate(lane, now) })
+	p.relayTunnelMu.Lock()
 	defer p.relayTunnelMu.Unlock()
 	if p.relayLaneRotations == nil {
 		p.relayLaneRotations = map[string]*relayLaneRotation{}
 		p.relayLaneRotatedAt = map[*nginxRelayTunnel]time.Time{}
 	}
-	if rotatedAt, ok := p.relayLaneRotatedAt[origin]; ok && now.Sub(rotatedAt) < relaylane.Every {
+	if !allowed || !p.relayLaneRotatedAt[origin].Equal(rotatedAt) {
 		// Rotated not long ago: the relay's word is spent until the slot may rotate again.
 		lane.trigger.ClearHint()
 		return nil, ""
@@ -139,6 +144,20 @@ func (p *NginxPlugin) relayLaneToRotate(origin *nginxRelayTunnel, now time.Time)
 	relay.rotating, relay.last = true, now
 	p.relayLaneRotatedAt[origin] = now
 	return lane, reason
+}
+
+// cheapToRotate reports a lane whose rotation moves no stream that carries data (relaylane.MayRotate).
+func (p *NginxPlugin) cheapToRotate(lane *nginxRelayTunnel, now time.Time) bool {
+	if p.relayStreams == nil {
+		return true
+	}
+	for _, session := range p.relayStreams.Sessions() {
+		if current, _ := session.CurrentLane().(*nginxRelayTunnel); current == lane &&
+			!session.CheapToMove(now, relaylane.CheapQuiet, relaylane.CheapBytes) {
+			return false
+		}
+	}
+	return true
 }
 
 // replaceRelayLane dials a replacement for lane, puts it in lane's place and moves lane's resumable streams to new

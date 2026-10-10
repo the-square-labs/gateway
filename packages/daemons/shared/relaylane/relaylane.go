@@ -26,6 +26,18 @@ const (
 	// it start on the state it learned since (accepted: a real path does not
 	// change its round trip every minute).
 	Every = 10 * time.Minute
+	// EveryCheap is the shortest time between two rotations of one lane whose
+	// rotation moves no stream that carries data (see MayRotate): Every
+	// exists so streams are not moved over and over; replacing a connection
+	// that moves nothing costs one dial (stand rc.9 F-4: a far60 first GET
+	// held at 7.8 MB/s inside the 10 min).
+	EveryCheap = 30 * time.Second
+	// CheapQuiet and CheapBytes: a stream counts as moving nothing that
+	// carried no byte for CheapQuiet, or fewer than CheapBytes in all (a
+	// transfer that just started on the stale connection, which is what the
+	// rotation is for).
+	CheapQuiet = time.Second
+	CheapBytes = 4 << 20
 	// Spacing spaces the rotations of one relay's lanes: one at a time.
 	Spacing = 2 * time.Second
 	// DialTimeout bounds the dial of a replacement connection.
@@ -177,6 +189,14 @@ func (t *Trigger) Reason(state slowstart.State, known bool) string {
 		t.bulkRTT = rtt
 	}
 	return ""
+}
+
+// MayRotate reports whether a lane last rotated at rotatedAt (zero: never)
+// may rotate at now: after Every, or after EveryCheap when cheap reports
+// that its rotation moves no stream that carries data.
+func MayRotate(rotatedAt, now time.Time, cheap func() bool) bool {
+	since := now.Sub(rotatedAt)
+	return rotatedAt.IsZero() || since >= Every || (since >= EveryCheap && cheap != nil && cheap())
 }
 
 // Rotations counts lane connections replaced by this process (health).

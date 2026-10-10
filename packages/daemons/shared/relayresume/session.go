@@ -802,6 +802,15 @@ func (s *Session) Moving() bool {
 	return s.source != nil && (s.source.migrating || s.core.Current() == nil)
 }
 
+// CheapToMove reports a stream whose move costs little at now: it carried no
+// byte for quiet, or fewer than bytes in all.
+func (s *Session) CheapToMove(now time.Time, quiet time.Duration, bytes uint64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, sndNxt, rcvNxt, _ := s.core.Offsets()
+	return now.Sub(s.core.lastActivity) >= quiet || sndNxt+rcvNxt < bytes
+}
+
 // runOf is the driver state of path (mu held).
 // CurrentLane is the driver's lane label of the current path (OpenedPath.Lane;
 // nil while suspended).
