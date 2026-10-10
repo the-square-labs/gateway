@@ -3,16 +3,22 @@
 #
 # 1. Installs the base release with that release's own installer, completes setup through the API and
 #    seeds representative state: a custom group that holds retired scope names, a user in it, an API
-#    token, an uploaded certificate, a webhook with an alert rule, an nginx node and a docker node with
-#    the base daemons, a container, and a proxy host with a health check.
+#    token, an uploaded certificate, a webhook with an alert rule and a test delivery, an nginx node and a
+#    docker node with the base daemons, a container, a proxy host with a health check, a Route Secure Link
+#    to a container on the docker node and (with the private core) a container link between two containers.
 # 2. Updates to the candidate through the product (check-update, update) while probing the API and the
 #    route every second, then checks version, sessions, token, effective access, certificate, rule and
-#    nodes still on the base daemons.
+#    nodes still on the base daemons; the built-in outbound alert rule, unchanged rule/webhook/deliveries,
+#    and a folder-limited grant created after the update (subfolders yes, top level no).
 # 3. Updates the docker and nginx daemons and the relay through the product; the container must keep
-#    running and the lease watchdog must get installed.
+#    running and the lease watchdog must get installed. A stream, a byte-exact download and a TCP echo run
+#    through the Secure Links across each daemon update; the node's report of the update (kept/cut) must
+#    match what they saw, the node must show the candidate launcher and its next update must hand over.
+#    No warnings or errors in the app, relay and daemon logs beyond LOG_ALLOW.
 # 4. Runs the base updater's own rollback() on the migrated database, checks the base (license, node
 #    creation, group scopes, Pages insert), updates again and compares effective access with step 2.
-# 5. Installs the candidate fresh with the candidate's installer and completes setup and first sign-in.
+# 5. Installs the candidate fresh with the candidate's installer and completes setup and first sign-in; the
+#    upgraded install's built-in groups must equal the fresh install's.
 # 6. With GATEWAY_E2E_LICENSE_KEY set: activates the key on the base and checks that the candidate's
 #    private core is downloaded and loaded after the update. The key is deactivated before teardown.
 #
@@ -1018,6 +1024,9 @@ free_run_ports() {
   done
   echo "$(date -u +%T) still listening after 60 s on ${busy[*]}:" >>"$log"
   ss -Hltnup >>"$log" 2>&1
+  for port in "${busy[@]}"; do
+    echo "port ${port}: $(ss -Hltnu "( sport = :${port} )" 2>&1 | head -n 3)" >>"$log"
+  done
 }
 
 # Whether the base release rewrites retired scope names to their current ones when they are granted (from 2.11.0).
@@ -1181,7 +1190,12 @@ phase1_base() {
   local installer="$WORK/install-${BASE}.sh" docker_script="$WORK/setup-docker-node-${BASE}.sh" nginx_script="$WORK/setup-node-${BASE}.sh"
   local requested missing cid src
   phase 1 "Install ${BASE} and seed state"
-  feed_pin stable "gateway=${BASE}" "relay=${BASE}-relay"
+  # A base without a relay release of its own (2.11.3) installs the newest stable relay, as a customer's install did.
+  if curl -fsS -m 20 -o /dev/null -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/${REPO}/releases/tags/${BASE}-relay" 2>/dev/null; then
+    feed_pin stable "gateway=${BASE}" "relay=${BASE}-relay"
+  else
+    feed_pin stable "gateway=${BASE}"
+  fi
   curl -fsSL "${RAW_BASE}/${BASE}/scripts/install.sh" -o "$installer" &&
     curl -fsSL "${RELEASE_DOWNLOAD}/${BASE}/setup-docker-node.sh" -o "$docker_script" &&
     curl -fsSL "${RELEASE_DOWNLOAD}/${BASE}/setup-node.sh" -o "$nginx_script"
@@ -1263,6 +1277,7 @@ phase1_base() {
   touch "$WORK/route-ready"
   wait_for 150 "proxy host health" proxy_online
   check "proxy host health check online" "$(proxy_health)" proxy_online
+  seed_secure_links
 
   requested=("${GROUP_SCOPES_PLAIN[@]}" "nodes:config:edit:${FACT[nginx_node]}" "docker:volumes:create:${FACT[docker_node]}"
     "proxy:advanced:bypass:${FACT[proxy]}")
@@ -1296,10 +1311,449 @@ phase1_base() {
     "severity": "critical", "eventPattern": "offline", "webhookIds": [a[0]], "cooldownSeconds": 300}' "${FACT[webhook]}")"
   FACT[rule]="$(jx "$RESP" 'D["id"]')"
   check "alert rule bound to the webhook" "HTTP ${CODE} ${FACT[rule]}" test -n "${FACT[rule]}" || return 1
+  seed_alert_history
 
   say "base access: $(access_snapshot base)"
   check_license_guard
-  pass "base state seeded" "group, operator, token, certificate, webhook + rule, 2 nodes, container, proxy host"
+  pass "base state seeded" "group, operator, token, certificate, webhook + rule + delivery, 2 nodes, containers, proxy host, Route Secure Link$([[ -n "${FACT[echo_link]}" ]] && echo ', container link')"
+}
+
+# ── 2.11.4 path: Secure Link, alerts, folders, launcher, logs ─────────
+
+# One script for every helper workload (MODE): `http` serves /ok, a deterministic /blob at ?rate= bytes per second and
+# a chunked /stream of numbered lines; `echo` echoes TCP on 7000; `echo-client` keeps one TCP connection to
+# TARGET:7000, checks every echo and prints CUT <epoch> on each failure (then reconnects).
+WORKLOAD_IMAGE="python:3.12-alpine"
+SECURE_LINK_DOMAIN="sl.e2e.test"
+BLOB_BYTES=33554432
+BLOB_SEED=20261010
+BLOB_RATE=196608
+# Warnings and errors this environment causes on purpose; every other warning or error line fails the log check.
+LOG_ALLOW=(
+  # The DNS guard answers NXDOMAIN for the license server outside update windows (see --license-server).
+  'license[^"]*(ENOTFOUND|EAI_AGAIN|getaddrinfo|fetch failed|unreachable)'
+  'ENOTFOUND license\.thesqlabs\.com'
+  # The seeded webhook points at example.com, which does not accept the POST.
+  'gateway-e2e-webhook'
+  # The run's own refusal probes: a folder-limited token at the top level, a daemon update to the version it runs.
+  'Managing top-level folders and ungrouped items requires proxy:folders:manage'
+  '"path":"/api/proxy-host-folders".*"status":403'
+  'NO_UPDATE_AVAILABLE'
+  '"path":"/api/system/daemon-updates/[^"]*".*"status":409'
+  # An unprivileged LXC host has no loop devices for disk-image volumes.
+  'disk-image volume support unavailable.*loop-control'
+)
+
+workload_script() {
+  cat <<'PY'
+import os, random, socket, threading, time
+MODE = os.environ['MODE']
+if MODE == 'http':
+    import http.server
+    SIZE = int(os.environ['BLOB_BYTES'])
+    DATA = random.Random(int(os.environ['BLOB_SEED'])).randbytes(SIZE)
+    class H(http.server.BaseHTTPRequestHandler):
+        protocol_version = 'HTTP/1.1'
+        def log_message(self, *a):
+            pass
+        def head(self, length=None, kind='text/plain'):
+            self.send_response(200)
+            self.send_header('Content-Type', kind)
+            self.send_header('X-Accel-Buffering', 'no')
+            if length is None:
+                self.send_header('Transfer-Encoding', 'chunked')
+            else:
+                self.send_header('Content-Length', str(length))
+            self.end_headers()
+        def do_GET(self):
+            path, _, query = self.path.partition('?')
+            args = dict(p.split('=', 1) for p in query.split('&') if '=' in p)
+            if path == '/ok':
+                self.head(3)
+                self.wfile.write(b'ok\n')
+            elif path == '/blob':
+                rate = int(args.get('rate', '262144'))
+                chunk = max(4096, rate // 10)
+                self.head(SIZE, 'application/octet-stream')
+                for i in range(0, SIZE, chunk):
+                    self.wfile.write(DATA[i:i + chunk])
+                    time.sleep(chunk / rate)
+            elif path == '/stream':
+                end = time.time() + int(args.get('seconds', '600'))
+                self.head()
+                n = 0
+                while time.time() < end:
+                    line = ('%d %.3f\n' % (n, time.time())).encode()
+                    self.wfile.write(b'%x\r\n%s\r\n' % (len(line), line))
+                    self.wfile.flush()
+                    n += 1
+                    time.sleep(0.5)
+                self.wfile.write(b'0\r\n\r\n')
+            else:
+                self.send_response(404)
+                self.send_header('Content-Length', '0')
+                self.end_headers()
+    http.server.ThreadingHTTPServer(('', 8080), H).serve_forever()
+elif MODE == 'echo':
+    s = socket.socket()
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(('', 7000))
+    s.listen(64)
+    def serve(c):
+        with c:
+            while True:
+                d = c.recv(65536)
+                if not d:
+                    return
+                c.sendall(d)
+    while True:
+        c, _ = s.accept()
+        threading.Thread(target=serve, args=(c,), daemon=True).start()
+else:
+    n = 0
+    while True:
+        try:
+            c = socket.create_connection((os.environ['TARGET'], 7000), timeout=5)
+            c.settimeout(10)
+            print('CONNECTED %.3f' % time.time(), flush=True)
+            while True:
+                msg = ('%d\n' % n).encode()
+                c.sendall(msg)
+                got = b''
+                while len(got) < len(msg):
+                    d = c.recv(len(msg) - len(got))
+                    if not d:
+                        raise OSError('closed by peer')
+                    got += d
+                if got != msg:
+                    raise OSError('echo mismatch')
+                n += 1
+                if n % 120 == 0:
+                    print('OK %d %.3f' % (n, time.time()), flush=True)
+                time.sleep(0.5)
+        except Exception as e:
+            print('CUT %.3f %s' % (time.time(), e), flush=True)
+            time.sleep(1)
+PY
+}
+
+# create_workload NAME MODE [KEY=VALUE...]: creates and starts a helper container on the docker node through Gateway.
+create_workload() {
+  local name="$1" mode="$2" script
+  shift 2
+  script="$(workload_script | base64 -w0)"
+  api POST "/api/docker/nodes/${FACT[docker_node]}/containers" "$(mkjson '{"image": a[0], "name": a[1], "restartPolicy": "unless-stopped",
+    "env": dict([("MODE", a[2]), ("E2E_SCRIPT", a[3]), ("BLOB_BYTES", a[4]), ("BLOB_SEED", a[5])] + [p.split("=", 1) for p in a[6:]]),
+    "command": ["sh", "-c", "echo \"$E2E_SCRIPT\" | base64 -d > /tmp/e2e.py && exec python3 -u /tmp/e2e.py"]}' \
+    "$WORKLOAD_IMAGE" "$name" "$mode" "$script" "$BLOB_BYTES" "$BLOB_SEED" "$@")"
+  [[ "$CODE" == 201 ]] || return 1
+  api POST "/api/docker/nodes/${FACT[docker_node]}/containers/$(jx "$RESP" 'D["id"]')/start"
+  [[ "$CODE" =~ ^2 ]]
+}
+
+sl_get() { curl -fsS -m "${2:-5}" --resolve "${SECURE_LINK_DOMAIN}:80:127.0.0.1" "http://${SECURE_LINK_DOMAIN}$1"; }
+sl_ok() { [[ "$(sl_get /ok 2>/dev/null)" == ok ]]; }
+
+# Base: a Route Secure Link (proxy host -> container on the docker node, no host port) and a container link between
+# two containers. Failures here are recorded and the run goes on without the live Secure Link checks.
+seed_secure_links() {
+  local rc
+  api POST "/api/docker/nodes/${FACT[docker_node]}/images/pull-sync" "$(mkjson '{"imageRef": a[0]}' "$WORKLOAD_IMAGE")"
+  check "helper image pulled through Gateway" "HTTP ${CODE} ${WORKLOAD_IMAGE}" test "$CODE" = 200 || return 1
+  create_workload e2e-sl http
+  rc=$?
+  check "Secure Link target container started" "HTTP ${CODE} e2e-sl (python, port 8080, no host port) $(short "$RESP" 160)" test "$rc" = 0 || return 1
+  api POST /api/proxy-hosts "$(mkjson '{"type": "proxy", "nodeId": a[0], "domainNames": [a[1]], "upstreamKind": "docker_container",
+    "dockerNodeId": a[2], "dockerContainerName": "e2e-sl", "dockerContainerPort": 8080, "forwardScheme": "http",
+    "sslEnabled": False, "websocketSupport": True}' "${FACT[nginx_node]}" "$SECURE_LINK_DOMAIN" "${FACT[docker_node]}")"
+  FACT[sl_proxy]="$(jx "$RESP" 'D["id"]')"
+  check "Route Secure Link created (proxy host -> container e2e-sl:8080)" "HTTP ${CODE} ${FACT[sl_proxy]} $([[ -n "${FACT[sl_proxy]}" ]] || short "$RESP" 200)" \
+    test -n "${FACT[sl_proxy]}" || return 1
+  wait_for 180 "route ${SECURE_LINK_DOMAIN}" sl_ok
+  check "Route Secure Link serves" "http://${SECURE_LINK_DOMAIN}/ok via the nginx node -> relay -> docker node" sl_ok || return 1
+  FACT[sl_ready]=1
+  FACT[sl_identity]="$(container_identity e2e-sl)"
+  FACT[blob_sha]="$(python3 -c 'import hashlib,random,sys;print(hashlib.sha256(random.Random(int(sys.argv[2])).randbytes(int(sys.argv[1]))).hexdigest())' "$BLOB_BYTES" "$BLOB_SEED")"
+
+  create_workload e2e-echo echo
+  rc=$?
+  check "container link target started" "HTTP ${CODE} e2e-echo (TCP echo on 7000) $(short "$RESP" 160)" test "$rc" = 0 ||
+    { FACT[echo_skip]="the echo target did not start"; return 0; }
+  create_workload e2e-echo-client echo-client TARGET=e2e-echo
+  rc=$?
+  check "container link consumer started" "HTTP ${CODE} e2e-echo-client $(short "$RESP" 160)" test "$rc" = 0 ||
+    { FACT[echo_skip]="the echo client did not start"; return 0; }
+  api POST /api/docker/container-links "$(mkjson '{"sourceNodeId": a[0], "sourceType": "container", "sourceResourceId": "e2e-echo-client",
+    "targetNodeId": a[0], "targetType": "container", "targetResourceId": "e2e-echo", "targetPort": 7000, "alias": "e2e-echo"}' "${FACT[docker_node]}")"
+  if grep -q COMMERCIAL_MODULE_UNAVAILABLE "$RESP" 2>/dev/null; then
+    FACT[echo_skip]="container links need the private core (Community answers COMMERCIAL_MODULE_UNAVAILABLE); set GATEWAY_E2E_LICENSE_KEY"
+    skip "container link between two containers" "${FACT[echo_skip]}"
+    return 0
+  fi
+  FACT[echo_link]="$(jx "$RESP" 'D["id"]')"
+  check "container link created (e2e-echo-client -> e2e-echo:7000)" "HTTP ${CODE} ${FACT[echo_link]} $(short "$RESP" 160)" \
+    test -n "${FACT[echo_link]}" || { FACT[echo_skip]="the container link was not created"; return 0; }
+  wait_for 120 "echo through the container link" echo_flowing
+  check "TCP echo flows through the container link" "$(docker logs e2e-echo-client 2>&1 | grep -E '^(CONNECTED|OK)' | tail -n1)" echo_flowing ||
+    FACT[echo_skip]="echo never flowed on the base"
+}
+
+echo_flowing() { docker logs e2e-echo-client 2>&1 | grep -q '^OK '; }
+
+# echo_cuts START_MS END_MS: echo failures the client saw in the window.
+echo_cuts() {
+  docker logs e2e-echo-client 2>&1 | awk -v s="$1" -v e="$2" '$1 == "CUT" && $2 * 1000 >= s && $2 * 1000 <= e' | wc -l
+}
+
+# live_start LABEL: a long chunked stream and a throttled byte-exact download through the Route Secure Link.
+live_start() {
+  local label="$1"
+  mkdir -p "$WORK/live"
+  rm -f "$WORK/live/${label}".*
+  start_background "stream-${label}" sh -c 'curl -sS -N -m 3000 --resolve "$1:80:127.0.0.1" "http://$1/stream?seconds=2400" -o "$2.stream" 2>"$2.stream.err"
+    echo "$? $(date +%s%3N)" >"$2.stream.status"' sh "$SECURE_LINK_DOMAIN" "$WORK/live/${label}"
+  start_background "blob-${label}" sh -c 'curl -sS -m 1800 --resolve "$1:80:127.0.0.1" "http://$1/blob?rate=$3" -o "$2.blob" 2>"$2.blob.err"
+    echo "$? $(date +%s%3N)" >"$2.blob.status"' sh "$SECURE_LINK_DOMAIN" "$WORK/live/${label}" "$BLOB_RATE"
+  sleep 5
+  FACT["live_${label}_start"]="$(now_ms)"
+}
+
+last_update_connections() {
+  api GET "/api/nodes/$1"
+  jx "$RESP" '(D.get("metadata") or {}).get("lastUpdate", {}).get("connections")'
+}
+last_update_settled() {
+  api GET "/api/nodes/$1"
+  [[ "$(jx "$RESP" '(lambda c: bool(c) and str(c.get("toVersion", "")).lstrip("v") == args[0].lstrip("v"))((D.get("metadata") or {}).get("lastUpdate", {}).get("connections"))' "$2")" == true ]]
+}
+
+# live_verdict LABEL NODE TARGET: what the clients saw across the update against what the node's last update reports.
+live_verdict() {
+  local label="$1" node="$2" target="$3" base="$WORK/live/$1" end_ms stream blob echo report seen=0 live=0 sum
+  if [[ "${FACT[sl_ready]}" != 1 ]]; then
+    skip "${label} daemon update: live Secure Link traffic" "the base Route Secure Link was not set up"
+    return 0
+  fi
+  wait_for 240 "${label} node last update report" last_update_settled "$node" "$target"
+  end_ms="$(now_ms)"
+  # Stream: still running = kept; ended = cut (it asks for 40 minutes).
+  if [[ -f "${base}.stream.status" ]]; then
+    stream="cut: curl exit $(cut -d' ' -f1 "${base}.stream.status") after $(wc -l <"${base}.stream" 2>/dev/null) lines ($(short "${base}.stream.err" 120))"
+    seen=$((seen + 1))
+  else
+    stream="kept: $(wc -l <"${base}.stream" 2>/dev/null) lines, last $(tail -n1 "${base}.stream" 2>/dev/null | cut -d' ' -f1), still open"
+    live=$((live + 1))
+  fi
+  # Download: finished byte-exact, visibly cut, or (FAIL) finished with other bytes.
+  wait_for 300 "${label} download" test -f "${base}.blob.status"
+  sum="$(sha256sum "${base}.blob" 2>/dev/null | cut -d' ' -f1)"
+  if [[ "$(cut -d' ' -f1 "${base}.blob.status" 2>/dev/null)" == 0 ]]; then
+    blob="complete, $(stat -c %s "${base}.blob") bytes, sha256 ${sum:0:12} (expected ${FACT[blob_sha]:0:12})"
+    # A download still running when the node came back was carried across the update.
+    [[ "$(cut -d' ' -f2 "${base}.blob.status")" -ge "${FACT[live_${label}_online_ms]:-0}" ]] && live=$((live + 1))
+    check "${label} daemon update: download through the Route Secure Link is byte-exact" "$blob" test "$sum" = "${FACT[blob_sha]}"
+  else
+    blob="cut: curl exit $(cut -d' ' -f1 "${base}.blob.status" 2>/dev/null) after $(stat -c %s "${base}.blob" 2>/dev/null || echo 0) of ${BLOB_BYTES} bytes ($(short "${base}.blob.err" 120))"
+    seen=$((seen + 1))
+    pass "${label} daemon update: download through the Route Secure Link ended visibly (not silently truncated)" "$blob"
+  fi
+  if [[ -n "${FACT[echo_link]}" && -z "${FACT[echo_skip]}" ]]; then
+    echo="$(echo_cuts "${FACT[live_${label}_start]}" "$end_ms")"
+    if [[ "$label" == docker* ]]; then
+      if ((echo > 0)); then seen=$((seen + 1)); else live=$((live + 1)); fi
+    fi
+    echo="container link echo: ${echo} cuts in the window"
+  else
+    echo="container link echo: not checked (${FACT[echo_skip]:-no link})"
+  fi
+  stop_background "stream-${label}" "blob-${label}"
+  report="$(last_update_connections "$node")"
+  echo "$report" >"$WORK/json/last-update-${label}.json"
+  api GET "/api/nodes/${node}"
+  keep_json "node-${label}-after-update"
+  say "${label} update: stream ${stream}; download ${blob}; ${echo}; node reports ${report:-nothing}; serviceRestart: $(jx "$RESP" '(D.get("metadata") or {}).get("lastUpdate", {}).get("serviceRestart")')"
+  check "${label} daemon update: node reports its last update's connections" "${report:-no metadata.lastUpdate.connections}" test -n "$report" || return 0
+  # Clients cut -> the report counts at least that many cut and never only kept; clients kept -> at least that many kept.
+  check "${label} daemon update: reported kept/cut matches the clients (${seen} cut, ${live} kept)" \
+    "kept $(window_value "$report" 'D["kept"]'), cut $(window_value "$report" 'D["cut"]'), handover $(window_value "$report" 'D["handover"]')" \
+    test "$(window_value "$report" '(sum(D["cut"].values()) >= int(args[0]) and not (D["kept"] > 0 and sum(D["cut"].values()) == 0)) if int(args[0]) else D["kept"] >= int(args[1])' "$seen" "$live")" = true
+  if ! base_has_launcher_report; then
+    # The base launcher predates launcher self-update: this first update restarts the whole service once.
+    check "${label} daemon update from the ${BASE} launcher reported as cuts, not kept" \
+      "kept $(window_value "$report" 'D["kept"]'), cut $(window_value "$report" 'D["cut"]'); clients: ${seen} cut, ${live} kept" \
+      test "$(window_value "$report" 'D["kept"] == 0 and sum(D["cut"].values()) > 0')" = true
+  fi
+  check "Secure Link target not restarted by the ${label} daemon update" "$(container_identity e2e-sl | cut -d' ' -f2-)" \
+    test "$(container_identity e2e-sl)" = "${FACT[sl_identity]}"
+}
+
+# Whether the base daemons report their launcher (from 2.11.4 on).
+base_has_launcher_report() {
+  local major minor patch
+  IFS=. read -r major minor patch <<<"${BASE#v}"
+  ((major > 2 || (major == 2 && (minor > 11 || (minor == 11 && ${patch%%-*} >= 4)))))
+}
+
+# After the daemon updates: the launcher the node runs and whether the next update keeps connections.
+check_launcher() {
+  local type id launcher handover
+  for type in docker nginx; do
+    id="${FACT[${type}_node]}"
+    api GET "/api/nodes/${id}"
+    launcher="$(jx "$RESP" '(D.get("capabilities") or {}).get("launcherVersion")')"
+    check "${type} node details show the ${CANDIDATE#v} launcher" "launcherVersion ${launcher:-unreported}, daemon $(jx "$RESP" 'D.get("daemonVersion")')" \
+      test "${launcher#v}" = "${CANDIDATE#v}"
+    wait_for 90 "${type} update preview" update_preview_reported "$id"
+    handover="$(jx "$RESP" '((D.get("lastHealthReport") or {}).get("updateConnections") or {}).get("handoverAvailable")')"
+    check "${type} node: the next daemon update hands connections over" \
+      "updateConnections $(jx "$RESP" '{k: v for k, v in ((D.get("lastHealthReport") or {}).get("updateConnections") or {}).items() if k != "lastUpdate"}')" \
+      test "$handover" = true
+  done
+  api POST "/api/system/daemon-updates/${FACT[docker_node]}"
+  if [[ "$CODE" =~ ^2 ]]; then
+    local target
+    target="$(jx "$RESP" 'D["targetVersion"]')"
+    [[ "${FACT[sl_ready]}" == 1 ]] && live_start docker-again
+    wait_for 300 "docker daemon ${target} again" node_online_with "${FACT[docker_node]}" "$target"
+    FACT[live_docker-again_online_ms]="$(now_ms)"
+    live_verdict docker-again "${FACT[docker_node]}" "$target"
+  else
+    skip "re-run the docker daemon update to ${CANDIDATE} (in place)" "the product refuses it: HTTP ${CODE} $(short "$RESP" 160); the next update is judged by handoverAvailable above"
+  fi
+}
+
+update_preview_reported() {
+  api GET "/api/nodes/$1"
+  [[ -n "$(jx "$RESP" '((D.get("lastHealthReport") or {}).get("updateConnections") or {}).get("handoverAvailable")')" ]]
+}
+
+# Alerts on the base: a test delivery for the history, and the rule and webhook as the base stores them.
+seed_alert_history() {
+  api POST "/api/notifications/webhooks/${FACT[webhook]}/test"
+  say "base webhook test delivery: HTTP ${CODE} $(short "$RESP" 120)"
+  api GET "/api/notifications/deliveries?webhookId=${FACT[webhook]}&limit=100"
+  jx "$RESP" 'sorted(x["id"] for x in items(d))' >"$WORK/json/base-delivery-ids.json"
+  check "base delivery history recorded" "$(jx "$WORK/json/base-delivery-ids.json" 'len(d)') deliveries for e2e-webhook" \
+    test "$(jx "$WORK/json/base-delivery-ids.json" 'len(d)')" -ge 1
+  alert_snapshot base
+}
+
+alert_snapshot() {
+  api GET "/api/notifications/alert-rules"
+  jx "$RESP" '[{k: r.get(k) for k in ("name", "enabled", "type", "category", "severity", "eventPattern", "webhookIds", "cooldownSeconds")} for r in items(d) if r["id"] == args[0]]' \
+    "${FACT[rule]}" >"$WORK/json/rule-$1.json"
+  api GET "/api/notifications/webhooks/${FACT[webhook]}"
+  jx "$RESP" '{k: D.get(k) for k in ("name", "url", "method", "enabled")}' >"$WORK/json/webhook-$1.json"
+}
+
+check_alerts_migrated() {
+  local label="$1" rule
+  api GET "/api/notifications/alert-rules"
+  keep_json "alert-rules-${label// /-}"
+  rule="$(jx "$RESP" '[r for r in items(d) if r.get("category") == "gateway" and r.get("eventPattern") == "outbound.unavailable"]')"
+  check "${label}: built-in \"Gateway lost outbound connectivity\" rule exists once" \
+    "$(window_value "$rule" '[(r.get("name"), r.get("isBuiltin")) for r in D]')" \
+    test "$(window_value "$rule" 'len(D) == 1 and D[0].get("name") == "Gateway lost outbound connectivity"')" = true
+  check "${label}: built-in rule enabled, marked built-in, bound to the proxy/node rules' webhooks" \
+    "$(window_value "$rule" '[(r.get("enabled"), r.get("isBuiltin"), r.get("webhookIds")) for r in D]'), expected webhook ${FACT[webhook]}" \
+    test "$(window_value "$rule" 'len(D) == 1 and D[0].get("enabled") is True and D[0].get("isBuiltin") is True and sorted(D[0].get("webhookIds") or []) == [args[0]]' "${FACT[webhook]}")" = true
+  alert_snapshot "${label// /-}"
+  check "${label}: existing alert rule unchanged" "$(cat "$WORK/json/rule-${label// /-}.json")" \
+    cmp -s "$WORK/json/rule-base.json" "$WORK/json/rule-${label// /-}.json"
+  check "${label}: existing webhook unchanged" "$(cat "$WORK/json/webhook-${label// /-}.json")" \
+    cmp -s "$WORK/json/webhook-base.json" "$WORK/json/webhook-${label// /-}.json"
+  api GET "/api/notifications/deliveries?webhookId=${FACT[webhook]}&limit=100"
+  check "${label}: delivery history preserved" \
+    "base ids missing now: $(jx "$RESP" '[i for i in json.load(open(args[0])) if i not in [x["id"] for x in items(d)]]' "$WORK/json/base-delivery-ids.json")" \
+    test "$(jx "$RESP" '[i for i in json.load(open(args[0])) if i not in [x["id"] for x in items(d)]]' "$WORK/json/base-delivery-ids.json")" = "[]"
+}
+
+builtin_groups_snapshot() {
+  api GET /api/admin/groups
+  jx "$RESP" '{g["name"]: sorted(g.get("scopes") or []) for g in items(d) if g.get("isBuiltin")}' >"$WORK/json/builtin-groups-$1.json"
+}
+
+# compare_builtin_groups SNAP: the upgraded install's built-in groups against the candidate's fresh install.
+compare_builtin_groups() {
+  local result
+  result="$(python3 - "$WORK/json/builtin-groups-$1.json" "$WORK/json/builtin-groups-fresh.json" <<'PY'
+import json, sys
+a, b = (json.load(open(p)) for p in sys.argv[1:3])
+out = []
+for name in sorted(set(a) | set(b)):
+    lost, extra = sorted(set(b.get(name, [])) - set(a.get(name, []))), sorted(set(a.get(name, [])) - set(b.get(name, [])))
+    if name not in a or name not in b:
+        out.append(f'{name}: only in {"fresh" if name in b else "upgraded"}')
+    elif lost or extra:
+        out.append(f'{name}: missing {lost} extra {extra}')
+print('; '.join(out) or f'identical ({", ".join(f"{n} {len(b[n])}" for n in sorted(b))})')
+sys.exit(1 if out else 0)
+PY
+)"
+  check "built-in groups after the ${1} match ${CANDIDATE}'s definitions (fresh install)" "$result" \
+    python3 -c 'import json,sys;sys.exit(json.load(open(sys.argv[1])) != json.load(open(sys.argv[2])))' \
+    "$WORK/json/builtin-groups-$1.json" "$WORK/json/builtin-groups-fresh.json"
+}
+
+# A folder-scoped grant created after the update: a token that manages one route folder creates a subfolder in it
+# (and one level deeper) and is refused at the top level.
+check_folder_grant() {
+  local label="$1" folder ftoken sub code
+  api POST /api/proxy-host-folders '{"name":"e2e-folder"}'
+  folder="$(jx "$RESP" 'D["id"]')"
+  check "${label}: route folder created" "HTTP ${CODE} ${folder}" test -n "$folder" || return 0
+  api POST /api/tokens "$(mkjson '{"name": "e2e-folder-token", "scopes": ["proxy:view", "proxy:folders:manage:folder/" + a[0]]}' "$folder")"
+  ftoken="$(jx "$RESP" 'D["token"]')"
+  check "${label}: folder-limited token created" "HTTP ${CODE} scopes $(jx "$RESP" 'D.get("scopes")') $([[ -n "$ftoken" ]] || short "$RESP" 200)" \
+    test -n "$ftoken" || return 0
+  fapi() { CODE="$(curl_code -ksS -m 30 -o "$WORK/resp.json" -w '%{http_code}' -X POST -H "Authorization: Bearer ${ftoken}" \
+    -H 'Content-Type: application/json' --data-binary "$1" "$API/api/proxy-host-folders")"; RESP="$WORK/resp.json"; }
+  fapi "$(mkjson '{"name": "e2e-sub", "parentId": a[0]}' "$folder")"
+  sub="$(jx "$RESP" 'D["id"]')"
+  check "${label}: folder-limited manager creates a subfolder" "HTTP ${CODE} ${sub} $([[ -n "$sub" ]] || short "$RESP" 160)" test -n "$sub"
+  if [[ -n "$sub" ]]; then
+    fapi "$(mkjson '{"name": "e2e-sub-sub", "parentId": a[0]}' "$sub")"
+    check "${label}: folder grant reaches the subfolder's subfolders" "HTTP ${CODE} $(short "$RESP" 160)" test "$CODE" = 201
+  fi
+  fapi '{"name":"e2e-root-refused"}'
+  code="$CODE"
+  check "${label}: folder-limited manager refused at the top level" "HTTP ${code} $(short "$RESP" 160)" test "$code" = 403
+}
+
+# check_logs LABEL SINCE_EPOCH: warnings and errors of the app, the relay and the daemons since SINCE, against LOG_ALLOW.
+check_logs() {
+  local label="$1" since="$2" out="$WORK/logs/warnings-${1// /-}.txt" bad
+  {
+    docker logs --since "$since" "$(service_id app)" 2>&1 | sed 's/^/app: /'
+    docker logs --since "$since" "$(service_id relay)" 2>&1 | sed 's/^/relay: /'
+    journalctl -u docker-daemon -u nginx-daemon -u gateway-lease-watchdog --since "@${since}" --no-pager -o cat 2>/dev/null | sed 's/^/daemon: /'
+  } | grep -aiE '"level":"?(warn|warning|error|fatal|40|50|60)("|,)|level=(WARN|ERROR)' >"$out"
+  bad="$(python3 - "$out" "${LOG_ALLOW[@]}" <<'PY'
+import collections, json, re, sys
+allow = [re.compile(p, re.I) for p in sys.argv[2:]]
+groups = collections.OrderedDict()
+for line in open(sys.argv[1], errors='replace'):
+    line = line.rstrip('\n')
+    source, _, body = line.partition(': ')
+    key = body
+    try:
+        j = json.loads(body)
+        key = '%s %s' % (j.get('level'), j.get('msg') or j.get('message'))
+    except Exception:
+        key = re.sub(r'time=\S+|\d{4}-\d\d-\d\dT[\d:.]+Z?|[0-9a-f]{8}-[0-9a-f-]{27}', '', body)[:200]
+    allowed = any(p.search(line) for p in allow)
+    g = groups.setdefault((source, key, allowed), [0, allowed, body[:400]])
+    g[0] += 1
+bad = 0
+for (source, key, _), (n, allowed, sample) in groups.items():
+    print(('ALLOWED  ' if allowed else 'UNEXPECTED ') + '%s x%d: %s' % (source, n, sample), file=sys.stderr)
+    bad += 0 if allowed else 1
+print(bad)
+PY
+)" 2>"${out%.txt}-grouped.txt"
+  sed 's/^/    /' "${out%.txt}-grouped.txt" | head -n 40
+  check "${label}: no warnings or errors in app, relay and daemon logs beyond the allow-list" \
+    "$(grep -c . "$out") lines, ${bad:-?} unexpected kinds (logs/$(basename "${out%.txt}-grouped.txt"))" test "${bad:-1}" = 0
 }
 
 # ── Phase 2: product update to the candidate ──────────────────────────
@@ -1442,6 +1896,13 @@ phase2_update() {
   check "database migrated" "$(psql_gateway 'select count(*) from drizzle.__drizzle_migrations') applied migrations" true
   check_foundation_kept
   check_upgraded_state "after update" upgrade1
+  check_alerts_migrated "after update"
+  builtin_groups_snapshot upgrade1
+  check_folder_grant "after update"
+  if [[ "${FACT[sl_ready]}" == 1 ]]; then
+    wait_for 120 "route ${SECURE_LINK_DOMAIN}" sl_ok
+    check "after update: Route Secure Link serves" "http://${SECURE_LINK_DOMAIN}/ok" sl_ok
+  fi
   for id in "${FACT[docker_node]}" "${FACT[nginx_node]}"; do
     wait_for 120 "node ${id} online" node_online_with "$id" "$BASE"
     check "node stays online on the ${BASE} daemon" "$(node_status "$id") (${id})" node_online_with "$id" "$BASE"
@@ -1464,6 +1925,7 @@ relay_updated() {
 phase3_components() {
   local id target type start before relay_target start_ms window
   phase 3 "Update daemons and relay through the product"
+  FACT[phase3_epoch]="$(date +%s)"
   ensure_session
   api POST /api/system/daemon-updates/check
   keep_json daemon-updates
@@ -1472,14 +1934,17 @@ phase3_components() {
     target="$(jx "$WORK/json/daemon-updates.json" '[x["latestVersion"] for x in D if x["daemonType"] == args[0]][0]' "$type")"
     check "${type} daemon update offered" "latest ${target:-none} for the ${BASE} node" \
       test -n "$target" -a "$(jx "$WORK/json/daemon-updates.json" '[n["updateAvailable"] for x in D for n in x["nodes"] if n["nodeId"] == args[0]][0]' "$id")" = true || continue
+    [[ "${FACT[sl_ready]}" == 1 ]] && live_start "$type"
     start=$SECONDS
     start_ms="$(now_ms)"
     api POST "/api/system/daemon-updates/${id}"
     target="$(jx "$RESP" 'D["targetVersion"]')"
     check "${type} daemon update scheduled" "HTTP ${CODE} -> ${target}" test "$CODE" = 200 -a -n "$target" || continue
     wait_for 300 "${type} daemon ${target}" node_online_with "$id" "$target"
+    FACT[live_${type}_online_ms]="$(now_ms)"
     TIMING["${type} daemon update"]="$((SECONDS - start)) s"
     check "${type} daemon updated and online" "$(node_status "$id") after $((SECONDS - start)) s" node_online_with "$id" "$target"
+    live_verdict "$type" "$id" "$target"
     window="$(probe_window "$start_ms" "$(now_ms)")"
     check "route served during the ${type} daemon update" \
       "$(window_value "$window" '"%s of %s probes failed" % (D["routeFailures"], D["routeSamples"])')" \
@@ -1489,6 +1954,7 @@ phase3_components() {
   done
   check "workload container not restarted by the daemon updates" "$(container_identity e2e-web | cut -d' ' -f2-)" \
     test "$(container_identity e2e-web)" = "${FACT[container_identity]}"
+  check_launcher
   wait_for 240 "lease watchdog installed by the docker daemon" watchdog_ready
   check "lease watchdog installed" \
     "unit $(systemctl is-active gateway-lease-watchdog 2>/dev/null) $(journalctl -u gateway-lease-watchdog --no-pager -o cat 2>/dev/null | grep -o '"version":"[^"]*"' | tail -n1)" \
@@ -1510,6 +1976,11 @@ phase3_components() {
     check "node online after the relay update" "$(node_status "$id")" node_online "$id"
   done
   check "route serves after the relay update" "https://${ROUTE_DOMAIN}" route_ok
+  if [[ "${FACT[sl_ready]}" == 1 ]]; then
+    wait_for 120 "route ${SECURE_LINK_DOMAIN}" sl_ok
+    check "Route Secure Link serves after the relay update" "http://${SECURE_LINK_DOMAIN}/ok" sl_ok
+  fi
+  check_logs "after the daemon and relay updates" "${FACT[phase3_epoch]}"
 }
 
 # ── Phase 4: forced rollback with the base updater's rollback() ───────
@@ -1591,6 +2062,9 @@ phase4_rollback() {
     check "node online after the second update" "$(node_status "$id")" node_online "$id"
   done
   check "route serves after the second update" "https://${ROUTE_DOMAIN}" route_ok
+  check_alerts_migrated "after the second update"
+  builtin_groups_snapshot upgrade2
+  check_logs "after the second update" "$UPDATE_SINCE"
 }
 
 # ── Phase 5: fresh install of the candidate ───────────────────────────
@@ -1605,14 +2079,14 @@ teardown_stack() {
   for unit in docker-daemon nginx-daemon gateway-lease-watchdog; do
     systemctl stop "$unit" >/dev/null 2>&1
   done
-  docker rm -f e2e-web gateway-e2e-mailpit gateway-e2e-rollback >/dev/null 2>&1
+  docker rm -f e2e-web e2e-sl e2e-echo e2e-echo-client gateway-e2e-mailpit gateway-e2e-rollback >/dev/null 2>&1
   [[ -f "$INSTALL_DIR/docker-compose.yml" ]] && dc down -v --remove-orphans >>"$WORK/logs/compose.log" 2>&1
   docker ps -aq --filter "ancestor=${FACT[sidecar_image]:-docker.io/library/docker:27-cli}" | xargs -r docker rm -f >/dev/null 2>&1
   rm -rf "$INSTALL_DIR"
 }
 
 phase5_fresh() {
-  local installer="$WORK/install-${CANDIDATE}.sh" patched
+  local installer="$WORK/install-${CANDIDATE}.sh" patched snap
   phase 5 "Fresh install of ${CANDIDATE}"
   command -v docker >/dev/null && teardown_stack
   [[ "$LICENSE_MODE" == allow ]] || license_block 1
@@ -1638,6 +2112,10 @@ phase5_fresh() {
   api GET /api/system/version
   check "fresh install API version" "currentVersion $(jx "$RESP" 'D["currentVersion"]'), relay $(jx "$RESP" 'D["relay"]["currentVersion"]')" \
     test "$(jx "$RESP" 'D["currentVersion"]')" = "$CANDIDATE"
+  builtin_groups_snapshot fresh
+  for snap in upgrade1 upgrade2; do
+    [[ -s "$WORK/json/builtin-groups-${snap}.json" ]] && compare_builtin_groups "$snap"
+  done
 }
 
 # ── Main ──────────────────────────────────────────────────────────────
