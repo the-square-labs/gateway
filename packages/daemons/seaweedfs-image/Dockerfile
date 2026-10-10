@@ -1,8 +1,9 @@
 # Gateway's SeaweedFS runtime image: the upstream release image with its weed
 # binary rebuilt from the same upstream commit plus the patches in patches/.
 # Everything else (Alpine base, entrypoint, user, layout) is the upstream
-# image byte for byte. Build with scripts/build-seaweedfs-image.sh; CI
-# publishes it as ghcr.io/the-square-labs/gateway/seaweedfs:<version>-gateway.<n>.
+# image byte for byte. Build with scripts/build-seaweedfs-image.sh; the Image
+# workflow publishes it as ghcr.io/the-square-labs/gateway/seaweedfs-gateway:tree-<tree hash>
+# and the docker daemon pins its digest (seaweedfsImage).
 #
 # To move to a new upstream release: update the three ARGs below and re-apply
 # each patch (`git apply --check`); drop a patch once upstream ships the fix.

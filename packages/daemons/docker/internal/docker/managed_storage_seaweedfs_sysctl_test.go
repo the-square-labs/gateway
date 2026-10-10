@@ -66,6 +66,12 @@ func TestSeaweedFSContainerOutdated(t *testing.T) {
 		}, true},
 		{"no receive buffers", func(c map[string]any) { c["HostConfig"] = map[string]any{} }, true},
 		{"nothing to judge", func(c map[string]any) { c["Config"] = map[string]any{} }, false},
+		{"current image", func(c map[string]any) {
+			c["Config"] = map[string]any{"Image": seaweedfsImage, "Cmd": seaweedfsCommand(record), "Env": []string{seaweedfsMemoryLimitEnv(record.MemoryBytes)}}
+		}, false},
+		{"other image", func(c map[string]any) {
+			c["Config"] = map[string]any{"Image": "docker.io/chrislusf/seaweedfs:4.47", "Cmd": seaweedfsCommand(record), "Env": []string{seaweedfsMemoryLimitEnv(record.MemoryBytes)}}
+		}, true},
 	} {
 		inspect := map[string]any{"Id": "s1", "State": map[string]any{"Running": true}}
 		for key, value := range current {

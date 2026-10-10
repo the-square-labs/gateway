@@ -61,7 +61,7 @@ func (e *managedStorageImageError) Unwrap() error { return e.Cause }
 func (m *managedStorageManager) ensureEngineImage(ctx context.Context, engine string) (string, error) {
 	switch engine {
 	case managedStorageEngineSeaweedFS:
-		reference, err := m.client.EnsureThirdPartyImage(ctx, seaweedfsUpstreamImage)
+		reference, err := m.ensureSeaweedFSImage(ctx, seaweedfsImage)
 		if err != nil {
 			return "", &managedStorageImageError{Code: managedStorageImagePullFailedCode, Message: "the SeaweedFS runtime image could not be pulled from the Gateway mirror or Docker Hub", Cause: err}
 		}
@@ -88,6 +88,36 @@ func (m *managedStorageManager) ensureEngineImage(ctx context.Context, engine st
 	default:
 		return "", fmt.Errorf("managed storage engine %q is not supported", engine)
 	}
+}
+
+// ensureSeaweedFSImage returns the SeaweedFS image a container is created
+// from. Gateway's own build (pinned) is used when it is present or pulls; a
+// node that cannot reach it keeps the upstream image, mirror first and Docker
+// Hub second, so storage never stops for want of the patched build.
+func (m *managedStorageManager) ensureSeaweedFSImage(ctx context.Context, pinned string) (string, error) {
+	if pinned == seaweedfsUpstreamImage {
+		return m.client.EnsureThirdPartyImage(ctx, seaweedfsUpstreamImage)
+	}
+	present, err := m.client.localImagePresent(ctx, pinned)
+	if err != nil {
+		return "", err
+	}
+	if present {
+		return pinned, nil
+	}
+	pullErr := m.client.PullImage(ctx, pinned, "")
+	if pullErr == nil {
+		if present, err := m.client.localImagePresent(ctx, pinned); err == nil && present {
+			return pinned, nil
+		}
+	}
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	if m.logger != nil {
+		m.logger.Warn("Gateway's SeaweedFS image could not be pulled; using the upstream image", "image", pinned, "error", pullErr)
+	}
+	return m.client.EnsureThirdPartyImage(ctx, seaweedfsUpstreamImage)
 }
 
 // prepareEngineDataRoot hands the mounted data root to the engine's runtime

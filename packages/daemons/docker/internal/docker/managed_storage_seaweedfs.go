@@ -36,6 +36,12 @@ const (
 	// seaweedfsUpstreamImage is listed in config/third-party-images.json, so
 	// EnsureThirdPartyImage tries the GHCR mirror before Docker Hub.
 	seaweedfsUpstreamImage = seaweedfsUpstreamRepo + "@" + seaweedfsImageDigest
+	// seaweedfsImage is the image storage containers run: Gateway's patched
+	// build of 4.47 (packages/daemons/seaweedfs-image), which the Image
+	// workflow publishes as ghcr.io/the-square-labs/gateway/seaweedfs-gateway,
+	// pinned here by digest. While it equals seaweedfsUpstreamImage the
+	// upstream image runs as before (mirror first, Docker Hub second).
+	seaweedfsImage = seaweedfsUpstreamImage
 
 	minimumSeaweedFSMemoryBytes = 512 * 1024 * 1024
 
@@ -106,7 +112,19 @@ func validateSeaweedFSRootCredentials(credentials managedStorageRootCreds) error
 }
 
 func isTrustedSeaweedFSImage(reference string) bool {
-	return reference == seaweedfsUpstreamImage || isThirdPartyMirrorOf(reference, seaweedfsUpstreamImage)
+	return reference == seaweedfsImage || reference == seaweedfsUpstreamImage || isThirdPartyMirrorOf(reference, seaweedfsUpstreamImage)
+}
+
+// seaweedfsImageCurrent reports whether a container created from reference
+// runs the image this daemon pins. Before Gateway's own build is pinned the
+// upstream image under either of its references is current; once it is
+// pinned only that build is, so existing storages move to it (data kept) at
+// their next update, restart or recreation.
+func seaweedfsImageCurrent(reference, pinned string) bool {
+	if reference == pinned {
+		return true
+	}
+	return pinned == seaweedfsUpstreamImage && (reference == seaweedfsUpstreamImage || isThirdPartyMirrorOf(reference, seaweedfsUpstreamImage))
 }
 
 // seaweedfsSizing derives volume flags from the disk size. Each bucket is its
@@ -227,7 +245,7 @@ func seaweedfsSysctlsOutdated(current map[string]string) bool {
 }
 
 // seaweedfsContainerOutdated reports a container an older daemon created:
-// without the current sysctls, engine flags or memory limit of the Go
+// without the current sysctls, image, engine flags or memory limit of the Go
 // runtime. A recreation (data kept) brings it up to date.
 func (m *managedStorageManager) seaweedfsContainerOutdated(ctx context.Context, record managedStorageRecord) bool {
 	inspect, err := m.client.cli.ContainerInspect(ctx, record.ContainerID, mobyclient.ContainerInspectOptions{})
@@ -238,6 +256,9 @@ func (m *managedStorageManager) seaweedfsContainerOutdated(ctx context.Context, 
 		return false
 	}
 	if seaweedfsSysctlsOutdated(inspect.Container.HostConfig.Sysctls) {
+		return true
+	}
+	if config.Image != "" && !seaweedfsImageCurrent(config.Image, seaweedfsImage) {
 		return true
 	}
 	if !slices.Equal(config.Cmd, seaweedfsCommand(record)) {
