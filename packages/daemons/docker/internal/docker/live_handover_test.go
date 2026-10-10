@@ -47,7 +47,7 @@ func (pair *streamPair) update(t *testing.T, keeper *handovertest.Keeper, old *D
 	next.cfg.Docker.Mode = old.cfg.Docker.Mode
 	next.endpointDialer = func(ctx context.Context, _ *pb.RelayGrantAssignment) (dialedEndpoint, error) {
 		pair.dials.Add(1)
-		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", pair.backend.Addr().String())
+		conn, err := dialBackend(ctx, pair.backend)
 		return dialedEndpoint{conn: conn}, err
 	}
 	next.restoreHandover()
@@ -160,7 +160,7 @@ func (pair *streamPair) openLinkFlow() (net.Conn, *relaySourceTunnel) {
 	if err != nil {
 		pair.t.Fatal(err)
 	}
-	local, app := testTCPPair(pair.t)
+	local, app := localStreamPair(pair.t)
 	flow, done := pair.source.linkFlows.track(local)
 	go func() {
 		defer done()

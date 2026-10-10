@@ -93,12 +93,8 @@ func newPoolPair(t *testing.T) *streamPair {
 	for _, id := range []string{poolLocal, poolUK, poolNL} {
 		pair.relays[id] = startMiniRelay(t, id, routes)
 	}
-	backend, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
+	backend := listenBackend(t)
 	pair.backend = backend
-	t.Cleanup(func() { backend.Close() })
 	go func() {
 		for {
 			conn, err := backend.Accept()
@@ -131,7 +127,7 @@ func newPoolPair(t *testing.T) *streamPair {
 	pair.target = pair.newDaemon(target)
 	pair.target.endpointDialer = func(ctx context.Context, _ *pb.RelayGrantAssignment) (dialedEndpoint, error) {
 		pair.dials.Add(1)
-		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", backend.Addr().String())
+		conn, err := dialBackend(ctx, backend)
 		return dialedEndpoint{conn: conn}, err
 	}
 	for id := range pair.relays {

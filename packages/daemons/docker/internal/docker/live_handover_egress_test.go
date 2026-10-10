@@ -24,6 +24,8 @@ import (
 // egress socket; a sync that no longer names a listener closes it with every connection it carries.
 type egressForwarder struct {
 	socketPath string
+	// dir holds the listeners' Unix sockets (the connector's are TCP on the link network: see localStreamPair).
+	dir string
 	// dropAll makes every sync close the listeners, as the connector did on the egress-less syncs of a daemon start.
 	dropAll   atomic.Bool
 	mu        sync.Mutex
@@ -40,7 +42,7 @@ type forwardedEgress struct {
 }
 
 func newEgressForwarder(t *testing.T, socketPath string) *egressForwarder {
-	forwarder := &egressForwarder{socketPath: socketPath, listeners: map[string]*forwardedEgress{}}
+	forwarder := &egressForwarder{socketPath: socketPath, dir: sockettest.Dir(t), listeners: map[string]*forwardedEgress{}}
 	t.Cleanup(func() {
 		forwarder.mu.Lock()
 		defer forwarder.mu.Unlock()
@@ -72,7 +74,7 @@ func (f *egressForwarder) sync(_ *fakeConnectorContainer, request securelink.Syn
 		if f.listeners[id] != nil {
 			continue
 		}
-		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		listener, err := net.Listen("unix", filepath.Join(f.dir, id[:8]+".sock"))
 		if err != nil {
 			continue
 		}
@@ -104,7 +106,6 @@ func (l *forwardedEgress) serve(socketPath, id string) {
 
 func (l *forwardedEgress) carry(local net.Conn, socketPath, id string) {
 	defer local.Close()
-	lockBuffers(local)
 	if !l.track(local) {
 		return
 	}
@@ -235,11 +236,10 @@ func newEgressHandoverPair(t *testing.T) *egressHandoverPair {
 // dial opens a workload connection to the link's egress listener.
 func (pair *egressHandoverPair) dial() net.Conn {
 	pair.t.Helper()
-	app, err := net.Dial("tcp", pair.forwarder.address(testLinkID))
+	app, err := net.Dial("unix", pair.forwarder.address(testLinkID))
 	if err != nil {
 		pair.t.Fatal(err)
 	}
-	lockBuffers(app)
 	pair.t.Cleanup(func() { app.Close() })
 	return app
 }
@@ -354,16 +354,6 @@ func TestLiveHandoverReportsLocalConnectionsItLost(t *testing.T) {
 	report := pair.settled()
 	if report.HandedOver != 1 || report.Kept != 0 || report.Cut[handover.CutLocalClosed] != 1 {
 		t.Fatalf("update report %+v, want the connection cut as %s", report, handover.CutLocalClosed)
-	}
-}
-
-// lockBuffers sets a loopback connection's buffers, so the kernel never resizes them: Linux 6.17 clamps an autotuned
-// receive buffer below one MSS when a segment does not fit, and the stream then crawls on zero-window probes
-// (handover stress_test.go localPair).
-func lockBuffers(connection net.Conn) {
-	if tcp, ok := connection.(*net.TCPConn); ok {
-		_ = tcp.SetReadBuffer(4 << 20)
-		_ = tcp.SetWriteBuffer(4 << 20)
 	}
 }
 

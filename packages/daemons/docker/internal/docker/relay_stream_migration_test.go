@@ -10,6 +10,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ import (
 	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
 	"github.com/wiolett-industries/gateway/daemon-shared/relayresume"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/sockettest"
 	"github.com/wiolett-industries/gateway/docker-daemon/internal/config"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -53,7 +55,10 @@ type miniRelay struct {
 
 func startMiniRelay(t *testing.T, id string, routes map[string]string) *miniRelay {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	// Unix sockets, not loopback TCP: the relay's transport is not under test, and a Linux 6.17 loopback TCP
+	// connection whose reader falls behind (an overloaded build host) drops segments inside its window and then waits
+	// out retransmission backoff for up to minutes (localStreamPair).
+	listener, err := net.Listen("unix", filepath.Join(sockettest.Dir(t), "relay.sock"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,12 +339,8 @@ func newStreamPairFor(t *testing.T, kinds routeKinds, sourceResumable, targetRes
 	for _, id := range []string{"relay-a", "relay-b"} {
 		pair.relays[id] = startMiniRelay(t, id, routes)
 	}
-	backend, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
+	backend := listenBackend(t)
 	pair.backend = backend
-	t.Cleanup(func() { backend.Close() })
 	go func() {
 		for {
 			conn, err := backend.Accept()
@@ -349,7 +350,7 @@ func newStreamPairFor(t *testing.T, kinds routeKinds, sourceResumable, targetRes
 			go func() {
 				defer conn.Close()
 				_, _ = io.Copy(conn, conn)
-				_ = conn.(*net.TCPConn).CloseWrite()
+				_ = conn.(interface{ CloseWrite() error }).CloseWrite()
 			}()
 		}
 	}()
@@ -361,7 +362,7 @@ func newStreamPairFor(t *testing.T, kinds routeKinds, sourceResumable, targetRes
 	}
 	pair.target.endpointDialer = func(ctx context.Context, _ *pb.RelayGrantAssignment) (dialedEndpoint, error) {
 		pair.dials.Add(1)
-		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", backend.Addr().String())
+		conn, err := dialBackend(ctx, backend)
 		return dialedEndpoint{conn: conn}, err
 	}
 	for id := range pair.relays {
@@ -398,7 +399,7 @@ func (pair *streamPair) newDaemon(bundle *pb.SyncRelayGrantsCommand) *DockerPlug
 
 // connect runs the daemon's tunnels to one relay (as the relay pool does).
 func (pair *streamPair) connect(plugin *DockerPlugin, relayID string) {
-	conn, err := grpc.NewClient(pair.relays[relayID].listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient("unix://"+pair.relays[relayID].listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		pair.t.Fatal(err)
 	}
@@ -444,9 +445,46 @@ func (pair *streamPair) open() (net.Conn, *relaySourceTunnel) {
 	if err != nil {
 		pair.t.Fatal(err)
 	}
-	local, app := testTCPPair(pair.t)
+	local, app := localStreamPair(pair.t)
 	go tunnel.bridge(local)
 	return app, tunnel
+}
+
+// listenBackend is the endpoint's backend (an echo or a download): a Unix socket, for the reason of startMiniRelay.
+func listenBackend(t *testing.T) net.Listener {
+	t.Helper()
+	listener, err := net.Listen("unix", filepath.Join(sockettest.Dir(t), "backend.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { listener.Close() })
+	return listener
+}
+
+func dialBackend(ctx context.Context, backend net.Listener) (net.Conn, error) {
+	return (&net.Dialer{}).DialContext(ctx, "unix", backend.Addr().String())
+}
+
+// localStreamPair is a workload's connection to the daemon (local) and the workload's end (app): a Unix socket pair.
+// Loopback TCP on Linux 6.17 drops segments inside the window when its reader falls behind and stalls on retransmission
+// backoff for up to minutes on an overloaded host (stand rc.8: "echo timed out" with every byte in a send queue at
+// RTO 52 s); the bridges treat both kinds alike.
+func localStreamPair(t *testing.T) (net.Conn, net.Conn) {
+	t.Helper()
+	listener, err := net.Listen("unix", filepath.Join(sockettest.Dir(t), "pair.sock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	app, err := net.Dial("unix", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, err := listener.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return local, app
 }
 
 func testTCPPair(t *testing.T) (net.Conn, net.Conn) {
@@ -495,7 +533,7 @@ func echoThrough(t *testing.T, app net.Conn, size int, during func()) {
 				during = nil
 			}
 		}
-		_ = app.(*net.TCPConn).CloseWrite()
+		_ = app.(interface{ CloseWrite() error }).CloseWrite()
 	}()
 	select {
 	case received := <-got:
@@ -808,11 +846,7 @@ func TestResumableChattyStreamSurvivesForceDisconnect(t *testing.T) {
 // downloadBackend answers every request byte with size bytes (a storage
 // GET on a keep-alive connection).
 func downloadBackend(t *testing.T, size int) string {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { listener.Close() })
+	listener := listenBackend(t)
 	chunk := make([]byte, 256*1024)
 	go func() {
 		for {
@@ -880,7 +914,7 @@ func TestResumableBulkDownloadAcrossRelayKill(t *testing.T) {
 	pair := newStreamPair(t, true, true)
 	address := downloadBackend(t, size)
 	pair.target.endpointDialer = func(ctx context.Context, _ *pb.RelayGrantAssignment) (dialedEndpoint, error) {
-		conn, err := (&net.Dialer{}).DialContext(ctx, "tcp", address)
+		conn, err := (&net.Dialer{}).DialContext(ctx, "unix", address)
 		return dialedEndpoint{conn: conn}, err
 	}
 	app, tunnel := pair.open()
