@@ -8,12 +8,15 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/wiolett-industries/gateway/daemon-shared/connector"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 	"github.com/wiolett-industries/gateway/relay/internal/admission"
 	"github.com/wiolett-industries/gateway/relay/internal/grant"
 	"github.com/wiolett-industries/gateway/relay/internal/peer"
 	"github.com/wiolett-industries/gateway/relay/internal/policy"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -265,6 +268,7 @@ type Broker struct {
 	metricsSince     time.Time
 	draining         atomic.Bool
 	dialLocalService func(context.Context, string) (net.Conn, error)
+	laneCollapsed    func(context.Context) bool
 	lease            LeaseGate
 	// admissions numbers registrations and tunnels as they are admitted;
 	// guarded by mu. leaseEpoch counts lease gate enforcement runs; written
@@ -357,6 +361,20 @@ func (b *Broker) RuntimeSnapshot() RuntimeSnapshot {
 }
 
 func (b *Broker) SetDraining(value bool) { b.draining.Store(value) }
+
+// SetLaneHint sets how the broker learns that a tunnel's lane connection has
+// a collapsed sending side (see hintLane).
+func (b *Broker) SetLaneHint(collapsed func(context.Context) bool) { b.laneCollapsed = collapsed }
+
+// hintLane tells the node on the other end of stream, with the stream's
+// response header, that the relay's sending side of the lane collapsed: the
+// node replaces the lane's connection and moves its resumable streams there
+// (connector.LaneRenewHeader). Nodes that predate it ignore the header.
+func (b *Broker) hintLane(stream grpc.ServerStream) {
+	if b.laneCollapsed != nil && b.laneCollapsed(stream.Context()) {
+		_ = stream.SetHeader(metadata.Pairs(connector.LaneRenewHeader, "1"))
+	}
+}
 
 func (b *Broker) Draining() bool { return b.draining.Load() }
 

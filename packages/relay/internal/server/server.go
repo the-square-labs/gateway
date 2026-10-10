@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
@@ -21,6 +22,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
+	grpcpeer "google.golang.org/grpc/peer"
 )
 
 const (
@@ -141,6 +143,10 @@ func Start(cfg config.Config, buildVersion string) (*Runtime, error) {
 	}
 	listener = withPeerLiveness(listener)
 	split := newSplitListener(listener, identityStore.ServerTLSConfig())
+	tunnelBroker.SetLaneHint(func(ctx context.Context) bool {
+		client, ok := grpcpeer.FromContext(ctx)
+		return ok && client.Addr != nil && split.laneCollapsed(client.Addr.String())
+	})
 	runtime := &Runtime{GRPC: serverPair{grpcServer, anonymousServer}, Listener: listener, State: state, Proxy: proxyHandler, Lease: coordinator}
 	go func() { _ = grpcServer.Serve(split.authenticated) }()
 	go func() { _ = anonymousServer.Serve(split.anonymous) }()

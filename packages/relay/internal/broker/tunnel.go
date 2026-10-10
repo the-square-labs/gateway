@@ -228,10 +228,12 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) (resul
 	case <-stream.Context().Done():
 		return stream.Context().Err()
 	}
+	b.hintLane(stream)
 	if err := stream.Send(readyFrame(frameLimit)); err != nil {
 		accepted.result <- err
 		return err
 	}
+	b.hintLane(accepted.stream)
 	if err := accepted.stream.Send(readyFrame(frameLimit)); err != nil {
 		accepted.result <- err
 		return err

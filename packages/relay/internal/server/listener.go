@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/wiolett-industries/gateway/daemon-shared/slowstart"
 	"github.com/wiolett-industries/gateway/daemon-shared/tlsbatch"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -42,9 +43,12 @@ type splitListener struct {
 	authenticated *connQueue
 	anonymous     *connQueue
 	anonymousOpen atomic.Int64
-	done          chan struct{}
-	closeOnce     sync.Once
-	err           error
+	// sockets maps a connection's remote address to the socket beneath its
+	// TLS (laneCollapsed).
+	sockets   sync.Map
+	done      chan struct{}
+	closeOnce sync.Once
+	err       error
 }
 
 func newSplitListener(base net.Listener, config *tls.Config) *splitListener {
@@ -111,7 +115,10 @@ func (l *splitListener) handshake(raw net.Conn) {
 	}
 	queue := l.authenticated
 	batched := tlsbatch.Above(connection, below)
-	var handed net.Conn = &handshakenConn{Conn: batched, state: state}
+	key := raw.RemoteAddr().String()
+	l.sockets.Store(key, below)
+	forget := func() { l.sockets.CompareAndDelete(key, below) }
+	var handed net.Conn = &handshakenConn{Conn: batched, state: state, forget: forget}
 	if len(state.VerifiedChains) == 0 {
 		if l.anonymousOpen.Add(1) > maxAnonymousConnections {
 			l.anonymousOpen.Add(-1)
@@ -119,7 +126,7 @@ func (l *splitListener) handshake(raw net.Conn) {
 			return
 		}
 		queue = l.anonymous
-		handed = &handshakenConn{Conn: batched, state: state, release: func() { l.anonymousOpen.Add(-1) }}
+		handed = &handshakenConn{Conn: batched, state: state, forget: forget, release: func() { l.anonymousOpen.Add(-1) }}
 	}
 	select {
 	case queue.conns <- handed:
@@ -160,17 +167,33 @@ type handshakenConn struct {
 	net.Conn
 	state     tls.ConnectionState
 	release   func()
+	forget    func()
 	closeOnce sync.Once
 }
 
 func (c *handshakenConn) Close() error {
 	err := c.Conn.Close()
 	c.closeOnce.Do(func() {
+		if c.forget != nil {
+			c.forget()
+		}
 		if c.release != nil {
 			c.release()
 		}
 	})
 	return err
+}
+
+// laneCollapsed reports a connection (by its remote address) whose sending
+// side's congestion state collapsed (slowstart.State.Collapsed): a lane the
+// node had better replace, since only a new connection starts afresh.
+func (l *splitListener) laneCollapsed(remote string) bool {
+	value, ok := l.sockets.Load(remote)
+	if !ok {
+		return false
+	}
+	state, ok := slowstart.ReadState(value.(*tlsbatch.Conn))
+	return ok && state.Collapsed()
 }
 
 // handshakenCredentials gives gRPC the identity of a handshaken connection in
