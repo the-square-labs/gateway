@@ -953,7 +953,6 @@ func (m *dockerSecureLinkManager) retireConnectorUntil(previous connectorRuntime
 	if handle == nil {
 		return
 	}
-	limit := max(time.Until(deadline), 0)
 	drain := func() (int, bool, error) {
 		return handle.drain(func() (int, error) {
 			drainCtx, cancelDrain := context.WithTimeout(context.Background(), 5*time.Second)
@@ -962,8 +961,15 @@ func (m *dockerSecureLinkManager) retireConnectorUntil(previous connectorRuntime
 		})
 	}
 	go func() {
-		// Stop it accepting: its replacement listens on the same addresses. The sessions it carries go on.
-		_, sent, drainErr := drain()
+		// Its sessions go to its replacement where both connectors can (secure_link_handover.go); it stops accepting
+		// with that, and finishes what it could not pass on. A connector of an earlier release is told to drain: its
+		// replacement listens on the same addresses, and the sessions it carries go on.
+		var handing connectorHandover
+		_, sent, stoppedAtOnce := m.handOverRetiring(handle, previous, &handing)
+		var drainErr error
+		if !sent && !stoppedAtOnce {
+			_, sent, drainErr = drain()
+		}
 		if sent && drainErr != nil {
 			// Its control socket is out of reach (a switch of the daemon's user): the drain signal stops it accepting
 			// all the same. A connector image without the drain signal stops at it, which retires it at once.
@@ -974,10 +980,26 @@ func (m *dockerSecureLinkManager) retireConnectorUntil(previous connectorRuntime
 				m.plugin.logger.Info("the replaced secure-link connector was signalled to drain", "drain_error", drainErr, "signal_error", err)
 			}
 		}
-		busy, closed := m.plugin.proxyTunnels.drainCounted(func(connection *drainConn) bool {
-			return connectionConnector(connection) == previous.id
-		}, limit, secureLinkConnectorRetireTick, true)
-		if m.plugin.logger != nil {
+		// The tunnels this daemon dialed through it: the idle ones close, the busy ones are waited for. A handover still
+		// due (no replacement served yet, or sessions the last one left) is asked for meanwhile: it moves them.
+		busy, closed := 0, 0
+		for {
+			wait := max(time.Until(deadline), 0)
+			if handing.due() {
+				wait = min(wait, connectorHandoverRetry)
+			}
+			stillBusy, closedNow := m.plugin.proxyTunnels.drainCounted(func(connection *drainConn) bool {
+				return connectionConnector(connection) == previous.id
+			}, wait, secureLinkConnectorRetireTick, true)
+			busy, closed = stillBusy, closed+closedNow
+			if busy == 0 || !time.Now().Before(deadline) || !handing.due() {
+				break
+			}
+			if _, answered, stopped := m.handOverRetiring(handle, previous, &handing); answered || stopped {
+				sent = sent || answered
+			}
+		}
+		if m.plugin.logger != nil && (closed > 0 || busy > 0) {
 			m.plugin.logger.Info("closed the idle tunnels of the replaced secure-link connector",
 				"connector", previous.id, "closed", closed, "still_busy", busy)
 		}
@@ -985,7 +1007,16 @@ func (m *dockerSecureLinkManager) retireConnectorUntil(previous connectorRuntime
 		// connector's last answer counts every session it still carries, its tunnels and its egress sessions alike.
 		stopped, carried := !sent, 0
 		for !stopped && drainErr == nil {
-			active, stillRetiring, err := drain()
+			active, stillRetiring, err := 0, true, error(nil)
+			handed := false
+			if handing.due() {
+				var stoppedNow bool
+				active, handed, stoppedNow = m.handOverRetiring(handle, previous, &handing)
+				stillRetiring = !stoppedNow
+			}
+			if !handed && stillRetiring {
+				active, stillRetiring, err = drain()
+			}
 			if stopped = !stillRetiring; stopped || err != nil {
 				break
 			}
@@ -1329,6 +1360,8 @@ func (m *dockerSecureLinkManager) dialCurrent(ctx context.Context, linkID string
 type connectorConn struct {
 	net.Conn
 	connectorID string
+	// moved: a handover passed the connection's session to another connector (secure_link_handover.go).
+	moved movedConnector
 }
 
 // CloseWrite passes a half-close on to the workload.
@@ -1343,7 +1376,7 @@ func connectionConnector(connection net.Conn) string {
 	for {
 		switch current := connection.(type) {
 		case *connectorConn:
-			return current.connectorID
+			return current.connector()
 		case *drainConn:
 			connection = current.Conn
 		default:

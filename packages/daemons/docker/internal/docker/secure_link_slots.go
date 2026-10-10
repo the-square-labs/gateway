@@ -113,8 +113,15 @@ func (m *dockerSecureLinkManager) cutOldestRetirementLocked(ctx context.Context,
 }
 
 // cutConnectorLocked removes the connector in slot to free the slot and returns how many sessions it still carried.
+// It first hands its sessions to the serving connector where both can (secure_link_handover.go): those are not cut.
 func (m *dockerSecureLinkManager) cutConnectorLocked(ctx context.Context, inspect container.InspectResponse, slot int) (int, error) {
-	sessions := m.connectorSessions(inspect.ID, m.adoptedControlSocket(m.slotSocketPath(slot)))
+	socketPath := m.adoptedControlSocket(m.slotSocketPath(slot))
+	occupant := connectorRuntime{id: inspect.ID, slot: slot, socketPath: socketPath}
+	if successor, socket, ok, _ := m.handoverSuccessorLocked(occupant); ok && inspect.State != nil && inspect.State.Running {
+		var state connectorHandover
+		m.handOverConnector(occupant, successor, socket, &state)
+	}
+	sessions := m.connectorSessions(inspect.ID, socketPath)
 	err := m.dropConnectorLocked(ctx, inspect.ID)
 	if err == nil {
 		m.plugin.recordConnectorCut(sessions)

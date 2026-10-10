@@ -46,6 +46,8 @@ type fakeConnectorEngine struct {
 	legacyImages map[string]bool
 	// events is the event stream the engine serves (nil: none).
 	events io.Reader
+	// handover makes connectors created from now on answer handover requests like a connector of this release.
+	handover bool
 	// onSync, when set, applies a connector's sync before the connector answers it (a connector that serves its
 	// egress listeners, live_handover_egress_test.go).
 	onSync func(current *fakeConnectorContainer, request securelink.SyncRequest)
@@ -78,6 +80,12 @@ type fakeConnectorContainer struct {
 	// removing: another removal of the container runs; a remove request is refused with "already in progress" and
 	// the container goes shortly after.
 	removing bool
+	// handover answers handover requests like a connector of this release (else like one of an earlier release:
+	// unsupported); handovers are the requests it received, and handoverResult what it answers (it then carries
+	// active sessions).
+	handover       bool
+	handovers      []securelink.SyncRequest
+	handoverResult securelink.HandoverResult
 }
 
 // fakeAnchor is a running anchor, as a daemon finds it after its restart.
@@ -126,7 +134,24 @@ func (e *fakeConnectorEngine) serveControl(current *fakeConnectorContainer) {
 				return
 			}
 			var request securelink.SyncRequest
-			if securelink.ReadJSON(connection, &request) == nil {
+			if securelink.ReadJSON(connection, &request) == nil && request.Version == securelink.ProtocolVersionHandover {
+				e.mu.Lock()
+				current.handovers = append(current.handovers, request)
+				response := securelink.SyncResponse{Version: securelink.ProtocolVersion, Error: securelink.UnsupportedVersionError}
+				if current.handover {
+					current.draining = true
+					result := current.handoverResult
+					current.active = 0
+					for _, n := range result.Left {
+						current.active += n
+					}
+					response = securelink.SyncResponse{Version: securelink.ProtocolVersionHandover, Handover: &result, Active: current.active}
+				}
+				e.mu.Unlock()
+				_ = securelink.WriteJSON(connection, response)
+				connection.Close()
+				continue
+			} else if request.Version != 0 {
 				e.mu.Lock()
 				current.requests = append(current.requests, request)
 				egressFails, drainFails, active := current.egressFails, current.drainFails, current.active
@@ -298,7 +323,7 @@ func (e *fakeConnectorEngine) serve(request *http.Request) (*http.Response, erro
 		created := &fakeConnectorContainer{
 			id: fmt.Sprintf("created-%d", e.created), name: name, image: body.Image, groups: body.HostConfig.GroupAdd, slot: slot,
 			ip: fmt.Sprintf("10.99.0.%d", 10+e.created), syncFails: e.syncFails, egressFails: e.egressFails, anchor: name == secureLinkAnchorName,
-			networkMode: body.HostConfig.NetworkMode,
+			networkMode: body.HostConfig.NetworkMode, handover: e.handover,
 		}
 		// A connector in the anchor's network namespace has the anchor's addresses.
 		if anchor := e.byIDOrName(strings.TrimPrefix(body.HostConfig.NetworkMode, "container:")); anchor != nil {
