@@ -88,14 +88,22 @@ func TestLoopbackEndpointServesOnlyTheNginxWorkerUID(t *testing.T) {
 	// nginx runs its workers as another user: this process is any other local process now.
 	authority.masterPID = func() (int, error) { return 1, nil }
 	authority.workerUID = func(int, string) (int, error) { return os.Getuid() + 1, nil }
-	refused := dialAndSend(t, "tcp4", address)
+	// The refusal resets the connection at once, so on a fast loopback the reset can already reach the dial.
+	refused, err := net.DialTimeout("tcp4", address, time.Second)
+	if err == nil {
+		t.Cleanup(func() { _ = refused.Close() })
+		_ = refused.SetDeadline(time.Now().Add(5 * time.Second))
+		_, _ = refused.Write([]byte("GET"))
+	}
 	select {
 	case <-opened:
 		t.Fatal("a process of another user reached the relay opener")
 	case <-time.After(300 * time.Millisecond):
 	}
-	if _, err := refused.Read(make([]byte, 1)); err == nil {
-		t.Fatal("the refused connection stays open")
+	if err == nil {
+		if _, err := refused.Read(make([]byte, 1)); err == nil {
+			t.Fatal("the refused connection stays open")
+		}
 	}
 }
 
