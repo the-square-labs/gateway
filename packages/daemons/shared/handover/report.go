@@ -258,14 +258,8 @@ func (t *Tracker) Settle() {
 		sessions := slices.Clone(t.sessions)
 		t.mu.Unlock()
 		open := 0
-		failed := 0
 		for _, session := range sessions {
-			_, resumed, ended := session.HandoverPause()
-			switch {
-			case resumed:
-			case ended:
-				failed++
-			default:
+			if _, resumed, ended := session.HandoverPause(); !resumed && !ended {
 				open++
 			}
 		}
@@ -278,29 +272,32 @@ func (t *Tracker) Settle() {
 			settledAt = now
 		}
 		if (open == 0 && (len(sessions) == 0 || now.Sub(settledAt) >= settleProof)) || now.After(deadline) {
-			t.finish(pending, sessions, failed+open)
+			t.finish(pending, sessions)
 			return
 		}
 		time.Sleep(settleTick)
 	}
 }
 
-func (t *Tracker) finish(pending *Report, sessions []*relayresume.Session, failed int) {
+func (t *Tracker) finish(pending *Report, sessions []*relayresume.Session) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	var pauses []time.Duration
-	lost := 0
+	lost, failed, peerEnded := 0, 0, 0
 	for _, session := range sessions {
-		pause, resumed, _ := session.HandoverPause()
+		pause, resumed, ended := session.HandoverPause()
 		switch {
+		case !resumed && ended && endedByPeer(session):
+			// The far end ended it (its own update cut it, in the same batch):
+			// that node's report counts it, not this one's (stand rc.11 O-1).
+			peerEnded++
 		case t.lost[session]:
 			lost++
-			if !resumed {
-				// Counted as not resumed already.
-				failed--
-			}
 		case resumed:
 			pauses = append(pauses, pause)
+		default:
+			// Ended, or still waiting at the settle limit.
+			failed++
 		}
 	}
 	report := *pending
@@ -316,7 +313,7 @@ func (t *Tracker) finish(pending *Report, sessions []*relayresume.Session, faile
 	report.AddCut(CutLocalClosed, lost)
 	// What the previous process handed over and this one never saw (a
 	// snapshot that did not come over) is cut too.
-	accounted := report.Kept + failed + lost
+	accounted := report.Kept + failed + lost + peerEnded
 	for _, n := range t.cut {
 		accounted += n
 	}
@@ -335,6 +332,29 @@ func (t *Tracker) finish(pending *Report, sessions []*relayresume.Session, faile
 	t.pending = nil
 	_ = writeReport(filepath.Join(t.stateDir, lastReportFile), report)
 	close(t.settled)
+}
+
+// endedByPeer reports a stream taken over that its far end ended before it
+// resumed: it finished, the peer reset it, or the peer refused its resume
+// because it had reset or finished it there (a connection the peer's own
+// update cut). A refusal for any other reason, or a peer that gave up waiting
+// for this side (suspend timeout), stays this update's cut.
+func endedByPeer(session *relayresume.Session) bool {
+	if session.State() == relayresume.StateFinished {
+		return true
+	}
+	var reset *relayresume.ResetError
+	if !errors.As(session.Err(), &reset) {
+		return false
+	}
+	switch reset.Reject {
+	case relayresume.RejectReset, relayresume.RejectFinished:
+		return true
+	case 0:
+		return reset.Remote && reset.Code != relayresume.RstSuspendTimeout && reset.Code != relayresume.RstProtocol &&
+			reset.Code != relayresume.RstLegacyPeer && reset.Code != relayresume.RstWindowViolation
+	}
+	return false
 }
 
 // Last is the final report of the last update (nil: none yet).
