@@ -95,6 +95,14 @@ func (p *NginxPlugin) relayStreamEnded(session *relayresume.Session, err error) 
 	if !ok {
 		return
 	}
+	if reset.Reject == relayresume.RejectUnknown {
+		// The target no longer knows the stream: its daemon restarted without taking it over (an update from or onto
+		// a daemon without live handover, or a service restart). The cut is the target's, expected, and its node's
+		// last update reports it; nothing is wrong with this daemon's path.
+		p.relayStreamTargetCuts.Noted(p.logger, subject, "cut by their target",
+			"reason", "the target daemon restarted without taking the stream over", "error", err.Error())
+		return
+	}
 	p.relayStreamOutcomes.Failed(p.logger, subject, "stage", "resume", "error", err.Error())
 }
 

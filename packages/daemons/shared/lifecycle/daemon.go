@@ -167,7 +167,13 @@ func (d *DaemonBase) Run(ctx context.Context) error {
 			// transport-level connector backoff is never reached. Back off
 			// exponentially until a session is accepted again.
 			delay = backoff.next(d.sessionReceivedCommand, time.Since(startedAt))
-			d.logger.Warn("session ended, reconnecting", "error", err, "retry_in", delay)
+			log := d.logger.Warn
+			if connector.PlannedServerStop(err) {
+				// The relay or Gateway on the way stopped on purpose (its
+				// update or restart): the session moves, nothing failed.
+				log = d.logger.Info
+			}
+			log("session ended, reconnecting", "error", err, "retry_in", delay)
 		}
 		if !waitForControlSessionReconnectDelay(ctx, delay) {
 			return nil

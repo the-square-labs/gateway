@@ -178,3 +178,28 @@ func (t *Tracker) Succeeded(logger *slog.Logger, subject Subject) {
 			"episode", now.Sub(current.started).Round(time.Second).String())
 	}
 }
+
+// Noted records an expected outcome that deserves a line but no warning (a stream its target ended by restarting
+// without handing it over). The first one of a subject is logged at info with attrs; further ones are counted and
+// summarised at info every Reminder. Use a Tracker of its own for noted outcomes.
+func (t *Tracker) Noted(logger *slog.Logger, subject Subject, what string, attrs ...any) {
+	now := t.now()
+	t.mu.Lock()
+	current := t.episodeLocked(subject, now, true)
+	args := []any{subject.IDAttr, subject.ID}
+	switch {
+	case current.reported.IsZero():
+		current.since, current.reported, current.unreported = now, now, 0
+	case now.Sub(current.reported) >= t.reminder():
+		args = append(args, "count", current.unreported+1, "since", now.Sub(current.since).Round(time.Second).String())
+		current.reported, current.unreported = now, 0
+	default:
+		current.unreported++
+		t.mu.Unlock()
+		return
+	}
+	t.mu.Unlock()
+	if logger != nil {
+		logger.Info(subject.Name+" "+what, append(args, attrs...)...)
+	}
+}

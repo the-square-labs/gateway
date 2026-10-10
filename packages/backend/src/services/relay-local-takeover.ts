@@ -64,6 +64,10 @@ async function localRelayRoutedEndpoints(db: DrizzleClient, localInstanceId: str
   return assigned.filter(({ id }) => routedIds.has(id));
 }
 
+/** Why the first update of a local relay without the drain capability interrupts its sessions once: planned. */
+export const LOCAL_RELAY_DRAIN_UNSUPPORTED =
+  'the running local relay cannot keep serving the internal registry while it drains (it can from the next update on)';
+
 /**
  * Why no other relay can carry the local relay's workloads while an update recreates it, or null when one can: the
  * running local relay keeps its built-in local services through a drain, a connected remote relay is ready with a
@@ -81,9 +85,7 @@ export async function localRelayTakeoverBlocker(
 ): Promise<string | null> {
   const local = pool.instances.find(({ id }) => id === localInstanceId);
   if (!local) return 'the local relay is not in the Relay Pool';
-  if (!local.capabilities?.features?.includes(LOCAL_RELAY_DRAIN_CAPABILITY)) {
-    return 'the running local relay cannot keep serving the internal registry while it drains (it can from the next update on)';
-  }
+  if (!local.capabilities?.features?.includes(LOCAL_RELAY_DRAIN_CAPABILITY)) return LOCAL_RELAY_DRAIN_UNSUPPORTED;
   const takeover = pool.instances.some(
     (instance) =>
       instance.kind === 'remote' &&

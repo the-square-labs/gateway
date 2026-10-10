@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/wiolett-industries/gateway/daemon-shared/connector"
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/daemon-shared/handover"
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
@@ -390,6 +391,18 @@ func relayPolicyCatchingUp(err error) bool {
 	return ok && current.Code() == codes.PermissionDenied && strings.Contains(current.Message(), "does not match policy")
 }
 
+// relayRegistrationPlannedEnd reports a registration that ended on purpose:
+// the relay stopped gracefully, or it closed the registration because the
+// endpoint's policy moved on (a newer assignment or registration replaces it,
+// "endpoint policy was revoked" without another reason).
+func relayRegistrationPlannedEnd(err error) bool {
+	if connector.PlannedServerStop(err) {
+		return true
+	}
+	current, ok := status.FromError(err)
+	return ok && current.Code() == codes.Aborted && current.Message() == "endpoint policy was revoked"
+}
+
 // nextRegistrationRetry is the delay before the next registration attempt.
 // mismatchFor is how long consecutive attempts have been refused for a
 // policy mismatch.
@@ -485,6 +498,11 @@ func (r *relayTunnelRouter) runRegistration(ctx context.Context, update relayReg
 			// The first failure is news; the retries of a relay that stays
 			// down or keeps refusing are not (838 lines in 2 min, stand run c).
 			log = r.plugin.logger.Debug
+		} else if relayRegistrationPlannedEnd(err) {
+			// A relay that stops for its update, or a registration Gateway's
+			// policy moved (an update of this daemon or of the relay pool),
+			// registers again at once: no failure (rc.10 upgrade run, F-4).
+			log = r.plugin.logger.Info
 		}
 		log("relay endpoint registration disconnected", "relay_instance_id", r.targetID, "endpoint_id", current.EndpointId, "error", err, "retry_in", delay.Round(time.Millisecond).String(), "failures", failures)
 		wake := r.transportReadySignal()

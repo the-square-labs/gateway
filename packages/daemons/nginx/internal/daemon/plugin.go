@@ -80,6 +80,9 @@ type NginxPlugin struct {
 	// and cuts per link and state change.
 	relayStreams        *relayresume.Manager
 	relayStreamOutcomes logepisode.Tracker
+	// relayStreamTargetCuts notes streams their target ended by restarting without taking them over: expected, no
+	// warning (rc.10 upgrade run, F-4).
+	relayStreamTargetCuts logepisode.Tracker
 	// Ingress groups: the reserved health endpoint's responder (nil when it could not start).
 	ingressHealth *ingressHealthResponder
 	// handover carries the Secure Link connections an update hands to the next process (live_handover.go);

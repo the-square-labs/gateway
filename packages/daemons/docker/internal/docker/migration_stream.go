@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +15,12 @@ import (
 )
 
 const migrationChunkBytes = 1024 * 1024
+
+// errMigrationStreamClosed: Gateway ended the stream with no transfer on it,
+// as it does when the daemon or Gateway restarts, the control session moves
+// (a daemon or relay update), or a newer stream of the node replaces it. The
+// daemon opens it again; that is no failure.
+var errMigrationStreamClosed = errors.New("migration transfer stream closed by Gateway")
 
 type migrationIncomingArtifact struct {
 	migrationID string
@@ -49,7 +56,11 @@ func (p *DockerPlugin) RunMigrationStream(ctx context.Context, conn *grpc.Client
 	}
 	for ctx.Err() == nil {
 		if err := p.runMigrationStream(ctx, conn, nodeID); err != nil && ctx.Err() == nil {
-			p.logger.Warn("migration transfer stream disconnected", "error", err)
+			if errors.Is(err, errMigrationStreamClosed) {
+				p.logger.Info("migration transfer stream closed by Gateway, opening it again")
+			} else {
+				p.logger.Warn("migration transfer stream disconnected", "error", err)
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -83,6 +94,9 @@ func (p *DockerPlugin) runMigrationStream(ctx context.Context, conn *grpc.Client
 	for {
 		control, err := stream.Recv()
 		if err != nil {
+			if errors.Is(err, io.EOF) && incoming == nil {
+				return errMigrationStreamClosed
+			}
 			return err
 		}
 		switch payload := control.Payload.(type) {

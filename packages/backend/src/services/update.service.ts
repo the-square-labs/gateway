@@ -33,7 +33,12 @@ import {
   waitForOrchestrationIdle,
 } from './orchestration-activity.js';
 import { saveInstalledRelayArtifact } from './relay-installed-artifact.js';
-import { drainingTunnels, localServiceEndpointIds, waitForLocalRelayEvacuation } from './relay-local-takeover.js';
+import {
+  drainingTunnels,
+  LOCAL_RELAY_DRAIN_UNSUPPORTED,
+  localServiceEndpointIds,
+  waitForLocalRelayEvacuation,
+} from './relay-local-takeover.js';
 import {
   drainOutcomeNote,
   localRelayPauseNote,
@@ -1469,7 +1474,12 @@ chmod 700 "$backup"
               drainedInstanceId = null;
             }
             if (interruption) {
-              logger.warn('Sessions through the local relay were interrupted by its update', { interruption });
+              // Expected with the local relay as the only relay, and on the first update of a local relay that cannot
+              // drain: the step's note tells it. A pool whose other relays could not take over is worth a warning.
+              const expected = steps.length === 1 || interruption === LOCAL_RELAY_DRAIN_UNSUPPORTED;
+              if (expected)
+                logger.info('Sessions through the local relay were interrupted by its update', { interruption });
+              else logger.warn('Sessions through the local relay were interrupted by its update', { interruption });
             }
           }
           // Recorded on the step: no other relay could carry the local relay's sessions, so they dropped once (or, all
