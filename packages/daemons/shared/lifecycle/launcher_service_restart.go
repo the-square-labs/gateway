@@ -119,6 +119,9 @@ type launcherServiceRestart struct {
 	manager     launcherServiceManager
 	method      string
 	detail      string
+	// afterUpdate: the restart right after an update that carried no
+	// connection (launcher_after_update.go); no update is pending then.
+	afterUpdate bool
 }
 
 // planLauncherServiceRestart decides how a staged update restarts this daemon.
@@ -216,7 +219,10 @@ func (r *launcherServiceRestart) run(logger *slog.Logger) bool {
 	if r == nil || r.method == "" {
 		return false
 	}
-	if err := markLauncherUpdateServiceRestart(r.stateDir, true); err != nil {
+	if r.afterUpdate {
+		// No update is pending: the start after the restart selects the
+		// launcher refresh this daemon staged.
+	} else if err := markLauncherUpdateServiceRestart(r.stateDir, true); err != nil {
 		serviceRestartPending.Store(false)
 		logger.Warn("the update restarts the daemon under the running launcher: the update journal could not be marked for a service restart", "error", err)
 		return false
@@ -226,7 +232,9 @@ func (r *launcherServiceRestart) run(logger *slog.Logger) bool {
 	defer signal.Stop(stopped)
 	if err := r.request(); err != nil {
 		serviceRestartPending.Store(false)
-		_ = markLauncherUpdateServiceRestart(r.stateDir, false)
+		if !r.afterUpdate {
+			_ = markLauncherUpdateServiceRestart(r.stateDir, false)
+		}
 		logger.Warn("the update restarts the daemon under the running launcher: the service restart could not be requested", "error", err, "service_manager", r.manager.String())
 		return false
 	}

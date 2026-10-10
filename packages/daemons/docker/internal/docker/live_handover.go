@@ -169,7 +169,7 @@ func (p *DockerPlugin) recordUpdateConnections(started time.Time, result handove
 	if !exitingForUpdate() {
 		return
 	}
-	report := handover.Report{FromVersion: lifecycle.Version, StartedAt: started, Handover: result.Committed, HandedOver: result.HandedOver, Counted: true}
+	report := handover.Report{FromVersion: lifecycle.UpdateReportFromVersion(), StartedAt: started, Handover: result.Committed, HandedOver: result.HandedOver, Counted: true}
 	for class, n := range cuts {
 		report.AddCut(class, n)
 	}

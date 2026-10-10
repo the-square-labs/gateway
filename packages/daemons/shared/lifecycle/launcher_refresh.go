@@ -453,10 +453,16 @@ func scheduleLauncherRefresh(version string, logger *slog.Logger) {
 	launcherPath := canonicalLauncherPath(stateDir, executable)
 	go func() {
 		deadline := time.Now().Add(launcherRefreshCommitWait)
+		// fromVersion: the version the update that started this process came
+		// from ("" when this start was no update).
+		fromVersion := ""
 		for {
 			pending, err := readLauncherUpdateState(stateDir)
 			if err == nil && pending == nil {
 				break
+			}
+			if err == nil && pending.TargetVersion == version && fromVersion == "" {
+				fromVersion = pending.FromVersion
 			}
 			if time.Now().After(deadline) {
 				logger.Info("launcher refresh skipped; daemon update is still pending", "version", version)
@@ -486,6 +492,9 @@ func scheduleLauncherRefresh(version string, logger *slog.Logger) {
 		}
 		if staged {
 			logger.Info("staged launcher refresh; the launcher takes it over in place, or on its next start", "version", version, "launcher", launcherPath)
+		}
+		if plan := planAfterUpdateRestart(stateDir, executable, version, fromVersion, LauncherFeatures(), os.Getppid(), os.Geteuid(), logger); plan != nil {
+			requestAfterUpdateRestart(plan, fromVersion, logger)
 		}
 	}()
 }

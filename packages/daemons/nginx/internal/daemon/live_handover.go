@@ -123,7 +123,7 @@ func (p *NginxPlugin) recordUpdateConnections(started time.Time, result handover
 	if !exitingForUpdate() || p.baseCfg == nil {
 		return
 	}
-	report := handover.Report{FromVersion: lifecycle.Version, StartedAt: started, Handover: result.Committed, HandedOver: result.HandedOver, Counted: true}
+	report := handover.Report{FromVersion: lifecycle.UpdateReportFromVersion(), StartedAt: started, Handover: result.Committed, HandedOver: result.HandedOver, Counted: true}
 	for class, n := range cuts {
 		report.AddCut(class, n)
 	}

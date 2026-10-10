@@ -11,6 +11,7 @@ import (
 
 	"github.com/wiolett-industries/gateway/daemon-shared/atomicfile"
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 	"github.com/wiolett-industries/gateway/daemon-shared/relayresume"
 )
 
@@ -122,6 +123,7 @@ func NewTracker(stateDir, version string) *Tracker {
 	}
 	path := filepath.Join(stateDir, pendingReportFile)
 	pending, err := readReport(path)
+	lifecycle.NotePreviousUpdateReport(!errors.Is(err, os.ErrNotExist))
 	if err == nil || !errors.Is(err, os.ErrNotExist) {
 		_ = os.Remove(path)
 	}

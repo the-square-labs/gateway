@@ -181,6 +181,11 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 		case <-d.launcherChanged:
 			d.logger.Info("reconnecting control session to report the launcher that updated itself")
 			_ = conn.Close()
+		case plan := <-afterUpdateRestarts:
+			// launcher_after_update.go: the session ends, and the daemon
+			// restarts its whole service.
+			d.afterUpdateRestart.Store(plan)
+			_ = conn.Close()
 		}
 	}()
 

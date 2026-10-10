@@ -56,6 +56,9 @@ type DaemonBase struct {
 	// launcherChanged reconnects the control session once the launcher
 	// updated itself in place, so the gateway sees its version and features.
 	launcherChanged chan struct{}
+	// afterUpdateRestart is the service restart right after an update that
+	// carried no connection (launcher_after_update.go), once requested.
+	afterUpdateRestart atomic.Pointer[launcherServiceRestart]
 	// consoleUserRefusal is set at startup when console.user names a user
 	// this daemon cannot switch to; console sessions are refused with it.
 	consoleUserRefusal string
@@ -140,6 +143,9 @@ func (d *DaemonBase) Run(ctx context.Context) error {
 		if ctx.Err() != nil {
 			d.logger.Info("shutting down")
 			return nil
+		}
+		if plan := d.afterUpdateRestart.Swap(nil); plan != nil {
+			err = &RestartRequestedError{Message: "restarting the whole service once after the update", serviceRestart: plan}
 		}
 		// Fatal errors: do NOT reconnect, exit immediately
 		if fatal, ok := err.(*FatalError); ok {
