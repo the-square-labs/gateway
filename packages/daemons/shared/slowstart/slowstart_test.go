@@ -1,6 +1,9 @@
 package slowstart
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestSlowStartAhead(t *testing.T) {
 	const infinite = 0x7fffffff
@@ -58,4 +61,31 @@ func TestRestartAheadOnSmallWrites(t *testing.T) {
 func TestNilGuardDoesNothing(t *testing.T) {
 	var g *Guard
 	g.BeforeWrite()
+}
+
+// A threshold is judged at the path's round trip (the kernel's recent minimum), not at a smoothed round trip a busy
+// host's queues inflate; a sender delivering at BusyRate is busy (the relay's lane hint skips it).
+func TestStaleAtThePathsRoundTrip(t *testing.T) {
+	lan := State{SlowStartThreshold: 26, RTTUs: 15_000, MinRTTUs: 180, MSS: 1448}
+	if lan.PathRTT() != 180*time.Microsecond || lan.Stale() {
+		t.Fatalf("LAN sender after a loss at srtt 15 ms: path %v stale %v", lan.PathRTT(), lan.Stale())
+	}
+	if old := (State{SlowStartThreshold: 26, RTTUs: 15_000, MSS: 1448}); !old.Stale() {
+		t.Fatal("without the kernel's minimum the smoothed round trip counts")
+	}
+	far := State{SlowStartThreshold: 4, RTTUs: 62_000, MinRTTUs: 60_000, MSS: 1448}
+	if !far.Collapsed() || !far.Stale() {
+		t.Fatal("far sender after a timeout is not collapsed")
+	}
+	if slow := (State{SlowStartThreshold: 411, RTTUs: 150_000, MinRTTUs: 148_000, MSS: 1448}); !slow.Slow() {
+		t.Fatal("a LAN-learned threshold on a 150 ms path is not slow")
+	}
+	busy := State{DeliveryRate: 110 << 20, LastDataSentMs: 3}
+	if !busy.Busy() {
+		t.Fatal("sender at 110 MB/s is not busy")
+	}
+	busy.LastDataSentMs = 5000
+	if busy.Busy() {
+		t.Fatal("a rate sample from 5 s ago counts as busy")
+	}
 }

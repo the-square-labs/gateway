@@ -156,6 +156,25 @@ type State struct {
 	RTTUs, RcvRTTUs uint32
 	// MSS is the sender's segment size in bytes (0 where unknown).
 	MSS uint32
+	// MinRTTUs is the kernel's shortest round trip sample of the last few
+	// minutes (0 where unknown): the path's own round trip. The smoothed
+	// round trip also counts the time segments wait in queues; on a loaded
+	// LAN host it reads 10-20 ms (stand rc.9: lanes to the local relay at
+	// srtt 5-19 ms that moved 110 MB/s with a window of 26 segments).
+	MinRTTUs uint32
+	// DeliveryRate is the kernel's latest delivery rate sample in bytes per
+	// second, LastDataSentMs how long ago the connection last sent data.
+	DeliveryRate   uint64
+	LastDataSentMs uint32
+}
+
+// PathRTT is the round trip a sender's window turns over at: the kernel's
+// recent minimum where known, else the smoothed round trip.
+func (s State) PathRTT() time.Duration {
+	if s.MinRTTUs != 0 && (s.RTTUs == 0 || s.MinRTTUs < s.RTTUs) {
+		return time.Duration(s.MinRTTUs) * time.Microsecond
+	}
+	return time.Duration(s.RTTUs) * time.Microsecond
 }
 
 const (
@@ -169,9 +188,10 @@ const (
 )
 
 // Collapsed reports a sender whose congestion state collapsed (see
-// CollapsedThreshold).
+// CollapsedThreshold), judged at its path's round trip (PathRTT): a queue on
+// a busy LAN host does not make a short path long.
 func (s State) Collapsed() bool {
-	return s.SlowStartThreshold < CollapsedThreshold && time.Duration(s.RTTUs)*time.Microsecond >= CollapsedRTT
+	return s.SlowStartThreshold < CollapsedThreshold && s.PathRTT() >= CollapsedRTT
 }
 
 // SlowRate is the rate below which a learned slow start threshold counts as
@@ -183,20 +203,36 @@ func (s State) Collapsed() bool {
 const SlowRate = 8 << 20
 
 // Slow reports a sender whose learned slow start threshold, sent once per
-// round trip, carries less than SlowRate on a path of at least CollapsedRTT:
-// what a threshold learned on a LAN, or left by a loss long ago, is worth
-// after the round trip grew. A connection that never left a slow start is
-// not slow.
+// round trip of its path (PathRTT), carries less than SlowRate on a path of
+// at least CollapsedRTT: what a threshold learned on a LAN, or left by a loss
+// long ago, is worth after the round trip grew. A connection that never left
+// a slow start is not slow.
 func (s State) Slow() bool {
-	if s.SlowStartThreshold >= InfiniteThreshold || s.MSS == 0 || time.Duration(s.RTTUs)*time.Microsecond < CollapsedRTT {
+	rtt := s.PathRTT()
+	if s.SlowStartThreshold >= InfiniteThreshold || s.MSS == 0 || rtt < CollapsedRTT {
 		return false
 	}
-	return uint64(s.SlowStartThreshold)*uint64(s.MSS)*1_000_000 < SlowRate*uint64(s.RTTUs)
+	return uint64(s.SlowStartThreshold)*uint64(s.MSS)*1_000_000 < SlowRate*uint64(rtt.Microseconds())
 }
 
 // Stale reports a sender whose congestion state is worth less than a new
 // connection's: collapsed, or slow (see Collapsed and Slow).
 func (s State) Stale() bool { return s.Collapsed() || s.Slow() }
+
+// BusyRate is a delivery rate at which a connection is not replaced whatever
+// its learned state says: it delivers (a collapsed lane moves 3-12 MB/s, a
+// LAN lane after an ordinary loss still 110 MB/s).
+const BusyRate = 16 << 20
+
+// busyWithin: a delivery rate sample counts while the connection sent data
+// this recently.
+const busyWithin = time.Second
+
+// Busy reports a sender that is moving data at BusyRate or more right now
+// (the kernel's latest delivery rate sample, taken within the last second).
+func (s State) Busy() bool {
+	return s.DeliveryRate >= BusyRate && time.Duration(s.LastDataSentMs)*time.Millisecond < busyWithin
+}
 
 // InfiniteThreshold is Linux's slow start threshold of a connection that never
 // left a slow start.

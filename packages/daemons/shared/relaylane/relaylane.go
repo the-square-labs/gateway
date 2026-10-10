@@ -33,10 +33,21 @@ const (
 	// BulkBytes is how much a lane carries within one Check for its round
 	// trip to count as the one it learned its congestion state on.
 	BulkBytes = 256 << 10
+	// BusyBytes is how much a lane carries within one Check to count as
+	// delivering (slowstart.BusyRate): such a lane is never rotated, whatever
+	// its learned state or the relay says.
+	BusyBytes uint64 = slowstart.BusyRate * uint64(Check) / uint64(time.Second)
+	// IdleChecks is how many Checks in a row without bulk data make a lane
+	// idle: its next transfer starts from what the lane learned (a slow start
+	// up to its threshold), and a lane whose threshold is worth less than
+	// slowstart.SlowRate at its path's round trip is rotated before it.
+	IdleChecks = 4
 	// RTTGrowth and RTTGrowthMin: a lane whose round trip under bulk data grew
-	// this far beyond the one it learned on is rotated.
+	// this far beyond the one it learned on, at GrewChecks Checks in a row, is
+	// rotated (one Check's round trip can be a queue on a busy host).
 	RTTGrowth    = 4
 	RTTGrowthMin = 10 * time.Millisecond
+	GrewChecks   = 2
 )
 
 // Trigger is one lane connection's rotation trigger state. Hint is safe from
@@ -52,6 +63,10 @@ type Trigger struct {
 	// any look (0: none yet): the round trip a lane that never carried bulk
 	// data learned its state on.
 	minRTT time.Duration
+	// idle counts the Checks in a row without bulk data (up to IdleChecks),
+	// grew those in a row whose round trip under bulk data grew.
+	idle, grew int
+	looked     bool
 }
 
 // NoteHeader takes a tunnel's response header: the relay says its sending
@@ -65,35 +80,69 @@ func (t *Trigger) NoteHeader(header map[string][]string) {
 // ClearHint forgets the relay's word (the lane may not rotate yet).
 func (t *Trigger) ClearHint() { t.hinted.Store(false) }
 
-// Reason decides from a lane's TCP state whether it is rotated ("" if not):
-// its own sending side collapsed, the relay said its side did, its sending
-// side carries bulk data under a threshold worth less than
-// slowstart.SlowRate, or its round trip under bulk data grew far beyond the
-// one it learned on (the shortest round trip it carried bulk at, or, before
-// any, the shortest it showed at all). The round trip is read where bulk
-// data flows: the sender's smoothed round trip while the lane sends bulk, the
-// receiver's estimate while it receives bulk (the acks it sends meanwhile are
-// small writes whose round trip the peer's delayed acks inflate).
+// Reason decides from a lane's TCP state, looked at every Check, whether it
+// is rotated ("" if not). A lane that delivers BusyBytes per Check is never
+// rotated: it delivers, whatever it learned (stand rc.9: LAN lanes to the
+// local relay rotated as "collapsed" after an ordinary loss while moving 110
+// MB/s). Otherwise a lane is rotated when
+//   - the relay said its sending side went stale (relay_collapsed);
+//   - it is idle and its own sending side is stale at its path's round trip
+//     (collapsed: the next transfer would start slow);
+//   - its sending side carries bulk data under a threshold worth less than
+//     slowstart.SlowRate (slow_threshold);
+//   - its round trip under bulk data grew far beyond the one it learned on
+//     (the shortest round trip it carried bulk at, or, before any, the
+//     shortest it showed at all) at GrewChecks looks in a row
+//     (round_trip_grew).
+//
+// The round trip is read where bulk data flows: the sender's smoothed round
+// trip while the lane sends bulk, the receiver's estimate while it receives
+// bulk (the acks it sends meanwhile are small writes whose round trip the
+// peer's delayed acks inflate).
 func (t *Trigger) Reason(state slowstart.State, known bool) string {
-	if t.hinted.Load() {
-		return "relay_collapsed"
-	}
 	if !known {
+		if t.hinted.Load() {
+			return "relay_collapsed"
+		}
 		return ""
-	}
-	if state.Collapsed() {
-		return "collapsed"
 	}
 	if state.RTTUs != 0 {
 		if rtt := time.Duration(state.RTTUs) * time.Microsecond; t.minRTT == 0 || rtt < t.minRTT {
 			t.minRTT = rtt
 		}
 	}
+	if state.MinRTTUs == 0 && t.minRTT != 0 {
+		// Without the kernel's minimum, the shortest round trip this lane
+		// showed stands for its path's.
+		state.MinRTTUs = uint32(t.minRTT / time.Microsecond)
+	}
 	sent, received := state.BytesAcked-t.lastSent, state.BytesReceived-t.lastReceived
-	first := t.lastSent == 0 && t.lastReceived == 0
+	first := !t.looked
+	t.looked = true
 	t.lastSent, t.lastReceived = state.BytesAcked, state.BytesReceived
 	if first {
+		sent, received = 0, 0
+	}
+	bulk := sent >= BulkBytes || received >= BulkBytes
+	if bulk {
+		t.idle = 0
+	} else if t.idle < IdleChecks {
+		t.idle++
+	}
+	if sent >= BusyBytes || received >= BusyBytes || state.Busy() {
+		// Delivering: not now, the relay's word included (it stays for a
+		// look when the lane no longer delivers).
+		t.grew = 0
 		return ""
+	}
+	if t.hinted.Load() {
+		return "relay_collapsed"
+	}
+	if first {
+		return ""
+	}
+	if t.idle >= IdleChecks && state.Stale() {
+		return "collapsed"
 	}
 	// The rate rule only while the lane sends bulk data: an idle lane's
 	// round trip comes from small writes the peer acks late.
@@ -107,18 +156,25 @@ func (t *Trigger) Reason(state slowstart.State, known bool) string {
 	case received >= BulkBytes && state.RcvRTTUs != 0:
 		rttUs = state.RcvRTTUs
 	default:
+		t.grew = 0
 		return ""
 	}
 	rtt := time.Duration(rttUs) * time.Microsecond
 	learned := t.bulkRTT
-	if learned == 0 || rtt < learned {
-		t.bulkRTT = rtt
-	}
 	if learned == 0 {
 		learned = t.minRTT
 	}
 	if learned != 0 && rtt >= RTTGrowth*learned && rtt >= learned+RTTGrowthMin {
-		return "round_trip_grew"
+		// Not learned from: the next look compares with the same round trip.
+		t.grew++
+		if t.grew >= GrewChecks {
+			return "round_trip_grew"
+		}
+		return ""
+	}
+	t.grew = 0
+	if t.bulkRTT == 0 || rtt < t.bulkRTT {
+		t.bulkRTT = rtt
 	}
 	return ""
 }

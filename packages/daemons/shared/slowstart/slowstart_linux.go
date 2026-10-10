@@ -99,7 +99,8 @@ func readState(conn net.Conn) (State, bool) {
 			return
 		}
 		state = State{SlowStartThreshold: info.Snd_ssthresh, BytesAcked: info.Bytes_acked, BytesReceived: info.Bytes_received, RTTUs: info.Rtt,
-			RcvRTTUs: info.Rcv_rtt, MSS: info.Snd_mss}
+			RcvRTTUs: info.Rcv_rtt, MSS: info.Snd_mss, MinRTTUs: info.Min_rtt, DeliveryRate: info.Delivery_rate,
+			LastDataSentMs: info.Last_data_sent}
 		read = true
 	}); err != nil {
 		return State{}, false
