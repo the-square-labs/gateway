@@ -50,9 +50,20 @@ const SLOW_RESPONSE_FLOOR_MS = 250;
 export const NODE_RECONNECT_GRACE_MS = 60_000;
 
 /** The probe never reached the daemon: every attempt failed with the registry's not-connected error. */
-function failedOnlyBecauseNodeIsNotConnected(nodeId: string, errors: string[]): boolean {
+/** The node registry's errors for a command its node never answered (isNodeConnectionError). */
+const NODE_DISCONNECTED = 'Node disconnected';
+const COMMAND_TIMED_OUT = /^Command \S+ timed out after \d+ms$/;
+
+/**
+ * Every probe got no answer from its node: it was not connected, its stream ended with the probe in flight, or the
+ * probe timed out (the node may be updating).
+ */
+function failedOnlyBecauseNodeDidNotAnswer(nodeId: string, errors: string[]): boolean {
   const notConnected = `Node ${nodeId} is not connected`;
-  return errors.length > 0 && errors.every((error) => error === notConnected);
+  return (
+    errors.length > 0 &&
+    errors.every((error) => error === notConnected || error === NODE_DISCONNECTED || COMMAND_TIMED_OUT.test(error))
+  );
 }
 
 type HealthStatus = 'online' | 'offline' | 'degraded' | 'unknown';
@@ -467,7 +478,10 @@ export class HealthCheckJob {
    * node's daemon is being updated (it restarts on its own).
    */
   private async awaitingNodeReconnect(nodeId: string, errors: string[]): Promise<boolean> {
-    if (!failedOnlyBecauseNodeIsNotConnected(nodeId, errors)) return false;
+    if (!failedOnlyBecauseNodeDidNotAnswer(nodeId, errors)) return false;
+    // The node's stream ended with the probe in flight (a daemon update, a reconnect): the next sample tells, and a
+    // node that stays away fails it as not connected once its graces end (stand rc.12 F-2).
+    if (errors.every((error) => error === NODE_DISCONNECTED)) return true;
     if (Date.now() - this.startedAt < NODE_RECONNECT_GRACE_MS) return true;
     if (this.nodeDispatch?.isNodeReconnecting?.(nodeId)) return true;
     return (await this.nodeDispatch?.isNodeUpdateInProgress?.(nodeId)?.catch(() => false)) === true;

@@ -77,6 +77,11 @@ export interface RelayPoolWarning {
 const AUTO_REBALANCE_SETTLE_MS = 30_000;
 /** How long a relay an update drained counts as restarting by plan when the update never resumes it. */
 const UPDATE_DRAIN_PLANNED_MS = 60 * 60_000;
+/**
+ * How long after a relay's planned restart (a Relay Pool update) the nodes' reports may still carry measurements taken
+ * while it restarted: three report intervals, the reachability window of relay-topology.service.
+ */
+const RESTART_DATA_PLANE_GRACE_MS = 90_000;
 /** A rolled-back out-of-date generation is planned again after this; the placement that rolled it back finishes first. */
 const REPLAN_AFTER_SUPERSEDE_MS = 1_000;
 /** How long a Relay Pool update waits for placement to settle before it drains its next relay (settleForUpdate). */
@@ -256,6 +261,10 @@ export class RelayPoolService {
   /** The relays last judged failing on their data plane, and when each one last entered or left that judgement. */
   private dataPlaneFailing = new Set<string>();
   private readonly dataPlaneChangedAt = new Map<string, number>();
+  /** Relays judged failing within the grace after their planned restart, not warned about (yet). */
+  private readonly dataPlaneFailingAfterRestart = new Set<string>();
+  /** When a Relay Pool update resumed each relay it drained (forgetPlannedDrain). */
+  private readonly resumedAfterUpdateAt = new Map<string, number>();
   private localRelayOutage?: Pick<LocalRelayOutageSignal, 'latestOutage'>;
   private nodesAwaitingLocalRelay?: Pick<NodeRegistryService, 'isAwaitingLocalRelay'> &
     Partial<Pick<NodeRegistryService, 'isReconnecting'>>;
@@ -359,15 +368,31 @@ export class RelayPoolService {
   private noteDataPlaneChanges(instances: RelayInstanceRow[], failing: ReadonlySet<string>, now = Date.now()) {
     const names = new Map(instances.map(({ id, displayName }) => [id, displayName]));
     for (const id of failing) {
-      if (this.dataPlaneFailing.has(id)) continue;
-      this.dataPlaneChangedAt.set(id, now);
-      logger.warn('Most nodes that measure a relay cannot reach its relay port; it gets no assignments meanwhile', {
-        relayInstanceId: id,
-        relay: names.get(id) ?? id,
-      });
+      const entered = !this.dataPlaneFailing.has(id);
+      if (entered) this.dataPlaneChangedAt.set(id, now);
+      else if (!this.dataPlaneFailingAfterRestart.has(id)) continue;
+      const details = { relayInstanceId: id, relay: names.get(id) ?? id };
+      // Right after a planned restart the nodes' reports still carry what they measured while it was down (stand
+      // rc.12 F-2: 11 s after relay-1 came back from its pool update): a warning only once it outlasts that.
+      if (this.inPlannedRestart(id, now)) {
+        if (entered) {
+          this.dataPlaneFailingAfterRestart.add(id);
+          logger.info(
+            'The nodes do not reach a relay that restarted for an update moments ago; it gets no assignments until they do',
+            details
+          );
+        }
+        continue;
+      }
+      this.dataPlaneFailingAfterRestart.delete(id);
+      logger.warn(
+        'Most nodes that measure a relay cannot reach its relay port; it gets no assignments meanwhile',
+        details
+      );
     }
     for (const id of this.dataPlaneFailing) {
       if (failing.has(id)) continue;
+      this.dataPlaneFailingAfterRestart.delete(id);
       this.dataPlaneChangedAt.set(id, now);
       // A relay removed from the pool meanwhile is not reported.
       if (names.has(id))
@@ -377,6 +402,16 @@ export class RelayPoolService {
     for (const [id, at] of this.dataPlaneChangedAt) {
       if (now - at > AUTO_REBALANCE_RETRY_MS) this.dataPlaneChangedAt.delete(id);
     }
+  }
+
+  /** The relay restarts by plan: an update drained it, or resumed it within RESTART_DATA_PLANE_GRACE_MS. */
+  private inPlannedRestart(id: string, now: number): boolean {
+    if (this.drainedForUpdate.has(id)) return true;
+    const resumedAt = this.resumedAfterUpdateAt.get(id);
+    if (resumedAt === undefined) return false;
+    if (now - resumedAt < RESTART_DATA_PLANE_GRACE_MS) return true;
+    this.resumedAfterUpdateAt.delete(id);
+    return false;
   }
 
   /**
@@ -2182,7 +2217,7 @@ export class RelayPoolService {
 
   /** A resumed relay serves as before its drain: no hold back, also after the update restarted it. */
   private forgetPlannedDrain(instanceId: string): void {
-    this.drainedForUpdate.delete(instanceId);
+    if (this.drainedForUpdate.delete(instanceId)) this.resumedAfterUpdateAt.set(instanceId, Date.now());
     this.notServingAt.delete(instanceId);
     // A generation staged while it drained leaves it out: it must not be activated now (relayBackSincePlanned).
     this.servingNow.set(instanceId, true);

@@ -786,7 +786,13 @@ export class NodeRegistryService {
     const result = new Promise<CommandResult>((resolve, reject) => {
       const timeout = setTimeout(() => {
         node.pendingCommands.delete(commandId);
-        const error = new Error(`Command ${commandId} timed out after ${timeoutMs}ms`);
+        // The stream the command went out on ended meanwhile (a daemon update, a reconnect) and no answer came over
+        // the next one: the command was lost with that stream, as when a stream ends without a next one (stand rc.12
+        // F-2: health probes sent while a batch updated their nodes warned as timeouts).
+        const error =
+          this.nodes.get(nodeId)?.connectionId === node.connectionId
+            ? new Error(`Command ${commandId} timed out after ${timeoutMs}ms`)
+            : new Error('Node disconnected');
         rejectAccepted(error);
         reject(error);
       }, timeoutMs);

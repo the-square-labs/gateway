@@ -66,3 +66,40 @@ describe('commands in flight across a control reconnect', () => {
     await expect(result).rejects.toThrow('Node disconnected');
   });
 });
+
+/**
+ * A command sent on a stream that ends before it is answered, with no answer over the next one, was lost with that
+ * stream, not slow (stand rc.12 F-2: health probes sent while a batch updated ingress-1 warned as timeouts).
+ */
+describe('a command that times out', () => {
+  it('fails as Node disconnected when its stream was replaced meanwhile', async () => {
+    vi.useFakeTimers();
+    try {
+      const nodes = registry();
+      const first = stream();
+      await nodes.register(NODE, 'nginx', 'ingress-1', 'hash', first, resends);
+      const result = nodes.sendCommand(NODE, { commandId: 'probe-1' } as never, 15_000);
+      void result.catch(() => {});
+      await nodes.deregister(NODE, first);
+      await nodes.register(NODE, 'nginx', 'ingress-1', 'hash', stream(), resends);
+      await vi.advanceTimersByTimeAsync(15_000);
+      await expect(result).rejects.toThrow(/^Node disconnected$/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('fails as a timeout when its stream stayed', async () => {
+    vi.useFakeTimers();
+    try {
+      const nodes = registry();
+      await nodes.register(NODE, 'nginx', 'ingress-1', 'hash', stream(), resends);
+      const result = nodes.sendCommand(NODE, { commandId: 'probe-2' } as never, 15_000);
+      void result.catch(() => {});
+      await vi.advanceTimersByTimeAsync(15_000);
+      await expect(result).rejects.toThrow(/^Command probe-2 timed out after 15000ms$/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

@@ -250,3 +250,48 @@ describe('route health job: probes Gateway sends itself', () => {
     expect(context).toEqual({ health_status: 'offline' });
   });
 });
+
+/**
+ * A probe its node never answered because the node was updating (stand rc.12 F-2: a batch update replaced ingress-1's
+ * stream with two Secure Link probes in flight) is deferred and logged at debug, not a warning; one that fails on a
+ * node that is not away still warns.
+ */
+describe('route health job: probes of a node that updates', () => {
+  const host = {
+    id: 'route-1',
+    upstreamKind: 'docker_deployment',
+    secureLinkMigratedAt: new Date(),
+    nodeId: 'ingress-1',
+    domainNames: ['docs.test'],
+  };
+  const jobFailingWith = (error: string, updating = false) => {
+    const dispatch = {
+      isNodeConnected: () => true,
+      isNodeReconnecting: () => false,
+      isNodeUpdateInProgress: async () => updating,
+      probeProxySecureLink: vi.fn(async () => {
+        throw new Error(error);
+      }),
+    };
+    const job = new HealthCheckJob({} as never, dispatch as never);
+    (job as any).startedAt = Date.now() - 10 * 60_000;
+    return job;
+  };
+
+  it('defers a probe lost with its node stream, and one that timed out while the node updates', async () => {
+    const { logger } = await import('@/lib/logger.js');
+    const warn = vi.spyOn(logger, 'warn');
+    try {
+      const lost = jobFailingWith('Node disconnected');
+      expect((await (lost as any).checkHostOnNode(host, 'ingress-1')).status).toBe('deferred');
+      const timedOut = jobFailingWith('Command d1761f61 timed out after 15000ms', true);
+      expect((await (timedOut as any).checkHostOnNode(host, 'ingress-1')).status).toBe('deferred');
+      expect(warn).not.toHaveBeenCalledWith('Secure Link health probe failed', expect.anything());
+
+      const stillThere = jobFailingWith('Command d1761f61 timed out after 15000ms');
+      expect((await (stillThere as any).checkHostOnNode(host, 'ingress-1')).status).toBe('offline');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
