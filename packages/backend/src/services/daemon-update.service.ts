@@ -114,6 +114,40 @@ export const DAEMON_ACCOUNTS_LOCAL_CONNECTIONS_VERSION = 'v2.11.4-rc.8';
 /** The cut class of connections a daemon that cannot account for them handed over reports as kept. */
 export const UNVERIFIED_KEPT_CUT_CLASS = 'unverified';
 
+/**
+ * The cut class of the sessions a replaced Secure Link connector still carried when it was removed (up to an hour after
+ * its replacement, e.g. by a Relay Pool update). The daemon adds it to its last update's report; it is no part of that
+ * update and is kept apart (metadata.lastConnectorReplacement), so a past update's record never changes (stand rc.9,
+ * O-4: it was booked on the 05:57 update record and moved its finish to 07:19).
+ */
+export const CONNECTOR_RETIRED_CUT_CLASS = 'connector_retired';
+
+/** The node's last replacement of its Secure Link connector that cut connections (metadata.lastConnectorReplacement). */
+export interface NodeLastConnectorReplacement {
+  /** When the replaced connector was removed with the sessions it carried. */
+  at: string;
+  connectionsCut: number;
+  daemonVersion: string;
+}
+
+/** The connector replacement a report carries, to keep apart from the update; 'skip' when none or already kept. */
+export function connectorReplacementToRecord(
+  metadata: Record<string, unknown>,
+  report: NodeUpdateConnectionResult
+): NodeLastConnectorReplacement | 'skip' {
+  const cut = report.cut?.[CONNECTOR_RETIRED_CUT_CLASS] ?? 0;
+  if (!(cut > 0)) return 'skip';
+  const at = new Date(report.finishedAtUnixMs).toISOString();
+  const last = metadata.lastConnectorReplacement as Partial<NodeLastConnectorReplacement> | undefined;
+  if (last?.at === at && last.connectionsCut === cut) return 'skip';
+  return { at, connectionsCut: cut, daemonVersion: report.toVersion };
+}
+
+function withoutConnectorRetired(cut: Record<string, number>): Record<string, number> {
+  const { [CONNECTOR_RETIRED_CUT_CLASS]: _retired, ...rest } = cut ?? {};
+  return rest;
+}
+
 /** A report may start this much after Gateway completed its update (clocks of node and Gateway differ). */
 const UPDATE_REPORT_CLOCK_SLACK_MS = 2 * 60 * 1000;
 
@@ -134,7 +168,7 @@ function updateWarnings(metadata: Record<string, unknown>): string[] {
  */
 export function lastUpdateConnectionsToRecord(
   metadata: Record<string, unknown>,
-  report: NodeUpdateConnectionResult
+  reported: NodeUpdateConnectionResult
 ): NodeLastUpdateConnections | 'pending' | 'skip' {
   // While an update runs, a report may belong to it, also one from the daemon a rollback puts back: try again once
   // the update ended.
@@ -147,13 +181,23 @@ export function lastUpdateConnectionsToRecord(
   // The daemon the result left running reports it: the target, or the previous one after a rollback.
   const resultVersion =
     typeof lastUpdate.rolledBackTo === 'string' ? lastUpdate.rolledBackTo : lastUpdate.targetVersion;
-  if (!sameVersion(resultVersion, report.toVersion)) return 'skip';
+  if (!sameVersion(resultVersion, reported.toVersion)) return 'skip';
   // A report of something later on the same version (a rollback to the version of an older result) is not this
   // result's (stand rc.8 O-2: a rollback's report was kept with an update completed ten hours before).
   const completedAt = typeof lastUpdate.completedAt === 'string' ? Date.parse(lastUpdate.completedAt) : Number.NaN;
-  if (Number.isFinite(completedAt) && report.startedAtUnixMs > completedAt + UPDATE_REPORT_CLOCK_SLACK_MS)
+  if (Number.isFinite(completedAt) && reported.startedAtUnixMs > completedAt + UPDATE_REPORT_CLOCK_SLACK_MS)
     return 'skip';
-  if (lastUpdate.connections?.finishedAtUnixMs === report.finishedAtUnixMs) return 'skip';
+  if (lastUpdate.connections?.finishedAtUnixMs === reported.finishedAtUnixMs) return 'skip';
+  // A result that holds this update's counts already is final: a later report of it (a connector replacement added to
+  // its cut, see CONNECTOR_RETIRED_CUT_CLASS) does not change it.
+  const recorded = lastUpdate.connections;
+  if (
+    recorded &&
+    sameVersion(recorded.fromVersion, reported.fromVersion) &&
+    sameVersion(recorded.toVersion ?? reported.toVersion, reported.toVersion)
+  )
+    return 'skip';
+  const report = { ...reported, cut: withoutConnectorRetired(reported.cut) };
   const accounts =
     parseSemver(report.toVersion) === null ||
     compareSemver(report.toVersion, DAEMON_ACCOUNTS_LOCAL_CONNECTIONS_VERSION) >= 0;
@@ -985,7 +1029,11 @@ export class DaemonUpdateService {
     // The update completes on Gateway's side when the daemon registers on its target; the next report tries again.
     if (connections === 'pending') return false;
     this.settledUpdateReports.set(nodeId, reportKey);
-    if (connections === 'skip') return false;
+    const replaced = await this.recordConnectorReplacement(nodeId, metadata, report);
+    if (connections === 'skip') {
+      if (replaced) this.emitNodeUpdated(nodeId);
+      return replaced;
+    }
     const { targetVersion, completedAt } = metadata.lastUpdate as NodeLastUpdate;
     // Only the result's own key changes, and only on that result: an update that starts or ends meanwhile keeps its
     // metadata.
@@ -1010,9 +1058,36 @@ export class DaemonUpdateService {
         )
       )
       .returning({ id: nodes.id });
-    if (updated.length === 0) return false;
+    if (updated.length === 0) {
+      if (replaced) this.emitNodeUpdated(nodeId);
+      return replaced;
+    }
     this.emitNodeUpdated(nodeId);
     return true;
+  }
+
+  /** Keeps a connector replacement a report carries as its own entry (metadata.lastConnectorReplacement). */
+  private async recordConnectorReplacement(
+    nodeId: string,
+    metadata: Record<string, unknown>,
+    report: NodeUpdateConnectionResult
+  ): Promise<boolean> {
+    const replacement = connectorReplacementToRecord(metadata, report);
+    if (replacement === 'skip') return false;
+    const updated = await this.db
+      .update(nodes)
+      .set({
+        metadata: sql`jsonb_set(
+          coalesce(${nodes.metadata}, '{}'::jsonb),
+          '{lastConnectorReplacement}',
+          ${JSON.stringify(replacement)}::jsonb,
+          true
+        )`,
+        updatedAt: new Date(),
+      })
+      .where(eq(nodes.id, nodeId))
+      .returning({ id: nodes.id });
+    return updated.length > 0;
   }
 
   /** Keeps why an update that is no longer running could not start again (for example after a Gateway restart). */

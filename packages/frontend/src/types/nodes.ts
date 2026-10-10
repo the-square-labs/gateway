@@ -359,6 +359,23 @@ export function getNodeLastUpdate(node: Node | NodeDetail): NodeLastUpdate | nul
   };
 }
 
+/** The node's last Secure Link connector replacement that cut connections (kept apart from its daemon updates). */
+export interface NodeLastConnectorReplacement {
+  at: string;
+  connectionsCut: number;
+}
+
+export function getNodeLastConnectorReplacement(
+  node: Node | NodeDetail
+): NodeLastConnectorReplacement | null {
+  const value = nodeUpdateMetadata(node).lastConnectorReplacement;
+  if (!value || typeof value !== "object") return null;
+  const { at, connectionsCut } = value as Record<string, unknown>;
+  if (typeof at !== "string" || typeof connectionsCut !== "number" || connectionsCut <= 0)
+    return null;
+  return { at, connectionsCut };
+}
+
 /** Whether the node's daemon advertised a capability when it registered. */
 export function hasDaemonCapability(node: Node | NodeDetail, capability: string): boolean {
   const advertised = (node.capabilities as Record<string, unknown> | undefined)?.capabilities;

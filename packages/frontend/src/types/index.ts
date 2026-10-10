@@ -52,6 +52,7 @@ export type {
 export {
   DAEMON_STREAM_HANDOVER_CAPABILITY,
   effectiveNodeStatus,
+  getNodeLastConnectorReplacement,
   getNodeLastUpdate,
   getNodeUpdateLastError,
   getNodeUpdateTargetVersion,

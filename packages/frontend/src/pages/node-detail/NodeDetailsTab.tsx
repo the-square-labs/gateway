@@ -33,6 +33,7 @@ import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-p
 import {
   DAEMON_STREAM_HANDOVER_CAPABILITY,
   type DockerRuntimeStatus,
+  getNodeLastConnectorReplacement,
   getNodeLastUpdate,
   getNodeUpdateLastError,
   getNodeUpdateTargetVersion,
@@ -256,6 +257,7 @@ export function NodeDetailsTab({
   const updateWaitingForTasks = getNodeUpdateWaitingForTasks(node);
   const updateTaskWaitStartedAt = Date.parse(String(node.metadata?.updateTaskWaitStartedAt ?? ""));
   const lastUpdate = getNodeLastUpdate(node);
+  const lastConnectorReplacement = getNodeLastConnectorReplacement(node);
   const lastUpdateError = getNodeUpdateLastError(node);
   // A live NodeControl stream is sufficient to deliver the update even when
   // the daemon and the new generic tunnel protocol do not match yet.
@@ -870,6 +872,18 @@ export function NodeDetailsTab({
                       {warning}
                     </span>
                   ))}
+                </span>
+              }
+            />
+          )}
+          {lastConnectorReplacement && (
+            <DetailRow
+              label="Connector Replacement"
+              value={
+                <span>
+                  Cut {plural(lastConnectorReplacement.connectionsCut, "connection")} of the
+                  replaced Secure Link connector (
+                  <RelativeTime value={lastConnectorReplacement.at} />)
                 </span>
               }
             />

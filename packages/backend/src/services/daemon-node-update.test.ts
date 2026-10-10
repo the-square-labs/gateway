@@ -2,6 +2,7 @@ import { SQL } from 'drizzle-orm';
 import { describe, expect, it, vi } from 'vitest';
 import { dispatchNodeDaemonUpdate, resumeQueuedDaemonUpdates } from './daemon-node-update.js';
 import {
+  connectorReplacementToRecord,
   DaemonUpdateService,
   LAUNCHER_CANDIDATE_TRIAL_LIMIT_MS,
   lastUpdateConnectionsToRecord,
@@ -328,6 +329,39 @@ describe('connections of the last update', () => {
       lastUpdate: { targetVersion: 'v2.11.5', rolledBackTo: 'v2.11.4', completedAt: cameBack.toISOString() },
     };
     expect(lastUpdateConnectionsToRecord(record, accounted)).toMatchObject({ kept: 30, cut: { local_closed: 7 } });
+  });
+
+  // Stand rc.9 O-4: the sessions a replaced Secure Link connector carried when it was removed an hour after a Relay
+  // Pool update were booked on the node's last daemon update record, whose finish moved to the removal.
+  it('keeps a connector replacement as its own entry and never changes the recorded update', async () => {
+    const { service, node, sqlWrites } = harness({
+      metadata: { lastUpdate: { targetVersion: 'v2.12.1', completedAt: '2027-01-15T08:00:00.000Z', warnings: [] } },
+    });
+    const connections = lastUpdateConnectionsToRecord(node.metadata, report);
+    expect(connections).toMatchObject({ cut: { raw_stream: 2 }, finishedAtUnixMs: report.finishedAtUnixMs });
+    node.metadata = { lastUpdate: { ...(node.metadata.lastUpdate as object), connections } };
+    const retired = {
+      ...report,
+      finishedAtUnixMs: report.finishedAtUnixMs + 3_600_000,
+      cut: { raw_stream: 2, connector_retired: 46 },
+    };
+    expect(lastUpdateConnectionsToRecord(node.metadata, retired)).toBe('skip');
+    expect(connectorReplacementToRecord(node.metadata, retired)).toEqual({
+      at: new Date(retired.finishedAtUnixMs).toISOString(),
+      connectionsCut: 46,
+      daemonVersion: 'v2.12.1',
+    });
+    await expect(service.recordLastUpdateConnections(NODE_ID, retired)).resolves.toBe(true);
+    expect(sqlWrites).toHaveLength(1);
+    const written = sqlWrites[0]!.queryChunks.map((chunk) => (chunk as { value?: string[] }).value?.join('') ?? '');
+    expect(written.join('')).toContain('lastConnectorReplacement');
+    const kept = { at: new Date(retired.finishedAtUnixMs).toISOString(), connectionsCut: 46 };
+    expect(connectorReplacementToRecord({ lastConnectorReplacement: kept }, retired)).toBe('skip');
+    // An update's first report that already carries one: the update's own counts leave it out.
+    const fresh = { lastUpdate: { targetVersion: 'v2.12.1', completedAt: '2027-01-15T08:00:00.000Z', warnings: [] } };
+    expect(lastUpdateConnectionsToRecord(fresh, retired)).toMatchObject({ cut: { raw_stream: 2 } });
+    const freshCut = (lastUpdateConnectionsToRecord(fresh, retired) as { cut: object }).cut;
+    expect(freshCut).not.toHaveProperty('connector_retired');
   });
 
   it('waits for the update to complete before it records its report', async () => {
