@@ -133,6 +133,18 @@ const HOLDS_ANY_ROUTE = '$[*] ? (@.routeId == $ids[*] && !exists(@.removedAtRevi
 
 const logger = createChildLogger('RelayPolicyService');
 
+/**
+ * One of Gateway's own connections opened on a relay after the nearer ones in its order did not open: where it went and
+ * why, so a stream on a farther relay is accounted for (stand rc.10, F-1).
+ */
+function logGatewayPathPastNearer(
+  routeId: string,
+  relayId: string,
+  passed: ReadonlyArray<{ relayId: string; error: string }>
+): void {
+  logger.info('Gateway relay path opened past a nearer relay', { routeId, relayId, passed });
+}
+
 /** What a loopback endpoint of Gateway's own tunnels leads to (see RelayPolicyService.gatewayTunnelEndpoint). */
 export type GatewayTunnelTarget =
   | { kind: 'database'; managedDatabaseId: string; lane?: 'interactive' | 'monitoring' }
@@ -2441,6 +2453,7 @@ export class RelayPolicyService {
     await this.gatewayPaths().measure(routeId, active);
     const activeCandidates = this.gatewayPaths().order(routeId, active, null);
     let lastError: unknown;
+    const passed: Array<{ relayId: string; error: string }> = [];
     for (const candidate of activeCandidates) {
       try {
         await tunnels.bindRaw(
@@ -2449,10 +2462,12 @@ export class RelayPolicyService {
             ? { kind: 'local', grant: candidate.grant, relayId: candidate.relayInstanceId }
             : { kind: 'candidate', candidate }
         );
+        if (passed.length) logGatewayPathPastNearer(routeId, candidate.relayInstanceId, passed);
         return;
       } catch (error) {
         if (isGatewayConnectionGone(error)) throw error;
         lastError = error;
+        passed.push({ relayId: candidate.relayInstanceId, error: errorMessage(error) });
       }
     }
     if (!activeCandidates.length) {
@@ -2463,10 +2478,11 @@ export class RelayPolicyService {
   }
 
   /**
-   * One relay path of a resumable Gateway stream: active candidates first, then staging ones (registered on both
+   * One relay path of a resumable Gateway stream: active and staging candidates (a staging one is registered on both
    * ends: when the only active relay drains or was force-disconnected the stream moves there instead of being cut),
-   * the relay it leaves last; among them reachable relays first, then by role and measured distance (O-1). The path
-   * opens in the tunnel worker, which hands it to the stream.
+   * the relay it leaves last; reachable relays first, then by role and measured distance, an active candidate before a
+   * staging one only among equally near ones (orderGatewayRelayCandidates; O-1, rc.10 F-1). The path opens in the
+   * tunnel worker, which hands it to the stream. A path that opens past a nearer relay is logged with the reason.
    */
   private async openGatewayResumePath(
     routeId: string,
@@ -2482,13 +2498,17 @@ export class RelayPolicyService {
     // A pre-pool assignment has only the local relay: a recovering stream comes back to it.
     if (!candidates.length) return tunnels.openLocalResumePath(assignment.grant, LEGACY_RELAY_PATH_ID);
     let lastError: unknown;
+    const passed: Array<{ relayId: string; error: string }> = [];
     for (const candidate of candidates) {
       try {
-        return candidate.local
+        const path = candidate.local
           ? await tunnels.openLocalResumePath(candidate.grant, candidate.relayInstanceId)
           : await tunnels.openCandidateResumePath(candidate);
+        if (passed.length) logGatewayPathPastNearer(routeId, candidate.relayInstanceId, passed);
+        return path;
       } catch (error) {
         lastError = error;
+        passed.push({ relayId: candidate.relayInstanceId, error: errorMessage(error) });
       }
     }
     throw lastError instanceof Error ? lastError : new Error('No other relay is available');

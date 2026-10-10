@@ -135,6 +135,70 @@ describe("Gateway's own relayed streams choose relays by distance (O-1)", () => 
   });
 });
 
+describe("Gateway's own relayed streams during a staged placement change (stand rc.10, F-1)", () => {
+  // Endpoint 0bed542f at 13:31:12 of the rc.10 Relay Pool update: gen 58 `uk:primary, nl:fallback` active, gen 59
+  // `local:primary, uk:fallback` staged (registered 13:31:10, activated 13:31:14), the local relay serving again since
+  // 13:31:09 after its own update. netem NL 300 ms, UK 60 ms.
+  const RESUMED = Date.UTC(2026, 9, 10, 13, 31, 9);
+  const at = (relay: GatewayRelayCandidate, assignmentState: string, role: 'primary' | 'standby') =>
+    assigned({ ...relay, assignmentState, topology: { role } });
+  const gen58 = [at(uk, 'active', 'primary'), at(nl, 'active', 'standby')];
+  const gen59 = [at(local, 'staging', 'primary'), at(uk, 'staging', 'standby')];
+  const outage = (): LocalRelayOutage => ({ since: RESUMED - 13_000, servingAgainAt: RESUMED, planned: true });
+
+  it('orders the serving local relay of the staged placement first and the farther fallback last', () => {
+    const t = paths(outage, () => RESUMED + 3_000);
+    t.instance.observe('relay-nl', 300);
+    t.instance.observe('relay-uk', 60);
+    const order = t.instance.order('route-68bf44f2', [...gen58, ...gen59], null);
+    // UK of both placements before NL; the active UK before the staged one (equally near).
+    expect(order.map(({ relayInstanceId, assignmentState }) => `${relayInstanceId}:${assignmentState}`)).toEqual([
+      'relay-local:staging',
+      'relay-uk:active',
+      'relay-uk:staging',
+      'relay-nl:active',
+    ]);
+    t.instance.stop();
+  });
+
+  it('opens a new stream on the local relay, not on NL, when UK does not answer (RelayPolicyService)', async () => {
+    const opened: string[] = [];
+    const relay = {
+      applySnapshot: vi.fn(),
+      resumeRegistry: new RelayResumeRegistry(),
+      openLocalResumePath: vi.fn(async (_grant: unknown, relayId: string) => {
+        opened.push(relayId);
+        return { relayId, cancel: vi.fn() };
+      }),
+      openCandidateResumePath: vi.fn(async (candidate: GatewayRelayCandidate) => {
+        opened.push(candidate.relayInstanceId);
+        // UK refuses the route for a moment (its policy is delivered again after its control stream reconnected).
+        if (candidate.relayInstanceId === 'relay-uk') throw new Error('14 UNAVAILABLE: grant does not match policy');
+        return { relayId: candidate.relayInstanceId, cancel: vi.fn() };
+      }),
+    };
+    const service = new RelayPolicyService({} as never, {} as never, {} as never, relay as never);
+    service.setLocalRelayOutage({ latestOutage: outage });
+    const internals = service as any;
+    internals.gatewayPaths().observe('relay-nl', 300);
+    internals.gatewayPaths().observe('relay-uk', 60);
+    const path = await internals.openGatewayResumePath('route-68bf44f2', { candidates: [...gen58, ...gen59] }, null);
+    expect(path.relayId).toBe('relay-local');
+    expect(opened).toEqual(['relay-local']);
+    // Only with the local relay failing too does a stream reach NL, after both UK candidates.
+    relay.openLocalResumePath.mockImplementationOnce(async (_grant: unknown, relayId: string) => {
+      opened.push(relayId);
+      throw new Error('14 UNAVAILABLE');
+    });
+    opened.length = 0;
+    await expect(
+      internals.openGatewayResumePath('route-68bf44f2', { candidates: [...gen58, ...gen59] }, null)
+    ).resolves.toMatchObject({ relayId: 'relay-nl' });
+    expect(opened).toEqual(['relay-local', 'relay-uk', 'relay-uk', 'relay-nl']);
+    internals.gatewayPaths().stop();
+  });
+});
+
 describe("Gateway's own relayed streams know every relay's distance after a quiet period (F-3)", () => {
   it('measures every remote relay of the pool, not only those its recent assignments named', async () => {
     let now = T0;

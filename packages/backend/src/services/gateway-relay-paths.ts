@@ -78,10 +78,15 @@ const costBand = (nearest: number) => Math.max(nearest * COST_BAND_RATIO, neares
 const returnBand = (nearest: number) => Math.max(nearest * RETURN_BAND_RATIO, nearest + RETURN_BAND_FLOOR_MS);
 
 /**
- * The order to try relays for one of Gateway's streams (relaybridge OrderCandidates): the relay being left last, active
- * assignments before staging ones, relays reachable now first, primaries before standbys, then by distance: relays of
- * a role within the band of the nearest reachable one are equally near, farther ones follow by round trip, unmeasured
- * ones last. Ties keep the assignment's order.
+ * The order to try relays for one of Gateway's streams (relaybridge OrderCandidates): the relay being left last, relays
+ * reachable now first, primaries before standbys, then by distance: relays of a role within the band of the nearest
+ * reachable one are equally near, farther ones follow by round trip, unmeasured ones last. Only then an active
+ * assignment before a staging one, then the assignment's order.
+ *
+ * Distance before assignment state: while a placement change is staged, the serving relay of the staged assignment
+ * (registered on both ends, probed) is a better path than the farther fallback of the assignment it replaces. Before,
+ * a stream opened while the local relay's assignment was staged after its restart, and the active one's nearer relay
+ * did not answer, went to the 300-ms fallback instead of the local relay (stand rc.10, F-1).
  */
 export function orderGatewayRelayCandidates<T extends GatewayRelayCandidate>(
   candidates: readonly T[],
@@ -106,11 +111,11 @@ export function orderGatewayRelayCandidates<T extends GatewayRelayCandidate>(
     .sort(
       (a, b) =>
         Number(a.candidate.relayInstanceId === avoidRelayId) - Number(b.candidate.relayInstanceId === avoidRelayId) ||
-        Number(a.candidate.assignmentState === 'staging') - Number(b.candidate.assignmentState === 'staging') ||
         Number(b.at.available) - Number(a.at.available) ||
         roleRank(a.candidate) - roleRank(b.candidate) ||
         a.tier.tier - b.tier.tier ||
         a.tier.cost - b.tier.cost ||
+        Number(a.candidate.assignmentState === 'staging') - Number(b.candidate.assignmentState === 'staging') ||
         a.index - b.index
     )
     .map(({ candidate }) => candidate);

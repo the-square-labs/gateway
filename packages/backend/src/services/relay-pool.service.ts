@@ -40,7 +40,13 @@ import {
 } from './relay-pool-errors.js';
 import { describeRelayRevocation } from './relay-revocation-fence.js';
 import { loadRelayRouteHistories, RelayRevocationFenceService } from './relay-revocation-fence.service.js';
-import { drainDeadline, MANUAL_DRAIN_TIMEOUT_MS, relayDrainGraceMs, relaySessionSplit } from './relay-stream-resume.js';
+import {
+  drainDeadline,
+  GATEWAY_STREAM_REPORT_SOURCE,
+  MANUAL_DRAIN_TIMEOUT_MS,
+  relayDrainGraceMs,
+  relaySessionSplit,
+} from './relay-stream-resume.js';
 import {
   chooseByRendezvous,
   chooseRelayAssignments,
@@ -1136,6 +1142,17 @@ export class RelayPoolService {
     return retired;
   }
 
+  private gatewayStreamsByRelay(): Array<{ relayInstanceId: string; resumable: number; legacy: number }> {
+    const own = (this.policy.relayStreamReports?.() ?? []).find(
+      ({ nodeId }) => nodeId === GATEWAY_STREAM_REPORT_SOURCE
+    );
+    return (own?.report.byRelay ?? []).map(({ relayInstanceId, resumable, legacy }) => ({
+      relayInstanceId,
+      resumable,
+      legacy,
+    }));
+  }
+
   async getSnapshot() {
     const [persistedInstances, endpoints, generations, assignments, generalSettings, latestGenerations] =
       await Promise.all([
@@ -1351,6 +1368,12 @@ export class RelayPoolService {
       automaticRebalancePaused,
       automaticRebalanceRetryAt: nextAutomaticRetry > Date.now() ? new Date(nextAutomaticRetry) : null,
       activeTunnels,
+      /**
+       * Gateway's own relayed streams (database tools, storage browser, monitoring) per relay, as Gateway counts them.
+       * A relay's activeTunnels also count the source probes of a placement being prepared (one short tunnel per
+       * endpoint, source and relay), so this is where Gateway's own placement shows (stand rc.10, F-1).
+       */
+      gatewayStreams: this.gatewayStreamsByRelay(),
       registeredEndpoints,
       worstPressurePercent: worstPressure,
       endpointCount: endpoints.length,
