@@ -1,0 +1,60 @@
+Subject: filer: bound the ReaderCache prefetch to a window past the read position
+
+Upstream issue: https://github.com/seaweedfs/seaweedfs/issues/11674 (open,
+not fixed in any release as of 4.48).
+
+MaybeCache runs on every read of a sequential stream and starts up to `count`
+new chunk downloads, skipping the chunks that are already in flight. Each read
+therefore walks further ahead, until the S3 server's 256 downloader slots are
+full; making room then evicts finished chunks the stream has not read yet, and
+they are downloaded again. With 4 MiB chunks a 2.4 GB GET crawls at 2-7 MB/s
+and holds over 600 MiB of chunk buffers, and the engine runs out of memory
+under a 768 MiB limit.
+
+With this patch MaybeCache looks at most `count` chunks past the read
+position, extended to 16 MiB for small chunks, and starts whatever of that
+window is not yet cached or in flight. Same harness (1 CPU, 768 MiB, TLS):
+2.4 GB GET 400-440 MB/s at 2.2-2.4 CPU-s/GiB, memory peak under 300 MiB.
+
+Applies to 4.47 (c507336) and 4.48 (530be3e) unchanged.
+
+diff --git a/weed/filer/reader_cache.go b/weed/filer/reader_cache.go
+index 2177510..bdf11e2 100644
+--- a/weed/filer/reader_cache.go
++++ b/weed/filer/reader_cache.go
+@@ -66,6 +66,10 @@ func NewReaderCache(limit int, chunkCache chunk_cache.ChunkCache, lookupFileIdFn
+ 	}
+ }
+ 
++// maybeCacheWindowBytes is how far MaybeCache looks ahead of a stream when
++// 'count' chunks cover less (gateway patch, upstream issue #11674).
++const maybeCacheWindowBytes = 16 << 20
++
+ // MaybeCache prefetches up to 'count' chunks ahead in parallel.
+ // This improves read throughput for sequential reads by keeping the
+ // network pipeline full with parallel chunk fetches.
+@@ -84,8 +88,14 @@ func (rc *ReaderCache) MaybeCache(chunkViews *Interval[*ChunkView], count int) {
+ 		return
+ 	}
+ 
+-	cached := 0
+-	for x := chunkViews; x != nil && cached < count; x = x.Next {
++	// Look ahead a bounded window past the read position: 'count' chunks,
++	// extended up to maybeCacheWindowBytes for small chunks. Counting only
++	// newly started downloads walks past the chunks already in flight on
++	// every read, until the downloader limit is full and evicts chunks the
++	// stream has not read yet (upstream issue #11674).
++	ahead, aheadBytes := 0, uint64(0)
++	for x := chunkViews; x != nil && (ahead < count || aheadBytes < maybeCacheWindowBytes); x = x.Next {
++		ahead, aheadBytes = ahead+1, aheadBytes+x.Value.ChunkSize
+ 		chunkView := x.Value
+ 		if _, found := rc.downloaders[chunkView.FileId]; found {
+ 			continue
+@@ -107,7 +117,6 @@ func (rc *ReaderCache) MaybeCache(chunkViews *Interval[*ChunkView], count int) {
+ 		go cacher.startCaching()
+ 		<-cacher.cacheStartedCh
+ 		rc.downloaders[chunkView.FileId] = cacher
+-		cached++
+ 	}
+ 
+ 	return
