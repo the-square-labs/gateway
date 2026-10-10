@@ -254,6 +254,27 @@ export class DockerFolderService {
         throw new AppError(400, 'SYSTEM_FOLDER_LOCKED', 'Protected compose deployment folders cannot be modified');
       }
 
+      // Access first: a manager limited to a folder is refused because the move leaves or enters a place outside their
+      // grant, not for the depth or the name the destination would have (stand rc.10 O-5).
+      const resources = await tx
+        .select({
+          nodeId: dockerContainerFolderAssignments.nodeId,
+          resourceKey: dockerContainerFolderAssignments.resourceKey,
+        })
+        .from(dockerContainerFolderAssignments)
+        .where(
+          and(
+            eq(dockerContainerFolderAssignments.resourceType, resourceType),
+            inArray(dockerContainerFolderAssignments.folderId, [id, ...descendants.map((descendant) => descendant.id)])
+          )
+        );
+      await authorize({
+        resourceType,
+        resources,
+        sourceParentId: folder.parentId ?? null,
+        destinationFolderId: newParentId,
+      });
+
       let newDepth = 0;
       if (newParentId) {
         if (newParentId === id || descendants.some((descendant) => descendant.id === newParentId)) {
@@ -283,25 +304,6 @@ export class DockerFolderService {
       if (conflict) {
         throw new AppError(409, 'FOLDER_NAME_CONFLICT', 'A folder with this name already exists in the destination');
       }
-
-      const resources = await tx
-        .select({
-          nodeId: dockerContainerFolderAssignments.nodeId,
-          resourceKey: dockerContainerFolderAssignments.resourceKey,
-        })
-        .from(dockerContainerFolderAssignments)
-        .where(
-          and(
-            eq(dockerContainerFolderAssignments.resourceType, resourceType),
-            inArray(dockerContainerFolderAssignments.folderId, [id, ...descendants.map((descendant) => descendant.id)])
-          )
-        );
-      await authorize({
-        resourceType,
-        resources,
-        sourceParentId: folder.parentId ?? null,
-        destinationFolderId: newParentId,
-      });
 
       const [updated] = await tx
         .update(dockerContainerFolders)

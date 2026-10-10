@@ -170,6 +170,28 @@ describe('DockerFolderService.moveFolder', () => {
     expect(update).not.toHaveBeenCalled();
   });
 
+  it('refuses a manager outside their folder grant for access, not for the depth the move would reach (stand rc.10 O-5)', async () => {
+    // The granted folder F (with a subfolder) moved into the sibling S: too deep as well, but the refusal is access.
+    const { service, update } = createService([
+      folder('f', 'F', null, 0),
+      folder('f-sub', 'F sub', 'f', 1),
+      folder('f-sub-a', 'A', 'f-sub', 2),
+      folder('s', 'S', null, 0),
+    ]);
+    const refuse = vi
+      .fn()
+      .mockRejectedValue(
+        new AppError(403, 'FORBIDDEN', 'Managing top-level folders and ungrouped items requires docker:folders:manage')
+      );
+
+    await expect(service.moveFolder('f', { parentId: 's' }, 'user-1', refuse)).rejects.toMatchObject({
+      statusCode: 403,
+      code: 'FORBIDDEN',
+    });
+    expect(refuse).toHaveBeenCalledWith(expect.objectContaining({ sourceParentId: null, destinationFolderId: 's' }));
+    expect(update).not.toHaveBeenCalled();
+  });
+
   it('is a no-op when the parent does not change', async () => {
     const { service, update, audit, eventBus } = createService([folder('a', 'A', null, 0)]);
 
