@@ -5,7 +5,7 @@ import {
   FolderedResourceListCore,
   type FolderedResourceListViewProps,
 } from "@/components/common/resource-list/FolderedResourceListCore";
-import { useAuthStore } from "@/stores/auth";
+import { useLimitedToFolders } from "@/hooks/use-limited-to-folders";
 import { hasSavedFolderExpansion, useDockerFolderStore } from "@/stores/docker-folders";
 import type { DockerFolderResourceType } from "@/types";
 
@@ -70,10 +70,7 @@ export function DockerFolderedResourceList<TItem extends DockerFolderedResourceI
   } = useDockerFolderStore();
 
   // Visible only through folder grants: one granted folder is shown on its own.
-  const viewScope = DOCKER_VIEW_SCOPE[resourceType];
-  const limitedToFolders = useAuthStore(
-    (state) => !state.hasScope(viewScope) && state.hasScopedAccess(viewScope)
-  );
+  const limitedToFolders = useLimitedToFolders(DOCKER_VIEW_SCOPE[resourceType]);
 
   const store = useMemo<FolderedListStore<DockerResourceRef>>(
     () => ({

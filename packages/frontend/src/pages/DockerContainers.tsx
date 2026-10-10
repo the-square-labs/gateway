@@ -52,6 +52,7 @@ import {
 } from "@/components/ui/select";
 import { TruncateStart } from "@/components/ui/truncate-start";
 import { useIsMobile } from "@/hooks/use-is-mobile";
+import { useLimitedToFolders } from "@/hooks/use-limited-to-folders";
 import { useRealtime } from "@/hooks/use-realtime";
 import { matchesDockerContainerStatus } from "@/lib/docker-container-filters";
 import { formatDisplayImageRef } from "@/lib/docker-image-ref";
@@ -424,8 +425,7 @@ export function DockerContainers({
   const isSearchFiltering = filters.search.trim() !== "";
   const canManageFolders = !fixedNodeId && hasScope("docker:folders:manage");
   // Visible only through folder grants: one granted folder is shown on its own.
-  const limitedToFolders =
-    !hasScope("docker:containers:view") && hasScopedAccess("docker:containers:view");
+  const limitedToFolders = useLimitedToFolders("docker:containers:view");
   const shown =
     fixedNodeId || isSearchFiltering
       ? { folders: folderTree, ungrouped: ungroupedContainers }

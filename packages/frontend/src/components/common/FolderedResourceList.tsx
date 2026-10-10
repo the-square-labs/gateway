@@ -5,6 +5,7 @@ import {
   FolderedResourceListCore,
   type FolderedResourceListViewProps,
 } from "@/components/common/resource-list/FolderedResourceListCore";
+import { useLimitedToFolders } from "@/hooks/use-limited-to-folders";
 import { hasSavedFolderExpansion, useResourceFolderStore } from "@/stores/resource-folders";
 import type { ResourceFolderTreeNode, ResourceFolderType } from "@/types";
 
@@ -22,6 +23,31 @@ interface FolderedResourceListProps<TItem extends FolderedResourceListItem>
 
 const EMPTY_FOLDERS: ResourceFolderTreeNode[] = [];
 const EMPTY_EXPANDED = new Set<string>();
+
+/** The view scope of each list; held broadly it shows every folder. */
+const VIEW_SCOPE: Record<Exclude<ResourceFolderType, `hosting-snapshot:${string}`>, string> = {
+  node: "nodes:details",
+  domain: "domains:view",
+  "ssl-certificate": "ssl:cert:view",
+  "pki-ca": "pki:ca:view",
+  "pki-certificate": "pki:cert:view",
+  "pki-template": "pki:templates:view",
+  "nginx-template": "proxy:templates:view",
+  database: "databases:view",
+  storage: "storage:view",
+  "logging-environment": "logs:environments:view",
+  "logging-schema": "logs:schemas:view",
+  "admin-user": "admin:users",
+  "admin-group": "admin:groups",
+  "pages-project": "pages:view",
+};
+
+/** Snapshot grants name the hosting resource, which shows all of its snapshot folders. */
+function viewScopeOf(type: ResourceFolderType): string | null {
+  return type.startsWith("hosting-snapshot:")
+    ? null
+    : VIEW_SCOPE[type as Exclude<ResourceFolderType, `hosting-snapshot:${string}`>];
+}
 
 const getSortOrder = (item: FolderedResourceListItem) => item.sortOrder;
 const setSortOrder = (item: FolderedResourceListItem, sortOrder: number) => {
@@ -48,6 +74,9 @@ export function FolderedResourceList<TItem extends FolderedResourceListItem>({
     reorderResources,
     toggleFolder,
   } = useResourceFolderStore();
+
+  // Visible only through folder grants: one granted folder is shown on its own.
+  const limitedToFolders = useLimitedToFolders(viewScopeOf(resourceType));
 
   const store = useMemo<FolderedListStore<string>>(
     () => ({
@@ -102,6 +131,7 @@ export function FolderedResourceList<TItem extends FolderedResourceListItem>({
         expansionTouched: hasSavedFolderExpansion(resourceType),
       }}
       keys={keys}
+      limitedToFolders={limitedToFolders}
     />
   );
 }

@@ -12,6 +12,10 @@ import { PageTransition } from "@/components/common/PageTransition";
 import { ResourceListForm } from "@/components/common/ResourceListForm";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
+import {
+  applySingleFolderView,
+  defaultOpenFolderId,
+} from "@/components/common/resource-list/folder-view";
 import { CreateProxyHostDialog } from "@/components/proxy/CreateProxyHostDialog";
 import { MoveToFolderDialog } from "@/components/proxy/MoveToFolderDialog";
 import { ProxyUpstreamTarget } from "@/components/proxy/ProxyUpstreamTarget";
@@ -40,6 +44,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useIsMobile } from "@/hooks/use-is-mobile";
+import { useLimitedToFolders } from "@/hooks/use-limited-to-folders";
 import { useRealtime } from "@/hooks/use-realtime";
 import { nodeBadgeClassName } from "@/lib/node-appearance";
 import { isGatewayPublicRoute } from "@/lib/proxy-route-protection";
@@ -47,7 +52,7 @@ import { proxyHostRoute } from "@/lib/resource-routes";
 import { canCreateInFolder } from "@/lib/scope-utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
-import { useFolderStore } from "@/stores/folders";
+import { hasSavedProxyFolderExpansion, useFolderStore } from "@/stores/folders";
 import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type { FolderTreeNode, HealthStatus, ProxyHost, ProxyHostType } from "@/types";
 import { HEALTH_BADGE, HEALTH_LABEL, TYPE_BADGE } from "./proxy-detail/helpers";
@@ -173,10 +178,23 @@ export function ProxyHosts({
 
   const hasActiveFilters =
     filters.type !== "all" || filters.healthStatus !== "all" || filters.search !== "";
-  const visibleFolders = useMemo(
-    () => (filters.search.trim() ? pruneEmptyFolders(folders) : folders),
-    [filters.search, folders]
+  // Visible only through folder grants: one granted folder is shown on its own.
+  const limitedToFolders = useLimitedToFolders("proxy:view");
+  const shown = useMemo(
+    () =>
+      isSearchFiltering
+        ? { folders: pruneEmptyFolders(folders), ungrouped: ungroupedHosts }
+        : applySingleFolderView(folders, ungroupedHosts, (folder) => folder.hosts, {
+            limitedToFolders,
+            canManageFolders,
+          }),
+    [canManageFolders, folders, isSearchFiltering, limitedToFolders, ungroupedHosts]
   );
+  // The single folder starts open, as in the other lists, until the user folds a folder.
+  const defaultOpenId =
+    limitedToFolders && !isSearchFiltering
+      ? defaultOpenFolderId(shown.folders, shown.ungrouped.length, hasSavedProxyFolderExpansion())
+      : null;
 
   const handleToggle = async (id: string, currentEnabled: boolean) => {
     setTogglingIds((prev) => new Set(prev).add(id));
@@ -675,7 +693,7 @@ export function ProxyHosts({
           }}
           loading={isLoading}
           loadingLabel="Loading routes..."
-          hasContent={visibleFolders.length > 0 || ungroupedHosts.length > 0}
+          hasContent={shown.folders.length > 0 || shown.ungrouped.length > 0}
           emptyState={
             <EmptyState
               message="No routes."
@@ -697,8 +715,8 @@ export function ProxyHosts({
             onDragCancel: () => setActiveDrag(null),
           }}
           folders={{
-            folders: visibleFolders,
-            ungroupedItems: ungroupedHosts,
+            folders: shown.folders,
+            ungroupedItems: shown.ungrouped,
             expandedFolderIds,
             getFolderId: (folder) => folder.id,
             getFolderName: (folder) => folder.name,
@@ -710,11 +728,16 @@ export function ProxyHosts({
               folderId: folder.id,
               folder,
             }),
-            isFolderExpanded: (folder) => expandedFolderIds.has(folder.id),
+            isFolderExpanded: (folder) =>
+              expandedFolderIds.has(folder.id) || folder.id === defaultOpenId,
             canManageFolder: () => canManageFolders,
             canReorderFolder: () => canReorderFolders,
             canCreateSubfolder: (folder) => folder.depth < 2,
-            onToggleFolder: (id) => toggleFolder(id),
+            onToggleFolder: (id) => {
+              // The first fold saves the folder that started open, so it stays as the user saw it.
+              if (defaultOpenId) toggleFolder(defaultOpenId);
+              toggleFolder(id);
+            },
             onRenameFolder: handleRenameFolder,
             onDeleteFolder: handleDeleteFolder,
             onRequestCreateSubfolder: (parentId) => {

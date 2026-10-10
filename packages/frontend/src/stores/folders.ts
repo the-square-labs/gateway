@@ -71,6 +71,16 @@ function loadExpandedFolderIds(): string[] {
   }
 }
 
+/** Whether the user ever folded a route folder (the first toggle saves the set). */
+export function hasSavedProxyFolderExpansion(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(EXPANDED_FOLDERS_STORAGE_KEY) !== null;
+  } catch {
+    return false;
+  }
+}
+
 function saveExpandedFolderIds(ids: Set<string>) {
   if (typeof window === "undefined") return;
   try {
