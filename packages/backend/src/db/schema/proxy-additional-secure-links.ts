@@ -68,9 +68,7 @@ export const proxyAdditionalSecureLinks = pgTable(
     lastError: text('last_error'),
     listenerPort: integer('listener_port'),
     // The link's loopback TCP address on its nginx nodes (secureLinkLoopbackAddress); unique across both link tables.
-    loopbackSlot: integer('loopback_slot')
-      .notNull()
-      .default(sql`nextval('secure_link_loopback_slot_seq')`),
+    loopbackSlot: integer('loopback_slot').notNull().default(sql`nextval('secure_link_loopback_slot_seq')`),
     connectorPort: integer('connector_port'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),

@@ -6,11 +6,6 @@ import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { INGRESS_GROUP_CAPABILITY, nodeReportsCapability } from '@/modules/ingress-groups/ingress-group-routing.js';
-import {
-  NGINX_SECURE_LINK_LOOPBACK_CAPABILITY,
-  secureLinkLoopbackAddresses,
-  withSecureLinkLoopbackUpstreams,
-} from './secure-link-loopback.js';
 import { withIngressHealthLocation } from '@/modules/ingress-groups/ingress-health.js';
 import type { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
 import type { PageRouteService } from '@/modules/pages/routes/page-route.service.js';
@@ -48,6 +43,11 @@ import type { ProxyMaintenanceAccessService } from './proxy-maintenance-access.s
 import { assertProxyReferenceAccess, type ProxyReferenceInput } from './proxy-reference-access.js';
 import type { ProxySecureLinkService } from './proxy-secure-link.service.js';
 import type { WithDockerUpstreamDisplay } from './proxy-upstream-display.js';
+import {
+  NGINX_SECURE_LINK_LOOPBACK_CAPABILITY,
+  secureLinkLoopbackAddresses,
+  withSecureLinkLoopbackUpstreams,
+} from './secure-link-loopback.js';
 
 export { __testOnly } from './proxy.service-helpers.js';
 

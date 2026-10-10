@@ -19,13 +19,10 @@ export const NGINX_SECURE_LINK_LOOPBACK_CAPABILITY = 'nginx_secure_link_loopback
 const SECURE_LINK_SOCKET_SERVER = /(\bserver\s+)unix:\/run\/gateway-secure-links\/([0-9a-fA-F-]{36})\.sock\b/g;
 
 /** The loopback endpoint of the link with this slot ("127.a.b.c:port"); undefined without a slot. */
-export function secureLinkLoopbackAddress(
-  slot: number | null | undefined,
-  port: number = getEnv().SECURE_LINK_LOOPBACK_PORT
-): string | undefined {
+export function secureLinkLoopbackAddress(slot: number | null | undefined, port?: number): string | undefined {
   if (!Number.isInteger(slot) || (slot as number) < 1 || (slot as number) >= 192 * 65536) return undefined;
   const value = slot as number;
-  return `127.${64 + (value >> 16)}.${(value >> 8) & 255}.${value & 255}:${port}`;
+  return `127.${64 + (value >> 16)}.${(value >> 8) & 255}.${value & 255}:${port ?? getEnv().SECURE_LINK_LOOPBACK_PORT}`;
 }
 
 /** The Secure Link ids whose Unix socket an upstream server directive of config names. */

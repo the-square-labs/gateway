@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"syscall"
 
 	"github.com/wiolett-industries/gateway/daemon-shared/listenerkeep"
@@ -62,9 +63,10 @@ func parseSecureLinkLoopbackAddress(value string) (string, error) {
 
 // loopbackKeepName is the listener keeper's name of a link's loopback
 // listener: under the socket directory, so the release of unclaimed kept
-// sockets covers it too.
+// sockets covers it too. Keeper names carry no colon (systemd's descriptor
+// names), so the port follows an underscore.
 func (m *sourceLinkManager) loopbackKeepName(id, address string) string {
-	return filepath.Join(m.socketDir, id+".loopback") + "#" + address
+	return filepath.Join(m.socketDir, id+".loopback") + "#" + strings.ReplaceAll(address, ":", "_")
 }
 
 // listenLoopback returns the loopback listener of a link, the one the previous
