@@ -282,6 +282,9 @@ type Core struct {
 	lingerDeadline   time.Time
 	handshakeDeadine time.Time
 	lastActivity     time.Time
+	// transferFrom is sndNxt+rcvNxt where the current transfer started
+	// (noteData).
+	transferFrom uint64
 
 	migrateReq byte
 	out        []Output
@@ -518,12 +521,25 @@ func (c *Core) Write(p []byte, now time.Time) (bool, error) {
 	if inflight < wnd/2 {
 		c.blocked, c.ackedBlocked = false, 0
 	}
+	c.noteData(now)
 	c.segs = append(c.segs, segment{off: c.sndNxt, data: p})
 	c.sndNxt += uint64(len(p))
-	c.lastActivity = now
 	c.pump(now)
 	return true, nil
 }
+
+// noteData marks data moving at now, before its offsets advance: after
+// TransferGap without any, a new transfer starts here (transferFrom).
+func (c *Core) noteData(now time.Time) {
+	if now.Sub(c.lastActivity) >= TransferGap {
+		c.transferFrom = c.sndNxt + c.rcvNxt
+	}
+	c.lastActivity = now
+}
+
+// TransferBytes is what the stream moved, both ways, since its current
+// transfer started (TransferGap).
+func (c *Core) TransferBytes() uint64 { return c.sndNxt + c.rcvNxt - c.transferFrom }
 
 // writeFrozen queues p whatever the window: a stream freezing for a handover
 // keeps every byte its bridge read from the local socket before it stopped.
@@ -933,9 +949,9 @@ func (c *Core) data(p *Path, payload []byte, now time.Time) bool {
 		return false
 	}
 	skip := c.rcvNxt - off
+	c.noteData(now)
 	c.rq = append(c.rq, chunk{data: payload[skip:]})
 	c.rcvNxt += n - skip
-	c.lastActivity = now
 	if c.rcvNxt-c.delivered > 2*(MaxExtendedWindow+MaxFrameBytes) {
 		c.reset(RstWindowViolation, "peer exceeded its window", ErrProtocol)
 		return false

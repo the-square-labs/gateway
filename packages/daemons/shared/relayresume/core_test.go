@@ -706,3 +706,30 @@ func TestCoreLaneRequestOnlyToASourceThatTakesIt(t *testing.T) {
 		}
 	}
 }
+
+// A stream counts the bytes of its current transfer: a request through the
+// same keepalive connection after a pause starts a new one (stand rc.11 F-1:
+// a PUT after a 256 MiB GET on the same stream).
+func TestCoreTransferBytesRestartAfterAPause(t *testing.T) {
+	pair := newCorePair(t)
+	download := bytes.Repeat([]byte{1}, 64<<10)
+	for range 8 {
+		pair.tgt.Write(download, pair.now)
+		pair.flush()
+		pair.advance(10 * time.Millisecond)
+	}
+	if got := pair.src.TransferBytes(); got != 8*64<<10 {
+		t.Fatalf("download transfer %d", got)
+	}
+	pair.advance(TransferGap)
+	pair.src.Write([]byte("upload"), pair.now)
+	pair.flush()
+	if got := pair.src.TransferBytes(); got != 6 {
+		t.Fatalf("upload after a pause counted %d", got)
+	}
+	pair.advance(10 * time.Millisecond)
+	pair.src.Write([]byte("more"), pair.now)
+	if got := pair.src.TransferBytes(); got != 10 {
+		t.Fatalf("the same upload counted %d", got)
+	}
+}

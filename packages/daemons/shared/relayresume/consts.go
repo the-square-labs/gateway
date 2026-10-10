@@ -76,6 +76,12 @@ const (
 	MigrateLane byte = 3
 )
 
+// TransferGap is the pause without data after which a stream's next bytes
+// start a new transfer (Session.CheapToMove): a bulk transfer moves data
+// every round trip, and requests through one keepalive connection are
+// apart by at least the client's turn.
+const TransferGap = 250 * time.Millisecond
+
 // Flow control.
 const (
 	// InitialWindow: a stream starts here (fewer ACK records on bulk

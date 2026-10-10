@@ -271,3 +271,42 @@ func TestUploadInAFreshSlowStartIsNotMovedAfterGrowth(t *testing.T) {
 		}
 	}
 }
+
+// A lane whose round trip grew from the LAN's to 150 ms and whose sender
+// collapsed then (a threshold of 17 segments) is rotated before the next
+// upload, also when it never carried bulk data, and not while it receives a
+// download; a fresh lane dialed on the longer path is not (stand rc.11 F-1,
+// rc.10 O-3).
+func TestStaleSenderAfterGrowthIsRotatedBeforeTheUpload(t *testing.T) {
+	lan := slowstart.State{SlowStartThreshold: slowstart.InfiniteThreshold, BytesAcked: 60 << 10, BytesReceived: 50 << 10,
+		RTTUs: 900, MinRTTUs: 300, MSS: 1448}
+	trigger := &Trigger{}
+	trigger.Reason(lan, true)
+	grown := lan
+	grown.SlowStartThreshold, grown.RTTUs, grown.MinRTTUs = 17, 157_000, 400
+	// A download runs on the lane meanwhile: not moved.
+	for i := range IdleChecks + 2 {
+		grown.BytesReceived += 2 * BulkBytes
+		if why := trigger.Reason(grown, true); why != "" {
+			t.Fatalf("look %d while the lane receives a download: %q", i, why)
+		}
+	}
+	// The download ended: rotated at the next look, before the upload.
+	if why := trigger.Reason(grown, true); why != "collapsed" {
+		t.Fatalf("stale sender after the round trip grew: %q", why)
+	}
+	// The kernel's minimum alone (the trigger never saw the LAN round trip).
+	kernelOnly := grown
+	if why := idleLooks(&Trigger{}, kernelOnly); why != "collapsed" {
+		t.Fatalf("stale sender, LAN minimum from the kernel: %q", why)
+	}
+	// A replacement dialed on the 150 ms path whose keepalive timed out once.
+	far := grown
+	far.MinRTTUs, far.BytesAcked, far.BytesReceived = 150_000, 60<<10, 50<<10
+	fresh := &Trigger{}
+	for i := range 40 {
+		if why := fresh.Reason(far, true); why != "" {
+			t.Fatalf("look %d of a fresh lane on the far path: %q", i, why)
+		}
+	}
+}

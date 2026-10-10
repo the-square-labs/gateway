@@ -803,12 +803,15 @@ func (s *Session) Moving() bool {
 }
 
 // CheapToMove reports a stream whose move costs little at now: it carried no
-// byte for quiet, or fewer than bytes in all.
+// byte for quiet, or fewer than bytes since its current transfer started
+// (TransferGap). A stream that a keepalive connection reuses for request
+// after request starts a transfer with each (stand rc.11 F-1: Route Secure
+// Link PUTs after GETs through nginx's upstream keepalive counted the GETs'
+// 256 MiB and stayed on a collapsed lane).
 func (s *Session) CheapToMove(now time.Time, quiet time.Duration, bytes uint64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, sndNxt, rcvNxt, _ := s.core.Offsets()
-	return now.Sub(s.core.lastActivity) >= quiet || sndNxt+rcvNxt < bytes
+	return now.Sub(s.core.lastActivity) >= quiet || s.core.TransferBytes() < bytes
 }
 
 // runOf is the driver state of path (mu held).

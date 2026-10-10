@@ -33,9 +33,11 @@ const (
 	// held at 7.8 MB/s inside the 10 min).
 	EveryCheap = 30 * time.Second
 	// CheapQuiet and CheapBytes: a stream counts as moving nothing that
-	// carried no byte for CheapQuiet, or fewer than CheapBytes in all (a
-	// transfer that just started on the stale connection, which is what the
-	// rotation is for).
+	// carried no byte for CheapQuiet, or fewer than CheapBytes since its
+	// current transfer started (relayresume.TransferGap: a transfer that just
+	// started on the stale connection, which is what the rotation is for,
+	// also on a stream an earlier request through the same keepalive
+	// connection opened).
 	CheapQuiet = time.Second
 	CheapBytes = 4 << 20
 	// Spacing spaces the rotations of one relay's lanes: one at a time.
@@ -49,8 +51,8 @@ const (
 	// delivering (slowstart.BusyRate): such a lane is never rotated, whatever
 	// its learned state or the relay says.
 	BusyBytes uint64 = slowstart.BusyRate * uint64(Check) / uint64(time.Second)
-	// IdleChecks is how many Checks in a row without bulk data make a lane
-	// idle: its next transfer starts from what the lane learned (a slow start
+	// IdleChecks is how many Checks in a row without bulk data sent make a
+	// lane idle: its next upload starts from what the lane learned (a slow start
 	// up to its threshold), and a lane whose threshold is worth less than
 	// slowstart.SlowRate at its path's round trip is rotated before it.
 	IdleChecks = 4
@@ -63,8 +65,9 @@ const (
 	// CarriedBytes is how much a connection moved before its first look to
 	// count as having carried data. An idle lane is rotated as collapsed only
 	// once its connection carried data (a bulk look, or this much before the
-	// first): the state of a connection that moved only its handshake and
-	// keepalives is no transfer's, and replacing it brings another like it
+	// first) or its round trip grew (Trigger.grown): the state of a
+	// connection that moved only its handshake and keepalives on the path it
+	// was dialed on is no transfer's, and replacing it brings another like it
 	// (stand rc.10 O-3: replaced idle lanes on far relays were replaced
 	// again, over and over).
 	CarriedBytes = 4 << 20
@@ -110,8 +113,9 @@ func (t *Trigger) ClearHint() { t.hinted.Store(false) }
 // local relay rotated as "collapsed" after an ordinary loss while moving 110
 // MB/s). Otherwise a lane is rotated when
 //   - the relay said its sending side went stale (relay_collapsed);
-//   - it is idle and its own sending side is stale at its path's round trip
-//     (collapsed: the next transfer would start slow);
+//   - its sending side is idle and stale at its path's round trip, it
+//     receives no bulk data, and it carried data or its round trip grew
+//     (collapsed: the next upload would start slow);
 //   - its sending side carries bulk data under a threshold worth less than
 //     slowstart.SlowRate (slow_threshold);
 //   - its round trip under bulk data grew far beyond the one it learned on
@@ -151,10 +155,16 @@ func (t *Trigger) Reason(state slowstart.State, known bool) string {
 		threshold = state.SlowStartThreshold
 		t.carried = state.BytesAcked+state.BytesReceived >= CarriedBytes
 	}
-	bulk := sent >= BulkBytes || received >= BulkBytes
-	if bulk {
-		t.idle = 0
+	sendBulk, receiveBulk := sent >= BulkBytes, received >= BulkBytes
+	if sendBulk || receiveBulk {
 		t.carried = true
+	}
+	// Idle counts the sending side: what the next upload starts from. A
+	// download on the lane does not touch the sender's state (stand rc.11
+	// F-1: a lane whose sender collapsed when the round trip grew carried a
+	// GET, and the PUT right after it started on the collapsed sender).
+	if sendBulk {
+		t.idle = 0
 	} else if t.idle < IdleChecks {
 		t.idle++
 	}
@@ -170,7 +180,7 @@ func (t *Trigger) Reason(state slowstart.State, known bool) string {
 	if first {
 		return ""
 	}
-	if t.idle >= IdleChecks && t.carried && state.Stale() {
+	if t.idle >= IdleChecks && !receiveBulk && (t.carried || t.grown(state)) && state.Stale() {
 		return "collapsed"
 	}
 	// The rate rule only while the lane sends bulk data: an idle lane's
@@ -220,6 +230,21 @@ func (t *Trigger) Reason(state slowstart.State, known bool) string {
 		t.bulkRTT = rtt
 	}
 	return ""
+}
+
+// grown reports a lane whose path's round trip grew far beyond the shortest
+// one it showed (RTTGrowth): its sender's state is from the shorter path, and
+// a new connection learns the longer one afresh (stand rc.11 F-1: lanes whose
+// sender collapsed to a threshold of 17-23 segments when +150 ms was added
+// kept Route Secure Link uploads at 7-11 MB/s, a new one ran at 20). A
+// replacement dialed on the longer path did not grow (stand rc.10 O-3).
+func (t *Trigger) grown(state slowstart.State) bool {
+	shortest := t.minRTT
+	if kernel := time.Duration(state.MinRTTUs) * time.Microsecond; kernel != 0 && (shortest == 0 || kernel < shortest) {
+		shortest = kernel
+	}
+	rtt := state.PathRTT()
+	return shortest != 0 && rtt >= RTTGrowth*shortest && rtt >= shortest+RTTGrowthMin
 }
 
 // MayRotate reports whether a lane last rotated at rotatedAt (zero: never)
