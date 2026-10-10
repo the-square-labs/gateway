@@ -14,6 +14,8 @@
 #    running and the lease watchdog must get installed. A stream, a byte-exact download and a TCP echo run
 #    through the Secure Links across each daemon update; the node's report of the update (kept/cut) must
 #    match what they saw, the node must show the candidate launcher and its next update must hand over.
+#    From a base launcher before 2.11.4 the update has one disruption window: the daemon swap, then the
+#    one-time launcher switch, two drops within ~60 s, then none.
 #    No warnings or errors in the app, relay and daemon logs beyond LOG_ALLOW.
 # 4. Runs the base updater's own rollback() on the migrated database, checks the base (license, node
 #    creation, group scopes, Pages insert), updates again and compares effective access with step 2.
@@ -1591,10 +1593,12 @@ live_verdict() {
 }
 
 # restart_window LABEL NODE: after an update from a launcher before 2.11.4 the service restarts once more for the new
-# launcher. A stream opened right after the update's cut shows whether that restart is a second disruption window.
+# launcher (accepted: one disruption window, two drops ~30 s apart). A stream opened right after the update's cut may
+# be cut by that restart, but within RESTART_WINDOW_S of it; a stream opened after the launcher switch is not cut.
+RESTART_WINDOW_S=60
 restart_window() {
-  local label="$1" node="$2" base="$WORK/live/$1-after" opened
-  rm -f "${base}".*
+  local label="$1" node="$2" base="$WORK/live/$1-after" opened elapsed
+  rm -f "${base}".* "${base}-next".*
   start_background "after-${label}" sh -c 'curl -sS -N -m 900 --resolve "$1:80:127.0.0.1" "http://$1/stream?seconds=600" -o "$2.stream" 2>"$2.stream.err"
     echo "$? $(date +%s%3N)" >"$2.stream.status"' sh "$SECURE_LINK_DOMAIN" "$base"
   opened="$(now_ms)"
@@ -1604,12 +1608,26 @@ restart_window() {
   keep_json "node-${label}-after-launcher-switch"
   say "${label} after the launcher switch: lastUpdate $(jx "$RESP" '(D.get("metadata") or {}).get("lastUpdate")')"
   if [[ -f "${base}.stream.status" ]]; then
-    fail "${label} daemon update: one disruption window (a stream opened after the update's cut survives the launcher switch)"       "cut $(( ($(cut -d' ' -f2 "${base}.stream.status") - opened) / 1000 )) s after it opened: curl exit $(cut -d' ' -f1 "${base}.stream.status") after $(wc -l <"${base}.stream") lines; launcher $(jx "$RESP" '(D.get("capabilities") or {}).get("launcherVersion")')"
+    elapsed=$(( ($(cut -d' ' -f2 "${base}.stream.status") - opened) / 1000 ))
+    check "${label} daemon update: one disruption window (the launcher-switch drop within ${RESTART_WINDOW_S} s of the update's cut)" \
+      "second drop ${elapsed} s after the first: curl exit $(cut -d' ' -f1 "${base}.stream.status") after $(wc -l <"${base}.stream") lines; launcher $(jx "$RESP" '(D.get("capabilities") or {}).get("launcherVersion")')" \
+      test "$elapsed" -le "$RESTART_WINDOW_S"
   else
-    pass "${label} daemon update: one disruption window (a stream opened after the update's cut survives the launcher switch)"       "$(wc -l <"${base}.stream") lines, still open; launcher $(jx "$RESP" '(D.get("capabilities") or {}).get("launcherVersion")')"
+    pass "${label} daemon update: one disruption window (the launcher-switch drop within ${RESTART_WINDOW_S} s of the update's cut)" \
+      "no second drop: $(wc -l <"${base}.stream") lines, still open; launcher $(jx "$RESP" '(D.get("capabilities") or {}).get("launcherVersion")')"
   fi
-  check "${label} daemon update: the record shows the launcher-switch restart"     "serviceRestart: $(jx "$RESP" '(D.get("metadata") or {}).get("lastUpdate", {}).get("serviceRestart")'); cut $(jx "$RESP" '(D.get("metadata") or {}).get("lastUpdate", {}).get("connections", {}).get("cut")')"     test -n "$(jx "$RESP" '(lambda u: u.get("serviceRestart") or ((u.get("connections") or {}).get("cut") or {}).get("service_restart") or None)((D.get("metadata") or {}).get("lastUpdate") or {})')"
+  check "${label} daemon update: the record shows the launcher-switch restart" \
+    "serviceRestart: $(jx "$RESP" '(D.get("metadata") or {}).get("lastUpdate", {}).get("serviceRestart")'); cut $(jx "$RESP" '(D.get("metadata") or {}).get("lastUpdate", {}).get("connections", {}).get("cut")')" \
+    test -n "$(jx "$RESP" '(lambda u: u.get("serviceRestart") or ((u.get("connections") or {}).get("cut") or {}).get("service_restart") or None)((D.get("metadata") or {}).get("lastUpdate") or {})')"
   stop_background "after-${label}"
+  # No third drop: a stream opened after the launcher switch stays open.
+  start_background "next-${label}" sh -c 'curl -sS -N -m 900 --resolve "$1:80:127.0.0.1" "http://$1/stream?seconds=600" -o "$2.stream" 2>"$2.stream.err"
+    echo "$? $(date +%s%3N)" >"$2.stream.status"' sh "$SECURE_LINK_DOMAIN" "${base}-next"
+  sleep 20
+  check "${label} daemon update: no drop after the launcher switch" \
+    "$(wc -l <"${base}-next.stream" 2>/dev/null || echo 0) lines in 20 s$([[ -f "${base}-next.stream.status" ]] && echo ", ended: curl exit $(cut -d' ' -f1 "${base}-next.stream.status")")" \
+    test ! -f "${base}-next.stream.status"
+  stop_background "next-${label}"
 }
 
 # Whether the base daemons report their launcher (from 2.11.4 on).
