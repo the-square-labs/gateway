@@ -25,7 +25,10 @@ const (
 	// MaxBackoff caps the wait between connection attempts before jitter (Jitter: up to 1.5 times this). A relay or
 	// Gateway that comes back after a long outage hears from every node within 15 s: with a 60 s cap the nodes
 	// trickled back over 60-70 s after a five-minute outage of the local relay.
-	MaxBackoff            = 10 * time.Second
+	MaxBackoff = 10 * time.Second
+	// RestartQuiet is how long failed connection attempts log as information
+	// before they warn: a Gateway or relay update restarts it within it.
+	RestartQuiet          = time.Minute
 	InitialBackoff        = 1 * time.Second
 	ConnectAttemptTimeout = 10 * time.Second
 	MaxMessageBytes       = 512 * 1024 * 1024
@@ -215,6 +218,7 @@ func (c *Connector) ConnectLaneWithRetry(ctx context.Context) (*grpc.ClientConn,
 
 func (c *Connector) connectWithRetry(ctx context.Context, lane bool) (*grpc.ClientConn, error) {
 	backoff := InitialBackoff
+	failingSince := time.Time{}
 	for {
 		conn, err := c.connect(ctx, c.Address, "", lane)
 		if err == nil {
@@ -229,7 +233,17 @@ func (c *Connector) connectWithRetry(ctx context.Context, lane bool) (*grpc.Clie
 		}
 
 		delay := Jitter(backoff, rand.Float64)
-		c.Logger.Warn("connection failed, retrying",
+		if failingSince.IsZero() {
+			failingSince = time.Now()
+		}
+		log := c.Logger.Warn
+		if time.Since(failingSince) < RestartQuiet {
+			// A Gateway or relay restarting for its update refuses
+			// connections for a while (rc.11 upgrade run N-2: "connection
+			// refused" at every Gateway restart); a longer outage warns.
+			log = c.Logger.Info
+		}
+		log("connection failed, retrying",
 			"error", err,
 			"attempt_timeout", ConnectAttemptTimeout,
 			"backoff", delay.Round(time.Millisecond),
