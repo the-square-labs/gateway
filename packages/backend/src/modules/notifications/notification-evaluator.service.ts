@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, inArray, lt, or, type SQL, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, gte, inArray, lt, or, type SQL, sql } from 'drizzle-orm';
 import type { DrizzleClient, DrizzleTransaction } from '@/db/client.js';
 import {
   databaseConnections,
@@ -74,6 +74,13 @@ const GATEWAY_SAMPLING_MS = 60_000;
 const HELD_STATE_SLACK_MS = 1_000;
 /** Route alerts explained by a parent that resolved this recently are held, see foldingParent. */
 const FOLD_GRACE_MS = 2 * 60_000;
+/**
+ * A parent that fires folds the alerts already firing that its outage explains: those that fired at most this long
+ * before the parent's own window began (a route's probe or a container's check can notice a node's outage before the
+ * node alert's window is covered). An alert that fired earlier has another cause and stays on its own (stand rc.9,
+ * F-2: a container alert that fired 47 min before its node dropped was folded and resolved as "back online").
+ */
+const FOLD_LEAD_MS = 2 * 60_000;
 /** Route health events that fold under a parent alert. */
 const FOLDABLE_ROUTE_EVENTS = ['health.offline', 'health.degraded'] as const;
 
@@ -1725,6 +1732,7 @@ export class NotificationEvaluatorService {
     resourceName: string,
     details: TemplateDetails
   ): Promise<void> {
+    details = await this.withNodeName(details);
     const parent = await this.foldingParent(rule, resourceType, resourceKey, details);
     if (parent === 'hold') {
       logger.debug('Route alert held: the alert explaining it resolved just now', {
@@ -1786,6 +1794,7 @@ export class NotificationEvaluatorService {
     /** backSince: when the resource got back to normal (the start of the clear samples that resolve it). */
     options: { notify?: boolean; backSince?: number | null } = {}
   ): Promise<void> {
+    details = await this.withNodeName(details);
     const [state] = await this.db
       .select({ firedAt: notificationAlertStates.firedAt, context: notificationAlertStates.context })
       .from(notificationAlertStates)
@@ -1908,7 +1917,7 @@ export class NotificationEvaluatorService {
       return {
         stateId: firing.id,
         kind: outbound ? 'gateway_outbound' : 'node',
-        label: `${firing.ruleName} (${outbound ? 'Gateway' : this.getNodeName(firing.resourceId)})`,
+        label: `${firing.ruleName} (${outbound ? 'Gateway' : await this.nodeNameOf(firing.resourceId)})`,
       };
     }
     return parents.length > 0 ? 'hold' : null;
@@ -1960,7 +1969,12 @@ export class NotificationEvaluatorService {
                 )
               : undefined
           ),
-          sql`${notificationAlertStates.context} -> 'folded' is null`
+          sql`${notificationAlertStates.context} -> 'folded' is null`,
+          // Only what the parent's outage explains (FOLD_LEAD_MS); an older alert has another cause.
+          gte(
+            notificationAlertStates.firedAt,
+            new Date(Date.now() - (parentRule.durationSeconds ?? 0) * 1000 - FOLD_LEAD_MS)
+          )
         )
       );
     const folded: FoldedUnder = {
@@ -1990,7 +2004,13 @@ export class NotificationEvaluatorService {
     // Their firings still queued for a webhook that gets the parent are dropped when the queue reaches them.
   }
 
-  /** A parent alert resolved: the route alerts folded under it resolve with it. */
+  /**
+   * A parent alert resolved. A folded alert whose firing went out nowhere (every webhook got the parent instead) closes
+   * quietly with it: if its resource is still down, it fires on its own at its next check once the hold after the
+   * parent (FOLD_GRACE_MS) ends. One whose firing a webhook did get is not claimed back: it stays firing and is
+   * re-evaluated by its own checks, which resolve it (where its firing went) only once its resource is back (stand
+   * rc.9, F-2: resolved with the node as "back online" while the container was still gone).
+   */
   private async resolveFoldedAlerts(parentStateId: string): Promise<void> {
     const children = await this.db
       .select({ state: notificationAlertStates, rule: notificationAlertRules })
@@ -2003,6 +2023,18 @@ export class NotificationEvaluatorService {
         )
       );
     for (const { state, rule } of children) {
+      if ((await this.webhooksWithFiring(state.id)).length > 0) {
+        const context = (state.context ?? {}) as TemplateDetails & { folded?: FoldedUnder };
+        await this.db
+          .update(notificationAlertStates)
+          .set({ context: { ...context, folded: { ...context.folded!, parentResolvedAt: new Date().toISOString() } } })
+          .where(and(eq(notificationAlertStates.id, state.id), eq(notificationAlertStates.status, 'firing')));
+        logger.info('Folded alert stays firing after its parent resolved; its own checks resolve it', {
+          stateId: state.id,
+          resourceId: state.resourceId,
+        });
+        continue;
+      }
       const [host] = UUID_PATTERN.test(state.resourceId)
         ? await this.db
             .select({ domainNames: proxyHosts.domainNames })
@@ -2342,6 +2374,30 @@ export class NotificationEvaluatorService {
   private getNodeName(nodeId: string): string {
     const node = this.nodeRegistry.getNode(nodeId);
     return node?.hostname ?? nodeId;
+  }
+
+  /**
+   * The node's name: from the registry while it is connected, else from the database. A node that went offline is no
+   * longer in the registry, and alerts about it (a container alert folded under its down alert) named it by its id
+   * (stand rc.9, O-5).
+   */
+  private async nodeNameOf(nodeId: string): Promise<string> {
+    const live = this.nodeRegistry.getNode(nodeId)?.hostname;
+    if (live || !UUID_PATTERN.test(nodeId)) return live ?? nodeId;
+    try {
+      const [row] = await this.db.select({ hostname: nodes.hostname }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
+      return row?.hostname ?? nodeId;
+    } catch {
+      return nodeId;
+    }
+  }
+
+  /** Details whose node is named by its id (it is not connected) get its name from the database. */
+  private async withNodeName(details: TemplateDetails): Promise<TemplateDetails> {
+    const node = details.node;
+    if (!node?.id || (node.name && node.name !== node.id)) return details;
+    const name = await this.nodeNameOf(node.id);
+    return name === node.name ? details : { ...details, node: { ...node, name } };
   }
 
   private getThresholdResourceName(rule: any, sourceId: string, rawResourceId?: string): string {

@@ -193,8 +193,51 @@ describe.skipIf(!url)('Alert folding on disposable PostgreSQL', () => {
     expect(sent.filter((body) => body.startsWith('Container down: web'))).toEqual([]);
 
     await node('online');
+    // web's firing went out nowhere: it closes quietly with the node (and fires on its own if still down after the
+    // hold). store's firing did go out: it is not claimed back as recovered, its own check resolves it (rc.9 F-2).
     expect((await containerFolded('web')).status).toBe('resolved');
+    expect((await containerFolded('store')).status).toBe('firing');
+    expect(sent.filter((body) => body.includes('store') && /back online/.test(body))).toEqual([]);
+    await container('store', 'health.online');
     expect((await containerFolded('store')).status).toBe('resolved');
+    expect(sent.filter((body) => body.includes('store') && /back online/.test(body))).toHaveLength(1);
+  });
+
+  it('leaves an older, unrelated container alert unfolded and does not resolve it with the node (rc.9 F-2, O-5)', async () => {
+    rules.push(await rule('Container down', 'container', 'health.offline'));
+    const container = (id: string, state: 'health.offline' | 'health.online') =>
+      observe(
+        'container',
+        state,
+        { type: 'docker_container', id, name: id },
+        { health_status: state, nodeId, resource_type: 'docker_container' }
+      );
+    const containerState = async (id: string) =>
+      (
+        await q(
+          `select status, context -> 'folded' as folded, context -> 'node' ->> 'name' as node_name
+             from notification_alert_states where resource_id = $1 order by fired_at`,
+          [id]
+        )
+      ).rows;
+    // The node is not connected to this Gateway: alerts name it from the database, not by its id (O-5).
+    (evaluator as any).nodeRegistry = { getNode: () => undefined };
+    const hostname = (await q(`select hostname from nodes where id = $1`, [nodeId])).rows[0].hostname;
+
+    // cl11-hc2 fired 47 min before its node dropped (stand rc.9: 05:50 vs 06:37).
+    await container('cl11-hc2', 'health.offline');
+    await q(`update notification_alert_states set fired_at = now() - interval '47 minutes' where resource_id = $1`, [
+      'cl11-hc2',
+    ]);
+    await node('offline');
+    await container('store', 'health.offline');
+    expect((await containerState('cl11-hc2'))[0]).toMatchObject({ status: 'firing', folded: null });
+    expect((await containerState('store'))[0]).toMatchObject({ status: 'firing', folded: { kind: 'node' } });
+    expect((await containerState('store'))[0].node_name).toBe(hostname);
+
+    await node('online');
+    expect((await containerState('cl11-hc2'))[0].status).toBe('firing');
+    expect(sent.filter((body) => body.includes('cl11-hc2') && /back online/.test(body))).toEqual([]);
   });
 
   it('folds route alerts raised before Gateway noticed its outbound loss, and sends one alert once it can', async () => {
