@@ -145,9 +145,14 @@ func (p *Pipe) copy(d side) bool {
 		}
 		var n int
 		var err error
-		if spliced != nil {
+		buffered := spliced == nil
+		if !buffered {
 			err = spliced.run(&p.pending[d])
-			if len(p.pending[d]) > 0 {
+			switch {
+			case errors.Is(err, errNoPipe):
+				// No pipe free: this read goes through the buffers.
+				buffered, err = true, nil
+			case len(p.pending[d]) > 0:
 				// The destination stopped with bytes in the splicer's pipe: they are pending now, and a stop parks
 				// at writing them.
 				if park, retry := p.stop.stopped(err); park || retry {
@@ -155,7 +160,8 @@ func (p *Pipe) copy(d side) bool {
 				}
 				return fail()
 			}
-		} else {
+		}
+		if buffered {
 			buffer := small
 			if bulk != nil {
 				buffer = *bulk
