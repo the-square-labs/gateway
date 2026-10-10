@@ -691,7 +691,7 @@ service_id() { dc ps -q "$1" 2>/dev/null | head -n1; }
 psql_gateway() { dc exec -T postgres psql -U gateway -d gateway -v ON_ERROR_STOP=1 -Atc "$1" 2>&1; }
 container_identity() {
   local id="${1:-}"
-  [[ -n "$id" ]] || { echo "missing"; return; }
+  [[ -n "$id" ]] || { echo "missing"; return 0; }
   docker inspect -f '{{.Id}} {{.State.StartedAt}} restarts={{.RestartCount}}' "$id" 2>/dev/null || echo "missing"
 }
 
@@ -714,7 +714,7 @@ license_block() {
 license_lookup_from_app() {
   local app
   app="$(service_id app)"
-  [[ -n "$app" ]] || { echo "no app container"; return; }
+  [[ -n "$app" ]] || { echo "no app container"; return 0; }
   docker exec "$app" node -e "require('node:dns').lookup('${LICENSE_HOST}',(e,a)=>{console.log(e?e.code:'resolved '+a)})" 2>&1 | tail -n1
 }
 
@@ -971,12 +971,14 @@ cleanup_host() {
 
 # Whether a listener takes a port this run binds. The DNS guard binds only HOST_ADDR:53, so a resolver stub that listens
 # on a loopback address alone (systemd-resolved on 127.0.0.53 and 127.0.0.54) is no conflict; every other port is
-# bound on all addresses.
+# bound on all addresses. Every return names its status: the cleanup runs this from the EXIT trap, where a bare
+# `return` gives the status of the command before the trap (the run's `exit 0`), which made every port look taken.
 port_conflicts() {
-  local port="$1" address
+  local port="$1" address listeners
   if [[ "$port" != 53 ]]; then
-    ss -Hltnu "( sport = :${port} )" 2>/dev/null | grep -q .
-    return
+    listeners="$(ss -Hltnu "( sport = :${port} )" 2>/dev/null)"
+    [[ -n "$listeners" ]] && return 0
+    return 1
   fi
   while read -r address; do
     address="${address%:53}"
