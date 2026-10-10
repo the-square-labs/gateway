@@ -136,6 +136,8 @@ func (d *DaemonBase) Run(ctx context.Context) error {
 
 	// Step 4: Connect and run (with reconnection loop)
 	backoff := controlSessionBackoff{}
+	// failingSince: when the sessions began to fail (zero while they work).
+	var failingSince time.Time
 	for {
 		d.sessionReceivedCommand = false
 		startedAt := time.Now()
@@ -172,12 +174,13 @@ func (d *DaemonBase) Run(ctx context.Context) error {
 			// Both end the session immediately without any command, so the
 			// transport-level connector backoff is never reached. Back off
 			// exponentially until a session is accepted again.
-			delay = backoff.next(d.sessionReceivedCommand, time.Since(startedAt))
+			lasted := time.Since(startedAt)
+			delay = backoff.next(d.sessionReceivedCommand, lasted)
+			if d.sessionReceivedCommand || lasted >= controlSessionQuickFailure || failingSince.IsZero() {
+				failingSince = time.Now()
+			}
 			log := d.logger.Warn
-			if connector.PlannedDisconnect(err) {
-				// The relay or Gateway on the way stopped on purpose (its
-				// update or restart), or this daemon reconnects on purpose:
-				// the session moves, nothing failed.
+			if sessionEndExpected(err, time.Since(failingSince)) {
 				log = d.logger.Info
 			}
 			log("session ended, reconnecting", "error", err, "retry_in", delay)
@@ -186,6 +189,17 @@ func (d *DaemonBase) Run(ctx context.Context) error {
 			return nil
 		}
 	}
+}
+
+// sessionEndExpected reports a control session end that is information, not a
+// warning (failingFor: how long the sessions have failed). The relay or
+// Gateway on the way stopped on purpose (its update or restart), or this
+// daemon reconnects on purpose: the session moves, nothing failed. Or a
+// Gateway or relay restarting for its update refuses the connection for a
+// while (stand rc.13 O-d): a longer outage warns, as the connector's own
+// retries do.
+func sessionEndExpected(err error, failingFor time.Duration) bool {
+	return connector.PlannedDisconnect(err) || (connector.RefusedDial(err) && failingFor < connector.RestartQuiet)
 }
 
 const (

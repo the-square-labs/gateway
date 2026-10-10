@@ -4,6 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"os"
+	"syscall"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -26,6 +29,26 @@ func TestPlannedDisconnect(t *testing.T) {
 	} {
 		if got := PlannedDisconnect(tc.err); got != tc.planned {
 			t.Errorf("%v: planned %v, want %v", tc.err, got, tc.planned)
+		}
+	}
+}
+
+func TestRefusedDial(t *testing.T) {
+	refused := &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}
+	for _, tc := range []struct {
+		err     error
+		refused bool
+	}{
+		// The monitoring daemon and the relay supervisor while Gateway restarted (stand rc.13 O-d).
+		{status.Error(codes.Unavailable, "connection error: desc = \"transport: Error while dialing: dial tcp 172.18.0.4:9443: connect: connection refused\""), true},
+		{fmt.Errorf("connect: %w", refused), true},
+		{status.Error(codes.Unavailable, "connection error: desc = \"transport: Error while dialing: dial tcp 10.0.0.1:9443: i/o timeout\""), false},
+		{status.Error(codes.PermissionDenied, "connection refused"), false},
+		{errors.New("reset by peer"), false},
+		{nil, false},
+	} {
+		if got := RefusedDial(tc.err); got != tc.refused {
+			t.Errorf("%v: refused %v, want %v", tc.err, got, tc.refused)
 		}
 	}
 }

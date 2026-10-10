@@ -1,7 +1,9 @@
 package connector
 
 import (
+	"errors"
 	"strings"
+	"syscall"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -32,4 +34,20 @@ func PlannedDisconnect(err error) bool {
 		return strings.Contains(current.Message(), "graceful_stop")
 	}
 	return false
+}
+
+// RefusedDial reports a session whose connection could not be opened because
+// its peer refused it: a Gateway or relay restarting for its update listens
+// again within RestartQuiet, so the first such failures are information, and
+// only a longer outage warns, as connectWithRetry logs them (stand rc.13 O-d:
+// "dial tcp …:9443: connect: connection refused" during a Gateway restart).
+func RefusedDial(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return true
+	}
+	current, ok := status.FromError(err)
+	return ok && current.Code() == codes.Unavailable && strings.Contains(current.Message(), "connection refused")
 }
