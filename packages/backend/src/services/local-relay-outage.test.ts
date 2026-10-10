@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { relayInstances } from '@/db/schema/index.js';
+import { relayInstances } from '@/db/schema/index.js';
 import { EVENT_BUS_MAPPINGS } from '@/modules/notifications/notification-event-mappings.js';
 import {
   LOCAL_RELAY_OUTAGE_RECHECK_MS,
@@ -168,6 +168,7 @@ function chain<T>(result: T) {
 
 function registrySetup() {
   const updates: Array<Record<string, unknown>> = [];
+  const relayUpdates: Array<Record<string, unknown>> = [];
   let onlineRows: Array<Record<string, unknown>> = [];
   const db = {
     select: () => ({
@@ -175,10 +176,11 @@ function registrySetup() {
         where: () => chain(onlineRows.length ? onlineRows : [{ metadata: {}, healthHistory: [] }]),
       }),
     }),
-    update: () => ({
+    update: (table: unknown) => ({
       set: (values: Record<string, unknown>) => ({
         where: () => {
           updates.push(values);
+          if (table === relayInstances) relayUpdates.push(values);
           return chain([{ metadata: {} }]);
         },
       }),
@@ -207,6 +209,7 @@ function registrySetup() {
   return {
     registry,
     updates,
+    relayUpdates,
     audits,
     offlineEvents,
     stream,
@@ -223,6 +226,29 @@ function registrySetup() {
     },
   };
 }
+
+describe("node registry: a remote relay's control reconnect", () => {
+  it('keeps the relay out of offline through a planned control reconnect, and marks it offline once its grace ends', async () => {
+    vi.useFakeTimers({ now: T0 });
+    const t = registrySetup();
+    const first = t.stream();
+    await t.registry.register('relay-uk', 'relay', 'relay-1', 'hash', first);
+    // Stand rc.9: the relay supervisor reconnects the control stream ~45 s after the relay's update (back in 1.3 s).
+    await t.registry.deregister('relay-uk', first);
+    expect(t.registry.isReconnecting('relay-uk')).toBe(true);
+    await vi.advanceTimersByTimeAsync(1_300);
+    const second = t.stream();
+    await t.registry.register('relay-uk', 'relay', 'relay-1', 'hash', second);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(t.relayUpdates).toEqual([]);
+    // One that does not come back is offline once the grace ends, the relay instance with it.
+    await t.registry.deregister('relay-uk', second);
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(t.relayUpdates).toEqual([]);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(t.relayUpdates).toEqual([expect.objectContaining({ state: 'offline' })]);
+  });
+});
 
 describe('node registry: nodes that drop with the local relay', () => {
   it('keeps a node reconnecting, not offline, while the relay restarts and it comes back', async () => {

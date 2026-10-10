@@ -250,7 +250,8 @@ export class RelayPoolService {
   private dataPlaneFailing = new Set<string>();
   private readonly dataPlaneChangedAt = new Map<string, number>();
   private localRelayOutage?: Pick<LocalRelayOutageSignal, 'latestOutage'>;
-  private nodesAwaitingLocalRelay?: Pick<NodeRegistryService, 'isAwaitingLocalRelay'>;
+  private nodesAwaitingLocalRelay?: Pick<NodeRegistryService, 'isAwaitingLocalRelay'> &
+    Partial<Pick<NodeRegistryService, 'isReconnecting'>>;
   constructor(
     private readonly db: DrizzleClient,
     private readonly policy: RelayPolicyService,
@@ -307,7 +308,7 @@ export class RelayPoolService {
    */
   setLocalRelayOutage(
     signal: Pick<LocalRelayOutageSignal, 'latestOutage'>,
-    nodes?: Pick<NodeRegistryService, 'isAwaitingLocalRelay'>
+    nodes?: Pick<NodeRegistryService, 'isAwaitingLocalRelay'> & Partial<Pick<NodeRegistryService, 'isReconnecting'>>
   ): void {
     this.localRelayOutage = signal;
     this.nodesAwaitingLocalRelay = nodes;
@@ -1306,7 +1307,15 @@ export class RelayPoolService {
     const outage = await this.describeLocalRelayOutage(instances);
     // A remote relay whose control stream ended with the local relay is reconnecting, not offline: its data plane
     // serves on (stand rc.8, O-7: NL and UK were listed offline during the local relay's update).
-    const reconnecting = (instance: RelayInstanceRow) => outage?.reconnectingRelayIds.has(instance.id) ?? false;
+    // Likewise a remote relay whose control stream ended moments ago and is expected back (the relay supervisor's
+    // planned control reconnect after an update): it serves meanwhile (stand rc.9, UK and NL listed offline for 1-4 s).
+    const controlReconnecting = (instance: RelayInstanceRow) =>
+      instance.kind === 'remote' &&
+      instance.state !== 'offline' &&
+      Boolean(instance.nodeId) &&
+      (this.nodesAwaitingLocalRelay?.isReconnecting?.(instance.nodeId!) ?? false);
+    const reconnecting = (instance: RelayInstanceRow) =>
+      (outage?.reconnectingRelayIds.has(instance.id) ?? false) || controlReconnecting(instance);
     const degraded =
       !unavailable &&
       (instances.some((instance) => ['offline', 'error'].includes(instance.state) && !reconnecting(instance)) ||
@@ -1409,9 +1418,11 @@ export class RelayPoolService {
         .filter(
           (instance) =>
             instance.kind === 'remote' &&
-            instance.state === 'offline' &&
-            Boolean(instance.lastSeenAt) &&
-            upWhenLocalRelayWentDown(instance.lastSeenAt!.getTime(), outage)
+            (instance.state === 'offline'
+              ? Boolean(instance.lastSeenAt) && upWhenLocalRelayWentDown(instance.lastSeenAt!.getTime(), outage)
+              : // Not marked offline: the node registry keeps waiting for it while the local relay restarts.
+                Boolean(instance.nodeId) &&
+                (this.nodesAwaitingLocalRelay?.isAwaitingLocalRelay(instance.nodeId!, now) ?? false))
         )
         .map(({ id }) => id)
     );

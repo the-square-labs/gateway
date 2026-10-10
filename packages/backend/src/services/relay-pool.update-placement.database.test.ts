@@ -196,4 +196,26 @@ describe.skipIf(!url)('Relay Pool update placement (stand rc.8, F-2, O-7)', () =
     expect(snapshot.state).toBe('local_relay_restarting');
     expect(listed).toMatchObject({ state: 'ready', reconnecting: true });
   });
+
+  it("lists a remote relay as ready and reconnecting during its supervisor's planned control reconnect", async () => {
+    await db.delete(relayEndpoints);
+    await db.delete(relayInstances);
+    await relay('local', 'local');
+    // Stand rc.9: the relay supervisor reconnects the control stream ~45 s after the relay's update; UK and NL were
+    // listed offline for 1-4 s while they served. The control stream ended a moment ago, the node is expected back.
+    const uk = await relay('uk', 'remote');
+    const nl = await relay('nl', 'remote');
+    const t = service();
+    t.pool.setLocalRelayOutage(
+      { latestOutage: () => null },
+      { isAwaitingLocalRelay: () => false, isReconnecting: (nodeId: string) => nodeId === uk.nodeId }
+    );
+    vi.spyOn(t.pool as unknown as { getRecentAttempts(): unknown }, 'getRecentAttempts').mockResolvedValue([]);
+    const settings = { getConfig: async () => ({ relay: { assignmentSpread: { mode: 'fixed', count: 2 } } }) };
+    (t.pool as unknown as { settings: unknown }).settings = settings;
+    const snapshot = await t.pool.getSnapshot();
+    expect(snapshot.state).not.toBe('degraded');
+    expect(snapshot.instances.find(({ id }) => id === uk.id)).toMatchObject({ state: 'ready', reconnecting: true });
+    expect(snapshot.instances.find(({ id }) => id === nl.id)).toMatchObject({ state: 'ready', reconnecting: false });
+  });
 });

@@ -58,8 +58,14 @@ const HEALTH_HISTORY_MIN_INTERVAL_MS = 30_000; // one entry per 30s
 /** The legacy policy lease; a gap past this is long enough that the relay served stale policy. */
 const RELAY_STALE_POLICY_GAP_MS = 15 * 60 * 1000;
 
+/**
+ * A relay whose control stream ended is offline once the node registry gives up on it, not at once: the relay
+ * supervisor reconnects the control stream on purpose (after an update, a policy change) while the relay keeps
+ * serving, and a relay listed offline for those seconds read as an outage (stand rc.9: UK and NL "offline" for 1-4 s
+ * after their updates). The registry marks it offline when the node's reconnect grace ends (markDisconnectedOffline).
+ */
 async function markRelayInstanceOffline(deps: GrpcServerDeps, nodeId: string): Promise<void> {
-  if (deps.registry.getNode(nodeId)) return;
+  if (deps.registry.getNode(nodeId) || deps.registry.isReconnecting(nodeId)) return;
   const [node] = await deps.db.select({ type: nodes.type }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
   if (node?.type !== 'relay' || deps.registry.getNode(nodeId)) return;
   await deps.db

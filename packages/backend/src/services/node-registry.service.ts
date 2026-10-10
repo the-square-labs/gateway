@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { ServerDuplexStream } from '@grpc/grpc-js';
 import { eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { nodes } from '@/db/schema/index.js';
+import { nodes, relayInstances } from '@/db/schema/index.js';
 import type {
   NodeHealthReport,
   NodeManagedLinkReport,
@@ -511,6 +511,12 @@ export class NodeRegistryService {
     // A replacement stream registered meanwhile: the node never went offline.
     if (this.nodes.has(nodeId)) return;
     await this.releaseHeldDisconnectAudit(nodeId);
+    // A remote relay's pool state follows its control stream, after the same grace (markRelayInstanceOffline).
+    await this.db
+      .update(relayInstances)
+      .set({ state: 'offline', updatedAt: new Date() })
+      .where(eq(relayInstances.nodeId, nodeId));
+    if (this.nodes.has(nodeId)) return;
     const [dbNode] = await this.db
       .select({ metadata: nodes.metadata })
       .from(nodes)
