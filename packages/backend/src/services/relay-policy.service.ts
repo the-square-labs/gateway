@@ -920,7 +920,7 @@ export class RelayPolicyService {
     if (now - this.lastLocalPolicyLossSyncAt < LOCAL_POLICY_LOSS_SYNC_INTERVAL_MS) return;
     this.lastLocalPolicyLossSyncAt = now;
     void this.syncSnapshot().catch((error) => {
-      logger.warn('Local relay policy delivery after a lost snapshot deferred to the next sync', {
+      logger.info('Local relay policy delivery after a lost snapshot deferred to the next sync', {
         error: errorMessage(error),
       });
     });
@@ -947,7 +947,7 @@ export class RelayPolicyService {
       previousRevision,
     });
     void this.syncRemoteInstancePolicy(nodeId, REMOTE_POLICY_PUSH_TIMEOUT_MS, { force: true }).catch((error) => {
-      logger.warn('Remote relay policy delivery after a lost snapshot deferred to the next refresh', {
+      logger.info('Remote relay policy delivery after a lost snapshot deferred to the next refresh', {
         nodeId,
         error: errorMessage(error),
       });
@@ -1538,7 +1538,7 @@ export class RelayPolicyService {
       }
       // An unresponsive relay must not slow every local sync; the lease refresh keeps trying.
       this.remotePolicyPushFailedAt.set(nodeId, Date.now());
-      logger.warn('Remote relay policy push deferred to the next lease refresh', {
+      logger.info('Remote relay policy push deferred to the next lease refresh', {
         nodeId,
         error: errorMessage(result.reason),
       });
@@ -1598,7 +1598,7 @@ export class RelayPolicyService {
       return;
     }
     this.pendingGrantRefresh = { message, reportedAt: now };
-    logger.warn('Relay policy reconciled but some daemon grant bundles remain pending', { error: message });
+    logger.info('Relay policy reconciled but some daemon grant bundles remain pending', { error: message });
   }
 
   async rotateIfDue(now = new Date()): Promise<boolean> {

@@ -10,7 +10,9 @@ import type { CAService } from './ca.service.js';
 
 const logger = createChildLogger('OCSPService');
 
-logger.warn('OCSP responder is not fully implemented — responses will return INTERNAL_ERROR');
+// OCSP is disabled by design: issued certificates name no OCSP responder (CRL distribution points only) and a CA
+// refuses an OCSP URL (OCSP_DISABLED). The expected state, not a fault: stated once per start, at info.
+logger.info('OCSP responder is disabled; certificates rely on CRLs and OCSP requests are answered INTERNAL_ERROR');
 
 const OCSP_CACHE_PREFIX = 'ocsp:';
 
@@ -49,7 +51,7 @@ export class OCSPService {
       // 3. Look up certificate status
       // 4. Build and sign OCSPResponse
 
-      logger.warn('OCSP request received — full ASN.1 parsing not yet implemented', { caId });
+      logger.debug('OCSP request answered INTERNAL_ERROR: the OCSP responder is disabled', { caId });
 
       // Return a "tryLater" response for now
       return this.buildMinimalOCSPResponse(OCSP_RESPONSE_STATUS.INTERNAL_ERROR);
