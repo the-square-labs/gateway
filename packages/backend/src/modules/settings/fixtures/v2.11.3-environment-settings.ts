@@ -1,3 +1,7 @@
+// Verbatim from v2.11.3 (git show v2.11.3:packages/backend/src/modules/settings/environment-settings.schemas.ts and
+// the defaults and normalizeEnvironmentSettings of environment-settings.service.ts): how the previous stable reads
+// the `environment:settings` row at start. A row it cannot parse keeps it from starting (rc.10 upgrade run, F-1).
+
 import { z } from '@hono/zod-openapi';
 
 const positiveInt = (min: number, max: number) => z.number().int().min(min).max(max);
@@ -15,7 +19,6 @@ export const RateLimitSettingsSchema = z
   .object({
     windowMs: positiveInt(1_000, 3_600_000),
     maxRequests: positiveInt(1, 1_000_000),
-    sessionMaxRequests: positiveInt(1, 1_000_000),
     authMaxRequests: positiveInt(1, 1_000_000),
     authLoginMaxRequests: positiveInt(1, 1_000_000),
     authCallbackMaxRequests: positiveInt(1, 1_000_000),
@@ -70,7 +73,7 @@ export const SessionSettingsSchema = z
   })
   .strict();
 
-export const PkiDefaultSettingsBaseSchema = z
+const PkiDefaultSettingsBaseSchema = z
   .object({
     crlValidityHours: positiveInt(1, 30 * 24),
     expiryWarningDays: positiveInt(1, 10 * 365),
@@ -111,3 +114,86 @@ export type EnvironmentSettingsUpdate = z.infer<typeof EnvironmentSettingsUpdate
 export type EnvironmentSettingsLegacyUpdate = {
   [Group in keyof EnvironmentSettings]?: Partial<EnvironmentSettings[Group]>;
 };
+
+export const DEFAULT_ENVIRONMENT_SETTINGS: EnvironmentSettings = {
+  rateLimits: {
+    windowMs: 60_000,
+    maxRequests: 1_200,
+    authMaxRequests: 120,
+    authLoginMaxRequests: 20,
+    authCallbackMaxRequests: 60,
+    setupMaxRequests: 20,
+    publicStatusMaxRequests: 600,
+    publicWebhookMaxRequests: 60,
+    pkiMaxRequests: 600,
+    streamMaxRequests: 120,
+    aiWebSocketMaxRequests: 120,
+    inferenceMaxRequests: 1_800,
+  },
+  loggingIngest: {
+    maxBodyBytes: 1_048_576,
+    maxBatchSize: 500,
+    maxMessageBytes: 16_384,
+    maxLabels: 32,
+    maxFields: 64,
+    maxKeyLength: 100,
+    maxValueBytes: 8_192,
+    maxJsonDepth: 5,
+    rateLimitWindowSeconds: 60,
+    globalRequestsPerWindow: 600,
+    globalEventsPerWindow: 60_000,
+    tokenRequestsPerWindow: 300,
+    tokenEventsPerWindow: 10_000,
+  },
+  requestLimits: {
+    requestBodyMaxBytes: 2_097_152,
+    oauthBodyMaxBytes: 32_768,
+    inferenceHttpBodyMaxBytes: 256 * 1024 * 1024,
+    inferenceWebSocketMaxPayloadBytes: 128 * 1024 * 1024,
+    inferenceMaxConcurrentRequestsPerToken: 32,
+    inferenceConcurrencyLeaseSeconds: 600,
+  },
+  sessions: {
+    expirySeconds: 2_592_000,
+  },
+  pkiDefaults: {
+    crlValidityHours: 24,
+    expiryWarningDays: 30,
+    expiryCriticalDays: 7,
+  },
+};
+
+export function normalizeEnvironmentSettings(value: unknown): EnvironmentSettings {
+  if (!value || typeof value !== 'object') return structuredClone(DEFAULT_ENVIRONMENT_SETTINGS);
+  const stored = value as Partial<EnvironmentSettings>;
+  const requestLimits = {
+    ...DEFAULT_ENVIRONMENT_SETTINGS.requestLimits,
+    ...stored.requestLimits,
+  };
+  return EnvironmentSettingsSchema.parse({
+    rateLimits: { ...DEFAULT_ENVIRONMENT_SETTINGS.rateLimits, ...stored.rateLimits },
+    loggingIngest: { ...DEFAULT_ENVIRONMENT_SETTINGS.loggingIngest, ...stored.loggingIngest },
+    requestLimits: {
+      requestBodyMaxBytes: Math.min(requestLimits.requestBodyMaxBytes, REQUEST_LIMIT_MAXIMUMS.requestBodyMaxBytes),
+      oauthBodyMaxBytes: Math.min(requestLimits.oauthBodyMaxBytes, REQUEST_LIMIT_MAXIMUMS.oauthBodyMaxBytes),
+      inferenceHttpBodyMaxBytes: Math.min(
+        requestLimits.inferenceHttpBodyMaxBytes,
+        REQUEST_LIMIT_MAXIMUMS.inferenceHttpBodyMaxBytes
+      ),
+      inferenceWebSocketMaxPayloadBytes: Math.min(
+        requestLimits.inferenceWebSocketMaxPayloadBytes,
+        REQUEST_LIMIT_MAXIMUMS.inferenceWebSocketMaxPayloadBytes
+      ),
+      inferenceMaxConcurrentRequestsPerToken: Math.min(
+        requestLimits.inferenceMaxConcurrentRequestsPerToken,
+        REQUEST_LIMIT_MAXIMUMS.inferenceMaxConcurrentRequestsPerToken
+      ),
+      inferenceConcurrencyLeaseSeconds: Math.min(
+        requestLimits.inferenceConcurrencyLeaseSeconds,
+        REQUEST_LIMIT_MAXIMUMS.inferenceConcurrencyLeaseSeconds
+      ),
+    },
+    sessions: { ...DEFAULT_ENVIRONMENT_SETTINGS.sessions, ...stored.sessions },
+    pkiDefaults: { ...DEFAULT_ENVIRONMENT_SETTINGS.pkiDefaults, ...stored.pkiDefaults },
+  });
+}
