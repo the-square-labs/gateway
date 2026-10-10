@@ -99,6 +99,10 @@ func (p *NginxPlugin) handOverConnections() handover.Result {
 				"took", time.Since(result.StartedAt).Round(time.Millisecond).String())
 		}
 	}
+	if attrs := result.SetupAttrs(); attrs != nil && p.logger != nil {
+		// Connections that were being opened as the update began (handover.Registry.Setup).
+		p.logger.Info("waited for connections being opened before the handover", attrs...)
+	}
 	// The handed over bridges let go of their connections before the last
 	// drain passes look at what this process still serves.
 	p.handover.WaitHandedOver(time.Second)

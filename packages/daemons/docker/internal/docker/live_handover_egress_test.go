@@ -17,6 +17,8 @@ import (
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
 	"github.com/wiolett-industries/gateway/daemon-shared/sockettest"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // egressForwarder is the egress side of the shared connector as the connector runs it (secure-link-connector
@@ -354,6 +356,70 @@ func TestLiveHandoverReportsLocalConnectionsItLost(t *testing.T) {
 	report := pair.settled()
 	if report.HandedOver != 1 || report.Kept != 0 || report.Cut[handover.CutLocalClosed] != 1 {
 		t.Fatalf("update report %+v, want the connection cut as %s", report, handover.CutLocalClosed)
+	}
+}
+
+// holdOpens keeps the source opens on both relays waiting until the returned func releases them with err (nil: they
+// go on).
+func (pair *egressHandoverPair) holdOpens() func(err error) {
+	hold := &openHold{release: make(chan struct{})}
+	for _, relay := range pair.relays {
+		relay.hold.Store(hold)
+	}
+	return func(err error) {
+		hold.err = err
+		close(hold.release)
+	}
+}
+
+// An update that begins while a workload connection's relay stream is still being opened (its target slow or
+// restarting) waits for the open before it stops anything, and the connection goes along: the workload is served by
+// the next process. Stand rc.13: such a connection was cut by the exit and counted nowhere.
+func TestUpdateWaitsForARelayOpenInFlight(t *testing.T) {
+	pair := newEgressHandoverPair(t)
+	release := pair.holdOpens()
+	app := pair.dial()
+	// Sent before the stream is open: the connector holds it until the daemon answers.
+	if _, err := app.Write([]byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the open to be in flight", func() bool { return pair.source.handover.SettingUp() == 1 })
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		release(nil)
+	}()
+	pair.update(lifecycle.Version)
+	if got := readExactly(t, app, 4); string(got) != "ping" {
+		t.Fatalf("echoed %q", got)
+	}
+	echoThrough(t, app, 4<<20, func() {})
+	report := pair.settled()
+	if report.HandedOver != 1 || report.Kept != 1 || len(report.Cut) != 0 {
+		t.Fatalf("update report %+v, want the connection kept", report)
+	}
+}
+
+// An open in flight that fails while the update waits for it (the target refused it) is the target's: the workload
+// gets the refusal as without an update, and the update record counts no cut of this node.
+func TestUpdateBooksNoCutForARelayOpenTheTargetRefused(t *testing.T) {
+	pair := newEgressHandoverPair(t)
+	release := pair.holdOpens()
+	app := pair.dial()
+	waitFor(t, "the open to be in flight", func() bool { return pair.source.handover.SettingUp() == 1 })
+	go func() {
+		time.Sleep(300 * time.Millisecond)
+		release(status.Error(codes.PermissionDenied, "route is not authorized"))
+	}()
+	result := pair.source.handOverConnections()
+	if result.SetupsAwaited != 1 || result.SetupsLeft != 0 || result.SetupWait < 200*time.Millisecond {
+		t.Fatalf("handover %+v, want it to wait for the open", result)
+	}
+	if cuts := pair.source.updateCutsNow(); len(cuts) != 0 {
+		t.Fatalf("cuts %v, want none of this node", cuts)
+	}
+	_ = app.SetReadDeadline(time.Now().Add(10 * time.Second))
+	if n, err := app.Read(make([]byte, 1)); err == nil {
+		t.Fatalf("the refused connection still reads (%d bytes)", n)
 	}
 }
 

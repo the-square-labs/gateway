@@ -1191,6 +1191,10 @@ func (f *secureLinkAttemptFailure) attrs() []any {
 
 func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connection net.Conn) {
 	defer connection.Close()
+	// An update waits for this relay open in flight before it hands its connections over (handover.Registry.Setup):
+	// the stream goes along once open; one that fails was the target's to refuse.
+	carried := p.handover.Setup()
+	defer carried()
 	// Outcomes are logged per link and state change (L-1): while a target is down every request of its route
 	// fails, and the 3 s hold retries every 150 ms, so per-attempt lines went to about 20 WARN per request.
 	outcome := logepisode.Subject{Name: logName + " connections", IDAttr: "link_id", ID: linkID}
@@ -1266,7 +1270,7 @@ func (p *NginxPlugin) openSecureLink(ownerKind, logName, linkID string, connecti
 					break
 				}
 			}
-			result, failure := p.openProxySecureLinkOnTunnel(ownerKind, linkID, connection, tunnel, grant, candidate.GetAssignmentGeneration(), setup, opened)
+			result, failure := p.openProxySecureLinkOnTunnel(ownerKind, linkID, connection, tunnel, grant, candidate.GetAssignmentGeneration(), setup, opened, carried)
 			if result == secureLinkOpened {
 				return
 			}
@@ -1396,7 +1400,8 @@ func (p *NginxPlugin) selectRelayTunnel(targetID string) *nginxRelayTunnel {
 
 // openProxySecureLinkOnTunnel opens and bridges one connection through a relay lane. A failed attempt is logged at
 // debug only; openSecureLink reports the connection's outcome per link and state change (L-1).
-func (p *NginxPlugin) openProxySecureLinkOnTunnel(ownerKind, linkID string, connection net.Conn, tunnel *nginxRelayTunnel, grant *pb.RelaySignedGrant, generation uint64, setupTimeout time.Duration, opened func()) (secureLinkOpenResult, *secureLinkAttemptFailure) {
+// carried ends the connection's setup for a handover (handover.Registry.Setup) once it is carried.
+func (p *NginxPlugin) openProxySecureLinkOnTunnel(ownerKind, linkID string, connection net.Conn, tunnel *nginxRelayTunnel, grant *pb.RelaySignedGrant, generation uint64, setupTimeout time.Duration, opened, carried func()) (secureLinkOpenResult, *secureLinkAttemptFailure) {
 	// A resumable stream takes the lane slot over with its first path.
 	handedOver := false
 	defer func() {
@@ -1458,10 +1463,14 @@ func (p *NginxPlugin) openProxySecureLinkOnTunnel(ownerKind, linkID string, conn
 	}
 	maxFrame := int(first.GetReady().MaxFrameBytes)
 	handedOver = true
-	if p.bridgeRelayStream(ownerKind, linkID, connection, tunnel, stream, cancel, maxFrame, readChunk, generation) {
+	if p.bridgeRelayStream(ownerKind, linkID, connection, tunnel, stream, cancel, maxFrame, readChunk, generation, carried) {
 		return secureLinkOpened, nil
 	}
 	handedOver = false
+	// A raw stream lives in this process: a handover does not take it.
+	if carried != nil {
+		carried()
+	}
 	if p.relayStreams != nil {
 		defer p.relayStreams.TrackLegacy(tunnel.targetID)()
 	}

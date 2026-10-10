@@ -145,6 +145,10 @@ func (p *DockerPlugin) handOverConnections() handover.Result {
 		p.logger.Info("handed connections over to the next daemon process", "connections", result.HandedOver, "left_out", result.Cut,
 			"took", time.Since(result.StartedAt).Round(time.Millisecond).String())
 	}
+	if attrs := result.SetupAttrs(); attrs != nil && p.logger != nil {
+		// Connections that were being opened as the update began (handover.Registry.Setup).
+		p.logger.Info("waited for connections being opened before the handover", attrs...)
+	}
 	// The handed over bridges let go of their connections before the drain
 	// looks at what this process still carries.
 	p.handover.WaitHandedOver(time.Second)
@@ -268,7 +272,7 @@ func (p *DockerPlugin) resumeSourceStream(item *handover.RestoredSession) {
 		flow, done := p.linkFlows.track(connection)
 		defer done()
 		defer p.linkTraffic.completed(link)
-		p.bridgeSourceSession(p.linkTraffic.carry(link, flow), session, relaySourceIdleLimit(tag.ownerKind), labels, "")
+		p.bridgeSourceSession(p.linkTraffic.carry(link, flow), session, relaySourceIdleLimit(tag.ownerKind), labels, "", nil)
 	}()
 }
 

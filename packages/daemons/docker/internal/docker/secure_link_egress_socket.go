@@ -93,6 +93,9 @@ func setConnectorSocketOwner(path string) error {
 
 func (p *DockerPlugin) handleSecureLinkEgress(connection net.Conn) {
 	defer connection.Close()
+	// An update waits for the relay open in flight (handover.Registry.Setup): the stream goes along once open.
+	setup := p.handover.Setup()
+	defer setup()
 	refuse := func(message string) {
 		_ = securelink.WriteJSON(connection, securelink.RelayResponse{Version: securelink.RelayProtocolVersion, Error: message})
 	}
@@ -134,6 +137,8 @@ func (p *DockerPlugin) handleSecureLinkEgress(connection net.Conn) {
 	}
 	defer p.linkConnections.release(link)
 	if p.relayGrants.lookup("endpoint", request.OwnerKind, request.BindingID) != nil {
+		// A node-local link opens no relay stream.
+		setup()
 		p.carryLocalEgress(connection, link, refuse)
 		return
 	}
@@ -153,6 +158,7 @@ func (p *DockerPlugin) handleSecureLinkEgress(connection net.Conn) {
 	defer done()
 	defer p.linkTraffic.completed(link)
 	tunnel.labels = sourceLabels(relaySourceTag{ownerKind: assignment.GetOwnerKind(), ownerID: assignment.GetOwnerId()}, entryEgress, link)
+	tunnel.started = setup
 	tunnel.bridge(p.linkTraffic.carry(link, flow))
 }
 

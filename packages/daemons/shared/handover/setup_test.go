@@ -53,7 +53,8 @@ func TestHandOverTakesAConnectionThatWasBeingSetUp(t *testing.T) {
 	}
 }
 
-// A setup that does not end within setupWait does not hold the update.
+// A setup that does not end within setupWait does not hold the update: the
+// exit cuts it, and the update record counts it as open_in_flight.
 func TestHandOverWaitsForASetupOnlySoLong(t *testing.T) {
 	previous := setupWait
 	setupWait = 50 * time.Millisecond
@@ -66,8 +67,29 @@ func TestHandOverWaitsForASetupOnlySoLong(t *testing.T) {
 	if waited := time.Since(started); waited > time.Second {
 		t.Fatalf("handover took %v, want it bounded by setupWait", waited)
 	}
-	if result.Err != nil || result.Committed {
-		t.Fatalf("handover = %+v, want nothing to hand over", result)
+	if result.Err != nil || result.Committed || result.SetupsAwaited != 1 || result.SetupsLeft != 1 {
+		t.Fatalf("handover = %+v, want nothing handed over and the setup still open", result)
+	}
+	if cut := registry.Remaining(); len(cut) != 1 || cut[CutOpenInFlight] != 1 {
+		t.Fatalf("remaining = %v, want the setup cut as %s", cut, CutOpenInFlight)
+	}
+}
+
+// A setup that fails during the wait (the open was refused: the target is
+// down) is no cut of this node.
+func TestHandOverBooksNoCutForASetupThatFailed(t *testing.T) {
+	registry := NewRegistry()
+	done := registry.Setup()
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		done()
+	}()
+	result := registry.HandOver(Options{DaemonType: "docker", Version: "v1", Keeper: handovertest.NewKeeper()})
+	if result.SetupsAwaited != 1 || result.SetupsLeft != 0 || result.SetupWait < 40*time.Millisecond {
+		t.Fatalf("handover = %+v, want it to wait for the setup to end", result)
+	}
+	if cut := registry.Remaining(); len(cut) != 0 {
+		t.Fatalf("remaining = %v, want no cut", cut)
 	}
 }
 
@@ -78,13 +100,13 @@ func TestSetupEndsOnce(t *testing.T) {
 	first, second := registry.Setup(), registry.Setup()
 	first()
 	first()
-	registry.mu.Lock()
-	setups := registry.setups
-	registry.mu.Unlock()
-	if setups != 1 {
+	if setups := registry.SettingUp(); setups != 1 {
 		t.Fatalf("setups = %d, want 1", setups)
 	}
 	second()
+	if setups := registry.SettingUp(); setups != 0 {
+		t.Fatalf("setups = %d, want 0", setups)
+	}
 	var nilRegistry *Registry
 	nilRegistry.Setup()()
 }

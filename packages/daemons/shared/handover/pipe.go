@@ -65,7 +65,7 @@ func (r *Registry) Pipe(left, right net.Conn, cfg PipeConfig) error {
 func (r *Registry) pipe(left, right net.Conn, cfg PipeConfig, pending [2][]byte, done [2]bool) error {
 	p := &Pipe{conns: [2]net.Conn{left, right}, cfg: cfg, stop: newStopper(0, left, right), pending: pending}
 	if r != nil {
-		defer r.add(p)()
+		defer r.add(p, nil)()
 	}
 	if cfg.Started != nil {
 		cfg.Started()

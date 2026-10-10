@@ -39,6 +39,7 @@ import (
 	"sort"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
@@ -104,6 +105,10 @@ const (
 	// counted only what was still open after its drain had closed the rest:
 	// the number is a lower bound, "all connections of this node".
 	CutUncounted = "uncounted"
+	// CutOpenInFlight: a connection whose setup (its relay stream's open, a
+	// peer's stream not bridged yet) did not end within the handover's wait
+	// for it (Registry.Setup): the exit cuts it.
+	CutOpenInFlight = "open_in_flight"
 )
 
 // item is a bridge or a pipe.
@@ -138,48 +143,61 @@ type Registry struct {
 	// ended (Observe).
 	tracker *Tracker
 	// setups counts the connections being set up for the registry (Setup).
-	setups int
+	// A bridge's registration ends its setup under mu (add), so a count taken
+	// under mu sees the connection once: registered or still being set up.
+	setups atomic.Int64
 }
 
 // setupWait bounds how long a handover waits for the connections being set
-// up (a variable for tests).
-var setupWait = time.Second
+// up (a variable for tests). It stays below the relays' grace for a
+// restarting endpoint (relay broker.EndpointRestartGrace, 15 s), so the next
+// process registers again within it, and above the longest relay open of a
+// source (docker relaySourceOpenBudget and the nginx daemon's restart hold,
+// 8 s), so an open in flight ends on its own within it.
+var setupWait = 10 * time.Second
 
 // Setup marks a connection that is being set up and will be carried by the
-// registry (a stream a peer opened, accepted and not bridged yet): a handover
-// first waits for it, at most setupWait, so it goes along instead of starting
-// in a process that is exiting, where the exit cuts it (stand rc.13 O-a: a
-// peer updated in the same batch opened streams to this node as it handed
-// over). The connections keep moving meanwhile; the freeze comes after. The
-// returned func ends the setup: call it once the connection is registered
-// (BridgeConfig.Started) or its setup failed. Calls after the first do
+// registry: a stream a peer opened, accepted and not bridged yet, or a client
+// connection whose relay stream is still being opened. A handover first waits
+// for it, at most setupWait, so it goes along instead of starting in a
+// process that is exiting, where the exit cuts it (stand rc.13 O-a: a peer
+// updated in the same batch opened streams to this node as it handed over).
+// The daemon stops taking new connections before (its listeners went to the
+// next process); the connections it carries keep moving during the wait, the
+// freeze comes after. One still being set up when the wait ends is cut by
+// the exit (CutOpenInFlight). An open that failed is no cut of this node:
+// the client got its refusal as without an update. The returned func ends
+// the setup: pass it as BridgeConfig.Started, and call it when the setup
+// failed or the connection is carried another way. Calls after the first do
 // nothing.
 func (r *Registry) Setup() func() {
 	if r == nil {
 		return func() {}
 	}
-	r.mu.Lock()
-	r.setups++
-	r.mu.Unlock()
+	r.setups.Add(1)
 	var once sync.Once
 	return func() {
-		once.Do(func() {
-			r.mu.Lock()
-			r.setups--
-			r.mu.Unlock()
-		})
+		once.Do(func() { r.setups.Add(-1) })
 	}
 }
 
-// waitSetups waits, at most timeout, until no connection is being set up.
-func (r *Registry) waitSetups(timeout time.Duration) {
+// SettingUp counts the connections being set up now (Setup).
+func (r *Registry) SettingUp() int {
+	if r == nil {
+		return 0
+	}
+	return int(r.setups.Load())
+}
+
+// waitSetups waits, at most timeout, until no connection is being set up,
+// and reports how many were being set up and how many still are.
+func (r *Registry) waitSetups(timeout time.Duration) (awaited, left int) {
 	deadline := time.Now().Add(timeout)
+	awaited = int(r.setups.Load())
 	for {
-		r.mu.Lock()
-		setups := r.setups
-		r.mu.Unlock()
-		if setups == 0 || time.Now().After(deadline) {
-			return
+		left = int(r.setups.Load())
+		if left <= 0 || time.Now().After(deadline) {
+			return awaited, max(left, 0)
 		}
 		time.Sleep(time.Millisecond)
 	}
@@ -215,9 +233,13 @@ func NewRegistry() *Registry {
 
 // add registers an item and returns its removal. An item that starts while a
 // handover collects starts frozen: it moved no byte yet, and goes along.
-func (r *Registry) add(it item) func() {
+// started, if set, ends the item's setup (Setup) with its registration.
+func (r *Registry) add(it item, started func()) func() {
 	r.mu.Lock()
 	r.items[it] = struct{}{}
+	if started != nil {
+		started()
+	}
 	freezing := r.state == stateFreezing
 	r.mu.Unlock()
 	if freezing && !it.pinned() {
@@ -270,7 +292,22 @@ type Result struct {
 	Cut map[string]int
 	// StartedAt is when the bridges began to stop.
 	StartedAt time.Time
-	Err       error
+	// SetupsAwaited counts the connections being set up when the handover
+	// began, SetupsLeft those still being set up when its wait for them
+	// (SetupWait) ended (Setup).
+	SetupsAwaited, SetupsLeft int
+	SetupWait                 time.Duration
+	Err                       error
+}
+
+// SetupAttrs are the log attributes of the handover's wait for the
+// connections being set up (none when there were none).
+func (r Result) SetupAttrs() []any {
+	if r.SetupsAwaited == 0 {
+		return nil
+	}
+	return []any{"opens_awaited", r.SetupsAwaited, "open_in_flight", r.SetupsLeft, "opens_waited",
+		r.SetupWait.Round(time.Millisecond).String()}
 }
 
 // errNoKeeper: the running launcher has no keeper (it started before it had
@@ -349,7 +386,9 @@ func (r *Registry) HandOver(opts Options) Result {
 		result.Err = errNoKeeper
 		return result
 	}
-	r.waitSetups(setupWait)
+	waitStarted := time.Now()
+	result.SetupsAwaited, result.SetupsLeft = r.waitSetups(setupWait)
+	result.SetupWait = time.Since(waitStarted)
 	result.StartedAt = time.Now()
 	r.mu.Lock()
 	if r.state != stateRunning {
@@ -700,8 +739,17 @@ func (r *Registry) Remaining() map[string]int {
 	}
 	r.mu.Lock()
 	notHandedOver := firstNonEmpty(r.notHandedOver, CutNoHandover)
+	// Counted with the items under one lock: a bridge whose setup ends with
+	// its registration is one or the other.
+	if setups := r.setups.Load(); setups > 0 {
+		cut[CutOpenInFlight] = int(setups)
+	}
+	items := make([]item, 0, len(r.items))
+	for it := range r.items {
+		items = append(items, it)
+	}
 	r.mu.Unlock()
-	for _, it := range r.snapshotItems() {
+	for _, it := range items {
 		switch current := it.(type) {
 		case *Bridge:
 			if current.session.Detached() {

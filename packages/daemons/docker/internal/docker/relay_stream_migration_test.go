@@ -51,6 +51,14 @@ type miniRelay struct {
 	// established ones as ForceDisconnect does.
 	draining atomic.Bool
 	force    chan struct{}
+	// hold, when set, keeps every source open waiting until it is released (a target that is slow or restarting).
+	hold atomic.Pointer[openHold]
+}
+
+// openHold keeps source opens waiting until release closes; err, when set, is the answer they get then.
+type openHold struct {
+	release chan struct{}
+	err     error
 }
 
 func startMiniRelay(t *testing.T, id string, routes map[string]string) *miniRelay {
@@ -128,6 +136,16 @@ func (r *miniRelay) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) err
 		return status.Error(codes.InvalidArgument, "open first")
 	}
 	routeID := strings.TrimPrefix(first.GetOpen().GetGrant().GetKeyId(), "route:")
+	if hold := r.hold.Load(); hold != nil {
+		select {
+		case <-hold.release:
+			if hold.err != nil {
+				return hold.err
+			}
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		}
+	}
 	if r.draining.Load() {
 		return status.Error(codes.Unavailable, "relay is draining")
 	}

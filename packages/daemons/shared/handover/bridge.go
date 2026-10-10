@@ -32,8 +32,9 @@ type BridgeConfig struct {
 	// CutClass is the class an update counts the connection under when it
 	// cannot hand it over ("": by why it could not).
 	CutClass string
-	// Started, if set, is called once the bridge is registered: a handover
-	// from then on stops it and passes it on (Registry.Setup).
+	// Started, if set, is called as the bridge is registered (with the
+	// registry's lock held: it must not call the registry): a handover from
+	// then on stops it and passes it on (Registry.Setup).
 	Started func()
 }
 
@@ -264,9 +265,8 @@ func (r *Registry) Bridge(connection net.Conn, session *relayresume.Session, cfg
 		b.stop.touch()
 	}
 	if r != nil {
-		defer r.add(b)()
-	}
-	if cfg.Started != nil {
+		defer r.add(b, cfg.Started)()
+	} else if cfg.Started != nil {
 		cfg.Started()
 	}
 	readLocal, writeLocal := !session.FinQueued(), !session.FinDelivered()

@@ -744,6 +744,9 @@ func isBackupRelayOwnerKind(ownerKind string) bool {
 }
 
 func (p *DockerPlugin) openManagedDatabaseBinding(connection net.Conn, bindingID string, routeGeneration uint64, peer listenerPeer, peerKnown bool) {
+	// An update waits for the relay open in flight (handover.Registry.Setup): the stream goes along once open.
+	setup := p.handover.Setup()
+	defer setup()
 	assignment := p.relayGrants.lookup("connect", "managed_database_binding", bindingID)
 	if assignment == nil {
 		p.linkRejections.rejected(p.logger, linkKindManagedDatabaseBinding, bindingID, linkRejectedGrantUnavailable)
@@ -769,6 +772,7 @@ func (p *DockerPlugin) openManagedDatabaseBinding(connection net.Conn, bindingID
 	defer p.linkTraffic.completed(link)
 	tunnel.labels = hostListenerLabels(sourceLabels(relaySourceTag{ownerKind: assignment.GetOwnerKind(), ownerID: assignment.GetOwnerId()},
 		entryHostListener, link), bindingID, routeGeneration, peer, peerKnown)
+	tunnel.started = setup
 	tunnel.bridge(p.linkTraffic.carry(link, flow))
 }
 
@@ -890,6 +894,8 @@ type relaySourceTunnel struct {
 	cutClass string
 	// lane is the lane the tunnel opened on (lane rotation moves resumable streams off it).
 	lane *relaySourceLane
+	// started, if set, ends the connection's setup for a handover (handover.Registry.Setup) once bridge carries it.
+	started func()
 }
 
 // openSource opens a source tunnel with grant and waits until the relay admits it, at most relaySourceOpenTimeout.
@@ -950,8 +956,12 @@ func (t *relaySourceTunnel) bridge(connection net.Conn) {
 			tag, _ := t.session.Tag().(relaySourceTag)
 			labels = sourceLabels(tag, "", linkKey{})
 		}
-		t.router.plugin.bridgeSourceSession(connection, t.session, t.idle, labels, t.cutClass)
+		t.router.plugin.bridgeSourceSession(connection, t.session, t.idle, labels, t.cutClass, t.started)
 		return
+	}
+	// A raw stream lives in this process: a handover does not take it.
+	if t.started != nil {
+		t.started()
 	}
 	switch {
 	case t.localService:
@@ -971,7 +981,7 @@ func (t *relaySourceTunnel) bridge(connection net.Conn) {
 // source stream until either side ends it or the daemon hands it to its next
 // process. idle ends it once it carried no byte for that long (0: never, TCP
 // keepalive finds a peer that vanished).
-func (p *DockerPlugin) bridgeSourceSession(connection net.Conn, session *relayresume.Session, idle time.Duration, labels handover.Labels, cutClass string) {
+func (p *DockerPlugin) bridgeSourceSession(connection net.Conn, session *relayresume.Session, idle time.Duration, labels handover.Labels, cutClass string, started func()) {
 	if idle <= 0 {
 		keepLocalAlive(connection)
 	}
@@ -979,7 +989,8 @@ func (p *DockerPlugin) bridgeSourceSession(connection net.Conn, session *relayre
 		labels[handoverOwnerKind], labels[handoverOwnerID] = tag.ownerKind, tag.ownerID
 	}
 	readChunk := relayresume.ReadChunk(min(p.relayReadChunk(), session.MaxFrame()))
-	_ = p.handover.Bridge(connection, session, handover.BridgeConfig{ReadChunk: readChunk, Idle: idle, Labels: labels, CutClass: cutClass})
+	_ = p.handover.Bridge(connection, session, handover.BridgeConfig{ReadChunk: readChunk, Idle: idle, Labels: labels, CutClass: cutClass,
+		Started: started})
 	session.Cancel()
 }
 

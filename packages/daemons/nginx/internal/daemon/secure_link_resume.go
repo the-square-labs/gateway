@@ -297,7 +297,7 @@ func relayStreamPathRelease(tunnel *nginxRelayTunnel, cancel context.CancelFunc)
 // bridgeRelayStream serves a connection over a resumable stream whose first
 // path is the tunnel just opened. It reports false when the link's streams
 // stay raw (the caller bridges the tunnel itself).
-func (p *NginxPlugin) bridgeRelayStream(ownerKind, linkID string, connection net.Conn, tunnel *nginxRelayTunnel, stream relayv1.TunnelBroker_OpenTunnelClient, cancel context.CancelFunc, maxFrame, readChunk int, generation uint64) bool {
+func (p *NginxPlugin) bridgeRelayStream(ownerKind, linkID string, connection net.Conn, tunnel *nginxRelayTunnel, stream relayv1.TunnelBroker_OpenTunnelClient, cancel context.CancelFunc, maxFrame, readChunk int, generation uint64, carried func()) bool {
 	assignment := p.relayGrants.lookup("connect", ownerKind, linkID)
 	config, ok := p.resumeConfig(ownerKind, linkID, assignment)
 	if !ok {
@@ -324,7 +324,7 @@ func (p *NginxPlugin) bridgeRelayStream(ownerKind, linkID string, connection net
 	// The stream outlives this lane: only the connection and the session end it, or an update hands both to the
 	// next process (live_handover.go).
 	_ = p.handover.Bridge(connection, session, handover.BridgeConfig{ReadChunk: relayresume.ReadChunk(readChunk),
-		Labels: handover.Labels{handoverOwnerKind: ownerKind, handoverLinkID: linkID}, CutClass: cutClass})
+		Labels: handover.Labels{handoverOwnerKind: ownerKind, handoverLinkID: linkID}, CutClass: cutClass, Started: carried})
 	session.Cancel()
 	return true
 }

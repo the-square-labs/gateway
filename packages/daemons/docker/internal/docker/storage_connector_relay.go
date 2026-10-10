@@ -129,6 +129,9 @@ func (p *DockerPlugin) serveStorageConnectorRelay(listener net.Listener) {
 
 func (p *DockerPlugin) handleStorageConnectorRelay(connection net.Conn) {
 	defer connection.Close()
+	// An update waits for the relay open in flight (handover.Registry.Setup): the stream goes along once open.
+	setup := p.handover.Setup()
+	defer setup()
 	var request securelink.RelayRequest
 	if err := securelink.ReadJSON(connection, &request); err != nil {
 		_ = securelink.WriteJSON(connection, securelink.RelayResponse{Version: securelink.RelayProtocolVersion, Error: err.Error()})
@@ -173,6 +176,7 @@ func (p *DockerPlugin) handleStorageConnectorRelay(connection net.Conn) {
 	defer done()
 	defer p.linkTraffic.completed(link)
 	tunnel.labels = sourceLabels(relaySourceTag{ownerKind: assignment.GetOwnerKind(), ownerID: assignment.GetOwnerId()}, entryStorageConnector, link)
+	tunnel.started = setup
 	tunnel.bridge(p.linkTraffic.carry(link, flow))
 }
 
