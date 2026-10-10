@@ -9,6 +9,7 @@ import (
 
 	"github.com/wiolett-industries/gateway/daemon-shared/connector"
 	"github.com/wiolett-industries/gateway/daemon-shared/relaylane"
+	"github.com/wiolett-industries/gateway/daemon-shared/relayresume"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
@@ -248,6 +249,14 @@ func (r *relayTunnelRouter) rotateLane(ctx context.Context, lane *relaySourceLan
 		for _, session := range sides.sources.Sessions() {
 			if current, _ := session.CurrentLane().(*relaySourceLane); current == lane {
 				sides.sources.MoveOffLane(session)
+				moved++
+			}
+		}
+		// Streams this node accepted on the lane: their sources open new paths on the same relay (MIGRATE_REQ
+		// lane), which arrive on the new connection.
+		for _, session := range sides.targets.Sessions() {
+			if current, _ := session.CurrentLane().(*relaySourceLane); current == lane {
+				session.RequestMigrate(relayresume.MigrateLane)
 				moved++
 			}
 		}

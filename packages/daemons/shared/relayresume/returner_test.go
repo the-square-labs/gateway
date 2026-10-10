@@ -2,6 +2,7 @@ package relayresume
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -180,6 +181,34 @@ func TestTargetDrainHintMovesToTheBestPath(t *testing.T) {
 	h.table.RequestMigrate("relay-a", MigrateGoAway)
 	waitPath(t, session, "relay-b", 2)
 	session.Abort(RstAborted, "done")
+}
+
+// A target that replaced the connection its path runs on asks for a new path
+// on the same relay (MIGRATE_REQ lane): the source opens one there, not on
+// another relay.
+func TestTargetLaneHintOpensANewPathOnTheSameRelay(t *testing.T) {
+	h := newHarness(t, "relay-a", "relay-b")
+	dialer, session := newGenerationStream(t, h)
+	h.table.RequestMigrate("relay-a", MigrateLane)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		dialer.mu.Lock()
+		requests := slices.Clone(dialer.requests)
+		dialer.mu.Unlock()
+		if len(requests) > 1 && !session.Moving() {
+			last := requests[len(requests)-1]
+			if !last.NewPath || last.Avoid != "" || last.FromRelay != "relay-a" {
+				t.Fatalf("move request %+v", last)
+			}
+			if relay, _, _ := session.CurrentPath(); relay != "relay-a" {
+				t.Fatalf("stream moved to %s", relay)
+			}
+			session.Abort(RstAborted, "done")
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("no new path was opened")
 }
 
 // The returner moves a bounded number of streams per pass, each at a random

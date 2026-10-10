@@ -542,7 +542,7 @@ func (r *relayTunnelRouter) acceptIncoming(ctx context.Context, assignment *pb.R
 	var tunnel relayFrameStream = stream
 	if request, ok := r.plugin.targetResumeRequest(assignment, incoming, r.targetID); ok {
 		accepted := r.plugin.relayStreams().targets.Accept(relayresume.OpenedPath{Stream: stream, Cancel: cancel, CloseSend: stream.CloseSend,
-			RelayID: request.RelayID, MaxFrame: int(first.GetReady().MaxFrameBytes)}, request)
+			RelayID: request.RelayID, MaxFrame: int(first.GetReady().MaxFrameBytes), Lane: lane}, request)
 		switch accepted.Kind {
 		case relayresume.AcceptLegacy:
 			// A raw source during version skew: served exactly as before.

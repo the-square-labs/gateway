@@ -285,6 +285,14 @@ func (st *sourceState) observeLocked(s *Session) {
 		return
 	}
 	if reason, ok := c.TakeMigrateRequest(); ok && c.Current() != nil {
+		if reason == MigrateLane {
+			// The target's connection under the path is replaced: a new path
+			// on the same relay, like a move off the source's own lane.
+			if c.State() == StateOpen {
+				st.requestLocked(s, plannedMove{trigger: TriggerLane, from: c.Current(), at: time.Now(), newPath: true})
+			}
+			return
+		}
 		if reason == MigrateDrain {
 			// The target's candidate drains: the source moves to the best
 			// path of its own assignment, which leaves a relay that drains

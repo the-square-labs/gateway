@@ -68,6 +68,11 @@ const (
 const (
 	MigrateDrain  byte = 1 // the target's relay candidate is draining
 	MigrateGoAway byte = 2 // the target's lane to the relay got GOAWAY
+	// MigrateLane: the target replaced the connection its path runs on (its
+	// congestion state went stale): the source opens a new path on the same
+	// relay, which the target accepts on the new connection. Sources that
+	// predate it move off the relay where they can.
+	MigrateLane byte = 3
 )
 
 // Flow control.

@@ -154,6 +154,8 @@ type State struct {
 	// microseconds. A connection that only acknowledges what it receives has
 	// an RTTUs inflated by the peer's delayed acks.
 	RTTUs, RcvRTTUs uint32
+	// MSS is the sender's segment size in bytes (0 where unknown).
+	MSS uint32
 }
 
 const (
@@ -171,6 +173,30 @@ const (
 func (s State) Collapsed() bool {
 	return s.SlowStartThreshold < CollapsedThreshold && time.Duration(s.RTTUs)*time.Microsecond >= CollapsedRTT
 }
+
+// SlowRate is the rate below which a learned slow start threshold counts as
+// stale (Slow): a sender that sends its threshold once per round trip and
+// then grows one segment per round trip stays below it for tens of seconds on
+// a long path (stand rc.8 farboth150: thresholds of 189 and 411 segments
+// learned on the LAN held Route Secure Link uploads at 4-11 MB/s on a 150 ms
+// leg; a new connection reaches 18-21).
+const SlowRate = 8 << 20
+
+// Slow reports a sender whose learned slow start threshold, sent once per
+// round trip, carries less than SlowRate on a path of at least CollapsedRTT:
+// what a threshold learned on a LAN, or left by a loss long ago, is worth
+// after the round trip grew. A connection that never left a slow start is
+// not slow.
+func (s State) Slow() bool {
+	if s.SlowStartThreshold >= InfiniteThreshold || s.MSS == 0 || time.Duration(s.RTTUs)*time.Microsecond < CollapsedRTT {
+		return false
+	}
+	return uint64(s.SlowStartThreshold)*uint64(s.MSS)*1_000_000 < SlowRate*uint64(s.RTTUs)
+}
+
+// Stale reports a sender whose congestion state is worth less than a new
+// connection's: collapsed, or slow (see Collapsed and Slow).
+func (s State) Stale() bool { return s.Collapsed() || s.Slow() }
 
 // InfiniteThreshold is Linux's slow start threshold of a connection that never
 // left a slow start.
