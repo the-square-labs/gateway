@@ -34,7 +34,13 @@ export interface RelayTunnelClient {
     timeoutMs?: number
   ): Promise<AttachablePath>;
   openResumableTunnel(
-    config: { routeId: string; keyId: string; key: Buffer; halfCloseTimeoutMs?: number },
+    config: {
+      routeId: string;
+      keyId: string;
+      key: Buffer;
+      halfCloseTimeoutMs?: number;
+      onEvent?: (event: string, detail?: Record<string, unknown>) => void;
+    },
     dial: ResumeDialer
   ): Promise<Duplex>;
   trackLegacyTunnel(tunnel: Duplex, relayInstanceId?: string): Duplex;
@@ -134,8 +140,10 @@ export class RelayTunnelEngine {
       this.client.migrateResumableTunnels(relayId, deadlineUnixMs)
     );
     rpc.handle('streams.list', () => this.listStreams());
-    rpc.handle('streams.migrate', ({ id, trigger }: { id: number; trigger: MigrationTrigger }) =>
-      this.migrateStream(id, trigger)
+    rpc.handle(
+      'streams.migrate',
+      ({ id, trigger, fromRelayId }: { id: number; trigger: MigrationTrigger; fromRelayId?: string | null }) =>
+        this.migrateStream(id, trigger, fromRelayId)
     );
     rpc.handle('stats', () => this.client.relayResumeStats());
     rpc.handle('identity', (identity: WireIdentity) => {
@@ -344,6 +352,11 @@ export class RelayTunnelEngine {
           keyId: config.keyId,
           key: asBuffer(config.key),
           ...(config.halfCloseTimeoutMs !== undefined ? { halfCloseTimeoutMs: config.halfCloseTimeoutMs } : {}),
+          // Where Gateway's own streams go is checked in every Relay Pool update and relay outage: each move is logged.
+          onEvent: (event, detail) => {
+            if (event === 'migration')
+              this.log('info', 'Gateway relay stream moved', { routeId: config.routeId, ...detail });
+          },
         },
         dial
       );
@@ -460,10 +473,10 @@ export class RelayTunnelEngine {
     }));
   }
 
-  private migrateStream(id: number, trigger: MigrationTrigger): void {
+  private migrateStream(id: number, trigger: MigrationTrigger, fromRelayId?: string | null): void {
     const stream = this.streamsById.get(id)?.deref();
     if (!stream) return;
-    this.client.resumeRegistry.schedule(() => stream.migrate(trigger));
+    this.client.resumeRegistry.schedule(() => stream.migrate(trigger, fromRelayId));
   }
 
   // -- Lifecycle ---------------------------------------------------------------------------------------------------

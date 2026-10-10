@@ -20,6 +20,7 @@ import {
   MAX_FRAME_BYTES,
   MAX_WINDOW,
   MIN_WINDOW,
+  MigrateReason,
   type PathEnd,
   type PathMacContext,
   parseFrame,
@@ -34,6 +35,7 @@ import {
   type ResumeSessionError,
   type ResumeTimers,
   RstCode,
+  realTimers,
   resumeAckTranscript,
   resumeTranscript,
   routeKeyId,
@@ -1068,6 +1070,14 @@ function memoryPair(relayId: string): { source: MemoryPath; target: MemoryPath }
   return { source, target };
 }
 
+async function waitFor(condition: () => boolean, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!condition()) {
+    if (Date.now() > deadline) throw new Error('condition not reached in time');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 async function collect(stream: ResumableRelayDuplex): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of stream) chunks.push(chunk as Buffer);
@@ -1159,6 +1169,97 @@ describe('ResumableRelayDuplex', () => {
     expect(avoided).toEqual([null, null]);
     expect(duplex.relayId).toBe('relay-0');
     expect(registry.snapshot().migrations['lane:ok']).toBe(1);
+    // Housekeeping: no stall is recorded for it, as relayresume counts lane moves (rc.9 item 4).
+    expect(registry.snapshot().migrationStallMs).toEqual({ p50: 0, p95: 0 });
+  }, 30_000);
+
+  it("leaves a stream where a target's hint moved it when the drain move paced for later comes (stand rc.9 F-2)", async () => {
+    // The Relay Pool update drains the local relay: Gateway paces its own streams' moves over a minute. The target's
+    // hint moves the stream to UK first; when its paced turn came, the drain move left UK for NL (300 ms).
+    const key = Buffer.alloc(32, 6);
+    const target = echoTarget(key, 'v1');
+    const drainTimers: Array<() => void> = [];
+    const registry = new RelayResumeRegistry({
+      now: () => Date.now(),
+      setTimeout: (callback) => {
+        drainTimers.push(callback);
+        return drainTimers.length;
+      },
+      clearTimeout: () => undefined,
+    });
+    const avoided: Array<string | null> = [];
+    let first = true;
+    const duplex = await ResumableRelayDuplex.open({
+      routeId: 'route-echo',
+      keyId: 'v1',
+      key,
+      registry,
+      timers: realTimers,
+      dial: async (avoid) => {
+        avoided.push(avoid);
+        // The relay order of the assignment that replaces the local relay: UK, then NL; the relay left goes last.
+        const relayId = first ? 'local' : avoid === 'uk' ? 'nl' : 'uk';
+        first = false;
+        const pair = memoryPair(relayId);
+        target.accept(pair.target);
+        return { path: pair.source };
+      },
+    });
+    const received = collect(duplex);
+    duplex.write(Buffer.from('a'));
+    expect(registry.drainRelay('local', Date.now() + 60_000)).toBe(1);
+    // The target's candidate on the local relay drains: it asks the stream to move.
+    const [targetSession] = [...target.sessions.values()];
+    targetSession!.requestMigration(MigrateReason.drain);
+    await waitFor(() => duplex.relayId === 'uk');
+    // The paced drain move comes: the stream is no longer on the relay it was meant to leave.
+    for (const fire of drainTimers.splice(0)) fire();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(duplex.relayId).toBe('uk');
+    expect(avoided).toEqual([null, 'local']);
+    duplex.write(Buffer.from('b'));
+    duplex.end();
+    expect((await received).toString()).toBe('ab');
+    expect(registry.snapshot().migrations).toEqual({ 'target_hint:ok': 1 });
+  }, 30_000);
+
+  it('returns to the best relay and stays where it is when that is the current one', async () => {
+    const key = Buffer.alloc(32, 7);
+    const target = echoTarget(key, 'v1');
+    const registry = new RelayResumeRegistry();
+    const avoided: Array<string | null> = [];
+    // The nearer relay does not open: the dialer's next relay is the current one, not a third, farther one.
+    const order = ['uk', 'uk', 'local'];
+    const paths: MemoryPath[] = [];
+    const duplex = await ResumableRelayDuplex.open({
+      routeId: 'route-echo',
+      keyId: 'v1',
+      key,
+      registry,
+      dial: async (avoid) => {
+        avoided.push(avoid);
+        const pair = memoryPair(order.shift()!);
+        paths.push(pair.source);
+        target.accept(pair.target);
+        return { path: pair.source };
+      },
+    });
+    const received = collect(duplex);
+    duplex.write(Buffer.from('x'));
+    await duplex.migrate('return', 'uk');
+    expect(duplex.relayId).toBe('uk');
+    expect(paths[1]!.dead).toBe(true);
+    // A return judged for a relay the stream has left by now is dropped.
+    await duplex.migrate('return', 'nl');
+    expect(avoided).toEqual([null, null]);
+    await duplex.migrate('return', 'uk');
+    expect(duplex.relayId).toBe('local');
+    expect(avoided).toEqual([null, null, null]);
+    duplex.write(Buffer.from('y'));
+    duplex.end();
+    expect((await received).toString()).toBe('xy');
+    // Staying is no move: only the real one is counted.
+    expect(registry.snapshot().migrations).toEqual({ 'return:ok': 1 });
   }, 30_000);
 
   it('spreads drain moves over at most a minute whatever the drain grace', () => {

@@ -272,11 +272,16 @@ describe('Gateway tunnel worker engine', () => {
     await new Promise((resolve) => socket.once('data', resolve));
     const [stream] = [...(await host.streams.liveSessions())];
     expect(stream).toMatchObject({ routeId: 'route-1', relayId: 'relay-local', movable: true });
-    await stream!.migrate('return');
+    await stream!.migrate('return', 'relay-local');
     await expect
       .poll(async () => [...(await host.streams.liveSessions())][0]?.relayId, { timeout: 5_000 })
       .toBe('relay-uk');
     expect(opened.map(({ relayId }) => relayId)).toEqual(['relay-local', 'relay-uk']);
+    // A move asked of the relay the stream has left by now (a drain paced for later) is dropped in the worker.
+    await stream!.migrate('drain', 'relay-local');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(dials).toBe(2);
+    expect([...(await host.streams.liveSessions())][0]?.relayId).toBe('relay-uk');
     const echoed = await roundTrip(socket, Buffer.from(' world'));
     expect(echoed.toString()).toBe(' world');
   });

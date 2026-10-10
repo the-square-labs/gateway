@@ -34,7 +34,8 @@ export interface GatewayStream {
   readonly relayId: string | null;
   readonly movable: boolean;
   readonly lastMoveAt: number;
-  migrate(trigger: MigrationTrigger): Promise<void>;
+  /** A planned move; `fromRelayId`: the relay it leaves, the move is dropped once the stream is elsewhere. */
+  migrate(trigger: MigrationTrigger, fromRelayId?: string | null): Promise<void>;
 }
 
 /** What GatewayRelayPaths needs of the streams: list them, pace moves, its clock. */
@@ -393,8 +394,8 @@ export class RelayTunnelHost {
         relayId: view.relayId,
         movable: view.movable,
         lastMoveAt: view.lastMoveAt,
-        migrate: async (trigger: MigrationTrigger) => {
-          await this.call('streams.migrate', { id: view.id, trigger });
+        migrate: async (trigger: MigrationTrigger, fromRelayId?: string | null) => {
+          await this.call('streams.migrate', { id: view.id, trigger, fromRelayId: fromRelayId ?? null });
         },
       }));
     },

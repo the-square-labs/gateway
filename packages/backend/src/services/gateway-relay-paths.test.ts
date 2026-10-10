@@ -293,7 +293,7 @@ describe("Gateway's own relayed streams return to the nearest relay, paced (O-1)
     // A node's worth of streams comes back within two passes (stand rc.7, F-3: 8 a pass took over a minute).
     expect(await t.instance.returnPass()).toBe(32);
     expect(sessions.filter((s) => s.migrate.mock.calls.length > 0)).toHaveLength(32);
-    for (const s of sessions) for (const call of s.migrate.mock.calls) expect(call).toEqual(['return']);
+    for (const s of sessions) for (const call of s.migrate.mock.calls) expect(call).toEqual(['return', 'relay-uk']);
     expect(Math.max(...delays)).toBeLessThan(GATEWAY_RETURN_INTERVAL_MS);
     // Judged again on a fresh assignment once the candidates it dialed are old.
     expect(t.fetchCandidates).toHaveBeenCalled();
@@ -324,7 +324,7 @@ describe("Gateway's own relayed streams return to the nearest relay, paced (O-1)
     t.registry.timers.setTimeout.mockImplementation((task: () => void) => task());
     t.registry.schedule.mockImplementation((task: () => Promise<unknown>) => void task());
     expect(await t.instance.returnPass()).toBe(1);
-    expect(migrate).toHaveBeenCalledWith('return');
+    expect(migrate).toHaveBeenCalledWith('return', 'relay-uk');
     t.instance.stop();
   });
 
@@ -349,7 +349,7 @@ describe("Gateway's own relayed streams return to the nearest relay, paced (O-1)
     now += 31_000;
     expect(await t.instance.returnPass()).toBe(1);
     expect(t.fetchCandidates).toHaveBeenCalledWith('route-1');
-    expect(migrate).toHaveBeenCalledWith('return');
+    expect(migrate).toHaveBeenCalledWith('return', 'relay-uk');
     t.instance.stop();
   });
 
@@ -379,7 +379,7 @@ describe("Gateway's own relayed streams return to the nearest relay, paced (O-1)
     expect(await t.instance.returnPass()).toBe(0);
     t.instance.assignmentsChanged();
     expect(await t.instance.returnPass()).toBe(1);
-    expect(migrate).toHaveBeenCalledWith('return');
+    expect(migrate).toHaveBeenCalledWith('return', 'relay-nl');
     t.instance.stop();
   });
 

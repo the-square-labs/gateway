@@ -1824,7 +1824,8 @@ export class RelayResumeRegistry {
     affected.forEach((session, index) => {
       const delay = affected.length > 1 ? Math.floor((spread * index) / affected.length) : 0;
       const jitter = delay > 0 ? Math.floor(Math.random() * Math.min(250, delay)) : 0;
-      this.timers.setTimeout(() => this.schedule(() => session.migrate('drain')), Math.max(0, delay - jitter));
+      // Bound to the draining relay: a stream that left it before its turn (a target's hint moved it) stays put.
+      this.timers.setTimeout(() => this.schedule(() => session.migrate('drain', relayId)), Math.max(0, delay - jitter));
     });
     return affected.length;
   }
@@ -1832,7 +1833,7 @@ export class RelayResumeRegistry {
   /** The lane to the relay got GOAWAY: move its sessions now. */
   relayLost(relayId: string): number {
     const affected = [...this.sessions].filter((session) => session.relayId === relayId);
-    for (const session of affected) this.schedule(() => session.migrate('goaway'));
+    for (const session of affected) this.schedule(() => session.migrate('goaway', relayId));
     return affected.length;
   }
 
@@ -1968,7 +1969,8 @@ export class ResumableRelayDuplex extends Duplex {
         suspended: () => this.requestRecover(),
         migrateRequested: (reason) => {
           const trigger: MigrationTrigger = reason === MigrateReason.lane ? 'lane' : 'target_hint';
-          this.registry.schedule(() => this.migrate(trigger));
+          const from = this.session.currentRelayId;
+          this.registry.schedule(() => this.migrate(trigger, from));
         },
       },
     });
@@ -2033,21 +2035,31 @@ export class ResumableRelayDuplex extends Duplex {
       ended: (end) => this.session.pathEnded(path, end),
       drained: () => this.session.pathDrained(path),
       laneLost: () => {
-        if (this.session.currentRelayId === path.relayId) this.registry.schedule(() => this.migrate('goaway'));
+        if (this.session.currentRelayId === path.relayId) {
+          this.registry.schedule(() => this.migrate('goaway', path.relayId));
+        }
       },
     });
   }
 
   /**
    * Planned move off the current relay; stays on it when no other path answers within the budget. A `lane` move opens
-   * a new path on the best relay, the current one included.
+   * a new path on the best relay, the current one included; a `return` moves to the best relay and stays when that is
+   * the current one.
+   *
+   * `fromRelayId` is the relay the move was asked to leave (a drain, a GOAWAY, a target's hint, the returner's
+   * judgement): a stream no longer on it has moved already and stays where it is (relayresume plannedMove.stale).
+   * Without that a drain move paced for later left whichever relay the stream had moved to meanwhile: the local relay's
+   * drain sent Gateway's streams that a target's hint had already moved to the 60-ms relay on to the 300-ms one
+   * (stand rc.9, F-2).
    */
-  migrate(trigger: MigrationTrigger): Promise<void> {
+  migrate(trigger: MigrationTrigger, fromRelayId?: string | null): Promise<void> {
     if (this.sessionClosed) return Promise.resolve();
+    if (fromRelayId && this.session.currentRelayId !== fromRelayId) return this.migration ?? Promise.resolve();
     if (this.migration || !this.session.isOpen) {
       // The handshake or another move is running: keep the request for when the stream can move, unless it
       // has left this relay by then.
-      const relayId = this.session.currentRelayId;
+      const relayId = fromRelayId ?? this.session.currentRelayId;
       if (relayId) this.deferred = { trigger, relayId };
       return this.migration ?? Promise.resolve();
     }
@@ -2065,7 +2077,7 @@ export class ResumableRelayDuplex extends Duplex {
     const deferred = this.deferred;
     if (!deferred || this.migration || this.sessionClosed || !this.session.isOpen) return;
     this.deferred = null;
-    if (this.session.currentRelayId === deferred.relayId) void this.migrate(deferred.trigger);
+    if (this.session.currentRelayId === deferred.relayId) void this.migrate(deferred.trigger, deferred.relayId);
   }
 
   private requestRecover(): void {
@@ -2086,9 +2098,11 @@ export class ResumableRelayDuplex extends Duplex {
 
   private async runPlanned(trigger: MigrationTrigger): Promise<void> {
     const startedAt = this.timers.now();
-    // A lane move opens a new path on the same relay (the target's connection under the path was replaced), so it
-    // avoids no relay; every other planned move leaves the current one.
-    const avoid = trigger === 'lane' ? null : this.session.currentRelayId;
+    const current = this.session.currentRelayId;
+    // A lane move opens a new path on the same relay (the target's connection under the path was replaced) and a
+    // return goes to the best relay, so neither avoids one: a return whose nearer relay does not open stays where it
+    // is instead of going to the next relay in line, a farther one. Every other planned move leaves the current relay.
+    const avoid = trigger === 'lane' || trigger === 'return' ? null : current;
     let opened: OpenedResumePath;
     try {
       opened = await withTimeout(
@@ -2110,10 +2124,17 @@ export class ResumableRelayDuplex extends Duplex {
       this.registry.recordMigration(trigger, 'no_relay');
       return;
     }
+    if (trigger === 'return' && opened.path.relayId === current) {
+      // The best relay is the one the stream is on: it stays, and no move happened (relayresume ErrStay).
+      opened.path.cancel();
+      return;
+    }
     const result = await this.resumeOn(opened);
     const outcome = migrationOutcome(result);
-    this.registry.recordMigration(trigger, outcome, outcome === 'ok' ? this.timers.now() - startedAt : undefined);
-    this.options.onEvent?.('migration', { trigger, result: outcome, relayId: opened.path.relayId });
+    // A lane move is housekeeping: no stall a user would see is recorded for it (as relayresume counts it).
+    const stall = outcome === 'ok' && trigger !== 'lane' ? this.timers.now() - startedAt : undefined;
+    this.registry.recordMigration(trigger, outcome, stall);
+    this.options.onEvent?.('migration', { trigger, result: outcome, from: current, relayId: opened.path.relayId });
   }
 
   private async runRecover(): Promise<void> {
@@ -2147,7 +2168,12 @@ export class ResumableRelayDuplex extends Duplex {
           const stall = this.suspendedAt >= 0 ? this.timers.now() - this.suspendedAt : 0;
           this.suspendedAt = -1;
           this.registry.recordMigration('path_failure', 'ok', stall);
-          this.options.onEvent?.('migration', { trigger: 'path_failure', result: 'ok', relayId: opened.path.relayId });
+          this.options.onEvent?.('migration', {
+            trigger: 'path_failure',
+            result: 'ok',
+            from: this.lostRelayId,
+            relayId: opened.path.relayId,
+          });
           return;
         }
         if (result === 'rejected' || result === 'closed') {

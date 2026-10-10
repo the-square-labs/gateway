@@ -379,7 +379,8 @@ export class GatewayRelayPaths {
       if (!relayId || !session.movable || now - session.lastMoveAt < GATEWAY_RETURN_COOLDOWN_MS) continue;
       if (!(await this.nearerRelay(session, relayId))) continue;
       const delay = Math.floor(random() * GATEWAY_RETURN_INTERVAL_MS);
-      this.registry.timers.setTimeout(() => this.registry.schedule(() => session.migrate('return')), delay);
+      // Bound to the relay judged here: a stream that moved meanwhile is not moved again.
+      this.registry.timers.setTimeout(() => this.registry.schedule(() => session.migrate('return', relayId)), delay);
       moved += 1;
     }
     return moved;

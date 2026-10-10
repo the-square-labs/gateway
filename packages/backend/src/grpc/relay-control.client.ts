@@ -296,6 +296,8 @@ export interface RelayResumeConfig {
   keyId: string;
   key: Buffer;
   halfCloseTimeoutMs?: number;
+  /** Diagnostics: the stream's moves between relay paths. */
+  onEvent?: (event: string, detail?: Record<string, unknown>) => void;
 }
 
 export interface RelayHealthResponse {
