@@ -144,6 +144,7 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 	if d.consoleUserRefusal != "" {
 		regMsg.Capabilities = append(regMsg.Capabilities, NodeConsoleUserUnavailableCapability)
 	}
+	regMsg.Capabilities = append(regMsg.Capabilities, CommandResultsResentCapability)
 	launcher := LauncherFeatures()
 	regMsg.Capabilities = append(regMsg.Capabilities, launcher.Capabilities()...)
 	regMsg.LauncherVersion = launcher.Version
@@ -198,11 +199,16 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 	if migrationStreamer, ok := d.plugin.(MigrationStreamPlugin); ok {
 		go migrationStreamer.RunMigrationStream(sessionCtx, conn, d.state.NodeID)
 	}
+	// Async results go through the outbox: one produced while the control session reconnects (or whose send fails as
+	// the session ends) is delivered once the next session is accepted, and the gateway keeps its command pending
+	// meanwhile (CommandResultsResentCapability).
+	defer d.results.detach(writer)
 	sendAsyncResult := func(result *pb.CommandResult, what string) {
-		if err := writer.Send(&pb.DaemonMessage{
-			Payload: &pb.DaemonMessage_CommandResult{CommandResult: result},
-		}); err != nil {
-			d.logger.Warn("failed to send "+what, "command_id", result.CommandId, "error", err)
+		failed, kept, err := d.results.send(result, time.Now())
+		if kept {
+			d.logger.Info("keeping "+what+" for the next control session", "command_id", result.CommandId, "error", err)
+		}
+		if failed == writer {
 			sessionCancel()
 			_ = cmdStream.CloseSend()
 		}
@@ -239,6 +245,12 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 					select {
 					case pool.slots <- struct{}{}:
 					case <-sessionCtx.Done():
+						// The gateway keeps the command pending across the reconnect: answer it on the next session.
+						sendAsyncResult(&pb.CommandResult{
+							CommandId: c.CommandId,
+							Success:   false,
+							Error:     "the control session ended before the command started; retry",
+						}, "unstarted command result")
 						return
 					case <-expired:
 						sendAsyncResult(&pb.CommandResult{
@@ -300,6 +312,13 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 			}
 			if d.tunnelIdentityPending.CompareAndSwap(true, false) {
 				d.notifyTunnelIdentityChanged()
+			}
+			delivered, err := d.results.attach(writer, receivedAt)
+			if delivered > 0 {
+				d.logger.Info("delivered command results kept across the control reconnect", "results", delivered)
+			}
+			if err != nil {
+				return err
 			}
 		}
 
@@ -517,11 +536,9 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 			continue
 		}
 
-		// Process command and send result
+		// Process command and send result (kept for the next session when this one just ended).
 		result := d.plugin.HandleCommand(cmd)
-		if err := writer.Send(&pb.DaemonMessage{
-			Payload: &pb.DaemonMessage_CommandResult{CommandResult: result},
-		}); err != nil {
+		if failed, _, err := d.results.send(result, time.Now()); failed != nil {
 			return err
 		}
 	}

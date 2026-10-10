@@ -84,6 +84,14 @@ export interface ConnectedNode {
   >;
 }
 
+type PendingCommands = ConnectedNode['pendingCommands'];
+
+/**
+ * A daemon that announces this delivers the results of commands it was running when its control stream ended on its
+ * next stream, so commands in flight then stay pending (each until its own timeout) instead of failing.
+ */
+export const COMMAND_RESULTS_RESENT_CAPABILITY = 'command_results_resent_v1';
+
 export interface DispatchedCommand {
   accepted: Promise<void>;
   result: Promise<CommandResult>;
@@ -117,6 +125,8 @@ export class NodeRegistryService {
   private readonly heldDisconnectAudits = new Map<string, Record<string, unknown>>();
   /** Nodes whose offline decision waits for the local relay, so the wait is logged once. */
   private readonly awaitingLocalRelay = new Set<string>();
+  /** Commands in flight on a stream that ended, kept while the node may reconnect (see COMMAND_RESULTS_RESENT_CAPABILITY). */
+  private readonly carriedCommands = new Map<string, PendingCommands>();
 
   constructor(
     private db: DrizzleClient,
@@ -349,10 +359,11 @@ export class NodeRegistryService {
     const existing = this.nodes.get(nodeId);
     if (existing) {
       logger.warn('Replacing existing daemon connection for node', { nodeId, hostname });
-      this.cleanupPendingCommands(existing);
+      this.carryPendingCommands(nodeId, existing);
       closeStream(existing.logStream as any);
       closeStream(existing.commandStream as any);
     }
+    const pendingCommands = this.takeCarriedCommands(nodeId, options.capabilities ?? []);
 
     this.clearTrafficStatsState(nodeId);
 
@@ -370,7 +381,7 @@ export class NodeRegistryService {
       lastTrafficStats: null,
       configVersionHash,
       capabilities: new Set(options.capabilities ?? []),
-      pendingCommands: new Map(),
+      pendingCommands,
     });
 
     if (this.offlineDebounce.cancel(nodeId)) {
@@ -391,12 +402,17 @@ export class NodeRegistryService {
       return;
     }
 
-    this.cleanupPendingCommands(node);
+    // A stream that ended on its own may come back in a moment; an explicit removal (no stream) is final.
+    const mayReconnect = !!commandStream && this.offlineDebounce.enabled;
+    if (mayReconnect) this.carryPendingCommands(nodeId, node);
+    else {
+      this.cleanupPendingCommands(node);
+      this.rejectCarriedCommands(nodeId);
+    }
     this.nodes.delete(nodeId);
     this.clearTrafficStatsState(nodeId);
 
-    // A stream that ended on its own may come back in a moment; an explicit removal (no stream) is final.
-    if (commandStream && this.offlineDebounce.enabled) {
+    if (mayReconnect) {
       logger.info('Node stream closed; waiting for it to reconnect before marking it offline', {
         nodeId,
         graceMs: this.offlineDebounce.delayMs,
@@ -491,6 +507,7 @@ export class NodeRegistryService {
   }
 
   private async markDisconnectedOffline(nodeId: string, hostname: string): Promise<void> {
+    this.rejectCarriedCommands(nodeId);
     // A replacement stream registered meanwhile: the node never went offline.
     if (this.nodes.has(nodeId)) return;
     await this.releaseHeldDisconnectAudit(nodeId);
@@ -985,12 +1002,56 @@ export class NodeRegistryService {
   }
 
   private cleanupPendingCommands(node: ConnectedNode): void {
-    for (const [id, pending] of node.pendingCommands) {
-      clearTimeout(pending.timeout);
-      const error = new Error('Node disconnected');
-      pending.rejectAccepted(error);
-      pending.reject(error);
-      node.pendingCommands.delete(id);
+    rejectPendingCommands(node.pendingCommands);
+  }
+
+  /**
+   * Keeps the commands of a stream that ended for the node's next stream (each still ends at its own timeout) when its
+   * daemon resends results across a reconnect; fails them at once otherwise.
+   */
+  private carryPendingCommands(nodeId: string, node: ConnectedNode): void {
+    const pending = node.pendingCommands;
+    if (!node.capabilities.has(COMMAND_RESULTS_RESENT_CAPABILITY)) {
+      rejectPendingCommands(pending);
+      return;
     }
+    if (pending.size === 0) return;
+    const carried = this.carriedCommands.get(nodeId);
+    if (!carried) {
+      this.carriedCommands.set(nodeId, pending);
+      return;
+    }
+    for (const [id, command] of pending) carried.set(id, command);
+    pending.clear();
+  }
+
+  /**
+   * The commands the node's next stream takes over: all that are still pending when the daemon resends the results of
+   * commands it ran across a reconnect; none otherwise (they fail as the stream ended).
+   */
+  private takeCarriedCommands(nodeId: string, capabilities: readonly string[]): PendingCommands {
+    const carried = this.carriedCommands.get(nodeId);
+    this.carriedCommands.delete(nodeId);
+    if (!carried) return new Map();
+    if (capabilities.includes(COMMAND_RESULTS_RESENT_CAPABILITY)) return carried;
+    rejectPendingCommands(carried);
+    return new Map();
+  }
+
+  private rejectCarriedCommands(nodeId: string): void {
+    const carried = this.carriedCommands.get(nodeId);
+    if (!carried) return;
+    this.carriedCommands.delete(nodeId);
+    rejectPendingCommands(carried);
+  }
+}
+
+function rejectPendingCommands(pending: PendingCommands): void {
+  for (const [id, command] of pending) {
+    clearTimeout(command.timeout);
+    const error = new Error('Node disconnected');
+    command.rejectAccepted(error);
+    command.reject(error);
+    pending.delete(id);
   }
 }

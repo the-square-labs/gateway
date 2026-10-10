@@ -30,6 +30,8 @@ type DaemonBase struct {
 	// grantSyncs keeps relay grant syncs one at a time across sessions: a run of a session that ended may still be
 	// in flight when the next session's first bundle arrives (grant_sync_worker.go).
 	grantSyncs sync.Mutex
+	// results carries async command results across control session reconnects (result_outbox.go).
+	results resultOutbox
 
 	cfg                   *BaseConfig
 	cfgPath               string
