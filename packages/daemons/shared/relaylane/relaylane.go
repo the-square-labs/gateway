@@ -60,6 +60,14 @@ const (
 	RTTGrowth    = 4
 	RTTGrowthMin = 10 * time.Millisecond
 	GrewChecks   = 2
+	// CarriedBytes is how much a connection moved before its first look to
+	// count as having carried data. An idle lane is rotated as collapsed only
+	// once its connection carried data (a bulk look, or this much before the
+	// first): the state of a connection that moved only its handshake and
+	// keepalives is no transfer's, and replacing it brings another like it
+	// (stand rc.10 O-3: replaced idle lanes on far relays were replaced
+	// again, over and over).
+	CarriedBytes = 4 << 20
 )
 
 // Trigger is one lane connection's rotation trigger state. Hint is safe from
@@ -79,6 +87,10 @@ type Trigger struct {
 	// grew those in a row whose round trip under bulk data grew.
 	idle, grew int
 	looked     bool
+	// carried: the connection carried data (see CarriedBytes).
+	carried bool
+	// threshold is the sender's slow start threshold at the last look.
+	threshold uint32
 }
 
 // NoteHeader takes a tunnel's response header: the relay says its sending
@@ -132,12 +144,17 @@ func (t *Trigger) Reason(state slowstart.State, known bool) string {
 	first := !t.looked
 	t.looked = true
 	t.lastSent, t.lastReceived = state.BytesAcked, state.BytesReceived
+	threshold := t.threshold
+	t.threshold = state.SlowStartThreshold
 	if first {
 		sent, received = 0, 0
+		threshold = state.SlowStartThreshold
+		t.carried = state.BytesAcked+state.BytesReceived >= CarriedBytes
 	}
 	bulk := sent >= BulkBytes || received >= BulkBytes
 	if bulk {
 		t.idle = 0
+		t.carried = true
 	} else if t.idle < IdleChecks {
 		t.idle++
 	}
@@ -153,7 +170,7 @@ func (t *Trigger) Reason(state slowstart.State, known bool) string {
 	if first {
 		return ""
 	}
-	if t.idle >= IdleChecks && state.Stale() {
+	if t.idle >= IdleChecks && t.carried && state.Stale() {
 		return "collapsed"
 	}
 	// The rate rule only while the lane sends bulk data: an idle lane's
@@ -162,9 +179,18 @@ func (t *Trigger) Reason(state slowstart.State, known bool) string {
 		return "slow_threshold"
 	}
 	var rttUs uint32
+	relearned := false
 	switch {
 	case sent >= BulkBytes && state.RTTUs != 0:
 		rttUs = state.RTTUs
+		// A sender in its first slow start (no threshold yet: the slowstart
+		// Guard restarted CUBIC before the transfer) runs as a new connection
+		// would, and one that just set its threshold under this transfer
+		// learned it at this round trip: replacing either mid-transfer only
+		// starts the transfer over on a new connection (stand rc.10 O-4: the
+		// first Route Secure Link upload after the round trip grew moved to a
+		// new lane a second in and ran at 8.5 MB/s, the next ones at 21).
+		relearned = state.SlowStartThreshold >= slowstart.InfiniteThreshold || state.SlowStartThreshold != threshold
 	case received >= BulkBytes && state.RcvRTTUs != 0:
 		rttUs = state.RcvRTTUs
 	default:
@@ -175,6 +201,11 @@ func (t *Trigger) Reason(state slowstart.State, known bool) string {
 	learned := t.bulkRTT
 	if learned == 0 {
 		learned = t.minRTT
+	}
+	if relearned {
+		t.grew = 0
+		t.bulkRTT = rtt
+		return ""
 	}
 	if learned != 0 && rtt >= RTTGrowth*learned && rtt >= learned+RTTGrowthMin {
 		// Not learned from: the next look compares with the same round trip.

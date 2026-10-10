@@ -34,17 +34,21 @@ func TestReason(t *testing.T) {
 	if why := trigger.Reason(state(5000, 2000+5*BulkBytes, 90, 60), true); why != "round_trip_grew" {
 		t.Fatalf("download after the round trip grew: %q", why)
 	}
+	// An upload under a threshold the lane learned on the LAN (large enough not to be slow at 60 ms).
+	learnedState := func(sent uint64, rttMs int) slowstart.State {
+		return slowstart.State{SlowStartThreshold: 2400, BytesAcked: sent, BytesReceived: 1000, RTTUs: ms(rttMs), MSS: 1448}
+	}
 	upload := &Trigger{}
-	upload.Reason(state(1000, 1000, 1, 0), true)
-	upload.Reason(state(1000+BulkBytes, 1000, 1, 0), true)
-	upload.Reason(state(1000+3*BulkBytes, 1000, 60, 0), true)
-	if why := upload.Reason(state(1000+5*BulkBytes, 1000, 60, 0), true); why != "round_trip_grew" {
+	upload.Reason(learnedState(1000, 1), true)
+	upload.Reason(learnedState(1000+BulkBytes, 1), true)
+	upload.Reason(learnedState(1000+3*BulkBytes, 60), true)
+	if why := upload.Reason(learnedState(1000+5*BulkBytes, 60), true); why != "round_trip_grew" {
 		t.Fatalf("upload after the round trip grew: %q", why)
 	}
-	if why := idleLooks(&Trigger{}, slowstart.State{SlowStartThreshold: 7, RTTUs: ms(60)}); why != "collapsed" {
+	if why := idleLooks(&Trigger{}, slowstart.State{SlowStartThreshold: 7, BytesAcked: CarriedBytes, RTTUs: ms(60)}); why != "collapsed" {
 		t.Fatalf("collapsed sender: %q", why)
 	}
-	if why := idleLooks(&Trigger{}, slowstart.State{SlowStartThreshold: 7, RTTUs: ms(1)}); why != "" {
+	if why := idleLooks(&Trigger{}, slowstart.State{SlowStartThreshold: 7, BytesAcked: CarriedBytes, RTTUs: ms(1)}); why != "" {
 		t.Fatalf("a small threshold on a LAN: %q", why)
 	}
 	// A threshold learned on the LAN (411 segments) on a 150 ms leg: rotated while the lane sends bulk data, not while
@@ -211,5 +215,59 @@ func TestIdleLaneAfterRoundTripGrowthIsRotated(t *testing.T) {
 	fresh.SlowStartThreshold = slowstart.InfiniteThreshold
 	if why := idleLooks(&Trigger{}, fresh); why != "" {
 		t.Fatalf("idle grown lane that never left a slow start: %q", why)
+	}
+}
+
+// A lane connection that only carried its handshake and keepalives is not replaced while idle, whatever its state
+// says (stand rc.10 O-3: idle lanes to far relays, replaced with tunnels_left 0, were replaced again every 30 s); once
+// it carried bulk data and its state is stale it is.
+func TestFreshIdleLaneIsNotRotatedUntilItCarriedData(t *testing.T) {
+	// A replacement on a 60 ms path whose keepalive was lost once (a timeout left a threshold of 5 segments).
+	fresh := slowstart.State{SlowStartThreshold: 5, BytesAcked: 80 << 10, BytesReceived: 60 << 10, RTTUs: 61_000,
+		MinRTTUs: 60_000, MSS: 1448, LastDataSentMs: 4000}
+	trigger := &Trigger{}
+	for i := range 40 {
+		fresh.BytesAcked += 100
+		if why := trigger.Reason(fresh, true); why != "" {
+			t.Fatalf("look %d of an idle lane that never carried data: %q", i, why)
+		}
+	}
+	// It carries a transfer, and is left with a small threshold: rotated once idle.
+	carried := fresh
+	carried.BytesReceived += 4 * BulkBytes
+	carried.SlowStartThreshold = slowstart.InfiniteThreshold
+	carried.RcvRTTUs = 61_000
+	if why := trigger.Reason(carried, true); why != "" {
+		t.Fatalf("a look with bulk data: %q", why)
+	}
+	carried.SlowStartThreshold = 5
+	if why := idleLooks(trigger, carried); why != "collapsed" {
+		t.Fatalf("idle stale lane after it carried data: %q", why)
+	}
+}
+
+// An upload on a lane whose sender is in its first slow start, or set its threshold during this transfer, is not
+// moved to a new connection when the round trip is far above the one the lane learned on: a new connection would start
+// the same way (stand rc.10 O-4: the first Route Secure Link PUT at farboth150 moved a second in, 8.5 MB/s).
+func TestUploadInAFreshSlowStartIsNotMovedAfterGrowth(t *testing.T) {
+	look := func(trigger *Trigger, sent uint64, ssthresh uint32, rttMs int) string {
+		return trigger.Reason(slowstart.State{SlowStartThreshold: ssthresh, BytesAcked: sent, BytesReceived: 1000,
+			RTTUs: uint32(rttMs * 1000), MinRTTUs: 300, MSS: 1448}, true)
+	}
+	trigger := &Trigger{}
+	look(trigger, 1000, slowstart.InfiniteThreshold, 1)
+	sent := uint64(1000)
+	for i := range 8 {
+		sent += 2 * BulkBytes
+		if why := look(trigger, sent, slowstart.InfiniteThreshold, 300); why != "" {
+			t.Fatalf("look %d in the first slow start at 300 ms: %q", i, why)
+		}
+	}
+	// HyStart ends the slow start at the path's rate: learned here, not a reason either.
+	for i, ssthresh := range []uint32{4000, 4000, 4000} {
+		sent += 2 * BulkBytes
+		if why := look(trigger, sent, ssthresh, 300+i); why != "" {
+			t.Fatalf("look %d after the threshold was set at 300 ms: %q", i, why)
+		}
 	}
 }
