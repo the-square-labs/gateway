@@ -774,7 +774,9 @@ export function NodeDetailsTab({
                       updateWaitsForTasks
                         ? `Waits for ${plural(updateWaitingForTasks.length, "running task")}`
                         : updateQueued && updateWaitingFor.length > 0
-                          ? `Waits for ${updateWaitingFor.length} lease member${updateWaitingFor.length === 1 ? "" : "s"}: ${updateWaitingFor.map((entry) => entry.reason).join(", ")}`
+                          ? updateWaitingFor.every((entry) => entry.reason === "ingress_last")
+                            ? `Waits for ${plural(updateWaitingFor.length, "other node")} of this batch to finish updating: ingress nodes update last`
+                            : `Waits for ${updateWaitingFor.length} lease member${updateWaitingFor.length === 1 ? "" : "s"}: ${updateWaitingFor.map((entry) => entry.reason).join(", ")}`
                           : undefined
                     }
                   >

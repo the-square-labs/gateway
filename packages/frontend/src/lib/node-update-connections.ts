@@ -20,6 +20,7 @@ const CUT_CLASS_LABELS: Record<string, string> = {
   unverified: "connections an older daemon took over but cannot account for",
   local_closed: "connections whose local side closed during the update",
   connector_retired: "connections of a replaced Secure Link connector",
+  open_in_flight: "connections whose relay stream was still opening",
 };
 
 /** Monitoring and relay daemons carry no connections an update could keep or cut. */

@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, ne, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { nodes as nodesTable } from '@/db/schema/nodes.js';
 import { createChildLogger } from '@/lib/logger.js';
@@ -9,7 +9,9 @@ import {
   daemonTypeForNodeType,
   NODE_UPDATE_TASK_WAIT_PHASE,
   NODE_UPDATE_TASK_WAIT_TIMEOUT_MS,
+  NODE_UPDATE_WAITING_PHASE,
 } from './daemon-update.service.js';
+import type { LeaseUpdateBlocker } from './daemon-update-lease-gate.js';
 import type { DaemonUpdateRollout } from './daemon-update-rollout.service.js';
 import type { NodeDispatchService } from './node-dispatch.service.js';
 import { listNodeLongTasks, type NodeLongTask } from './node-long-tasks.js';
@@ -29,6 +31,40 @@ export interface NodeDaemonUpdateDeps {
   listLongTasks?: (nodeId: string) => Promise<NodeLongTask[]>;
   /** Timing of the task wait (tests). */
   taskWait?: { pollMs?: number; timeoutMs?: number; now?: () => number };
+  /** The other nodes an ingress node's update waits for (batchUpdatesBefore by default). */
+  ingressWaitFor?: (nodeId: string) => Promise<LeaseUpdateBlocker[]>;
+}
+
+/** The update phases of a node that restarts now or soon: an ingress node of the same batch waits for them. */
+const RESTARTING_UPDATE_PHASES = new Set(['executing', 'reconnecting', NODE_UPDATE_WAITING_PHASE]);
+
+/**
+ * Ingress (nginx) nodes update last in a batch: while another node's daemon restarts, an ingress node that restarts
+ * at the same time opens streams to it that its handover cannot pass on (stand rc.13 O-a). The nodes other than
+ * ingress ones whose update is about to restart them or is restarting them now block it; one that still waits for
+ * its own running tasks does not (it restarts later, on its own).
+ */
+export async function batchUpdatesBefore(
+  db: Pick<DrizzleClient, 'select'>,
+  nodeId: string
+): Promise<LeaseUpdateBlocker[]> {
+  const rows = await db
+    .select({ id: nodesTable.id, metadata: nodesTable.metadata })
+    .from(nodesTable)
+    .where(
+      and(
+        ne(nodesTable.id, nodeId),
+        ne(nodesTable.type, 'nginx'),
+        ne(nodesTable.type, 'relay'),
+        sql`${nodesTable.metadata}->>'updateInProgress' = 'true'`
+      )
+    );
+  return rows.flatMap((row) => {
+    const metadata = (row.metadata ?? {}) as Record<string, unknown>;
+    return metadata.updateInProgress === true && RESTARTING_UPDATE_PHASES.has(String(metadata.updatePhase))
+      ? [{ memberId: row.id, policyId: '', reason: 'ingress_last' as const }]
+      : [];
+  });
 }
 
 export interface NodeDaemonUpdateOptions {
@@ -203,10 +239,17 @@ export async function dispatchNodeDaemonUpdate(
     await command.accepted;
   };
 
+  // An ingress node goes through the rollout queue too: its window orders the requests of a batch, and it waits
+  // there for the other nodes of the batch (batchUpdatesBefore).
+  const ingress = node.type === 'nginx';
+  const waitFor = ingress ? () => (deps.ingressWaitFor ?? ((id) => batchUpdatesBefore(db, id)))(nodeId) : undefined;
+  const sequenced = async () => !!deps.rollout && (ingress || (await deps.rollout.isLeaseMember(nodeId)));
+
   const sequence = (operationId: string) => {
     void deps
       .rollout!.enqueue({
         memberId: nodeId,
+        waitFor,
         onWait: (blockers) => daemonUpdateService.recordNodeUpdateWait(nodeId, operationId, blockers),
         run: async () => {
           if (!(await daemonUpdateService.beginQueuedNodeUpdate(nodeId, operationId))) return;
@@ -235,7 +278,7 @@ export async function dispatchNodeDaemonUpdate(
   if (options.now && tasks.length > 0) warnings.push(`Updated on request while ${describeTasks(tasks)} ran`);
 
   if (options.now || tasks.length === 0) {
-    if (!deps.rollout || !(await deps.rollout.isLeaseMember(nodeId))) {
+    if (!(await sequenced())) {
       const operationId = await daemonUpdateService.markNodeUpdateInProgress(nodeId, release.version, { warnings });
       try {
         await send(operationId);
@@ -250,6 +293,8 @@ export async function dispatchNodeDaemonUpdate(
       warnings,
     });
     sequence(operationId);
+    if (ingress && !(await deps.rollout!.isLeaseMember(nodeId)))
+      return { scheduled: true, targetVersion: release.version };
     return { scheduled: true, targetVersion: release.version, leaseSequenced: true };
   }
 
@@ -266,7 +311,7 @@ export async function dispatchNodeDaemonUpdate(
     .then(async (outcome) => {
       if (!outcome) return;
       if (outcome.warning) logger.warn('Daemon update goes ahead while tasks run on the node', { nodeId, ...outcome });
-      const leaseSequenced = !!deps.rollout && (await deps.rollout.isLeaseMember(nodeId));
+      const leaseSequenced = await sequenced();
       const waitEnded = await daemonUpdateService.endNodeUpdateTaskWait(nodeId, operationId, {
         waitForLeasePeers: leaseSequenced,
         warning: outcome.warning,

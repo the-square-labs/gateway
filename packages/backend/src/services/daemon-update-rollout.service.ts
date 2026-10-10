@@ -36,6 +36,11 @@ export interface DaemonUpdateRolloutRequest {
   run: () => Promise<void>;
   /** Called when the reasons the request waits for change. */
   onWait?: (blockers: LeaseUpdateBlocker[]) => Promise<void> | void;
+  /**
+   * Reasons of the request's own to wait, looked at in each pass besides its lease peers (an ingress node waits for
+   * the other nodes of its batch). They never fail the request: past its timeout it goes ahead without them.
+   */
+  waitFor?: () => Promise<LeaseUpdateBlocker[]>;
   timeoutMs?: number;
   signal?: AbortSignal;
 }
@@ -60,7 +65,7 @@ export interface DaemonUpdateRolloutDeps {
  * availability policy in lease mode restarts only while every other voter and candidate of each of its lease policies
  * has settled (see daemon-update-lease-gate). Among requests that could go, standbys go before holders, then the
  * oldest first; requests of members that share no lease policy go in the same pass. Members of no lease policy never
- * enter the queue.
+ * enter the queue, except ingress nodes, which wait for the other nodes of their batch (request.waitFor).
  */
 export class DaemonUpdateRollout {
   private readonly queue: QueuedRequest[] = [];
@@ -168,8 +173,20 @@ export class DaemonUpdateRollout {
         const other = claimed.get(policyId);
         if (other) blockers.push({ memberId: other, policyId, reason: 'updating' });
       }
+      const timedOut = now - request.enqueuedAt >= (request.timeoutMs ?? DAEMON_UPDATE_QUEUE_TIMEOUT_MS);
+      if (request.waitFor && !timedOut) {
+        blockers.push(
+          ...(await request.waitFor().catch((error: unknown) => {
+            logger.warn('Daemon update could not check the other nodes of its batch; it goes ahead', {
+              memberId: request.memberId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return [];
+          }))
+        );
+      }
       if (blockers.length > 0) {
-        if (now - request.enqueuedAt >= (request.timeoutMs ?? DAEMON_UPDATE_QUEUE_TIMEOUT_MS)) {
+        if (timedOut) {
           this.remove(request);
           request.reject(new DaemonUpdateWaitTimeoutError(request.memberId, blockers));
           continue;
@@ -177,10 +194,12 @@ export class DaemonUpdateRollout {
         const waitKey = blockers.map((blocker) => `${blocker.memberId}:${blocker.reason}`).join(',');
         if (waitKey !== request.waitKey) {
           request.waitKey = waitKey;
-          logger.info('Daemon update waits for lease peers of the same availability policy', {
-            memberId: request.memberId,
-            waitingFor: blockers,
-          });
+          logger.info(
+            blockers.every((blocker) => blocker.reason === 'ingress_last')
+              ? 'Ingress node update waits for the other nodes of its batch'
+              : 'Daemon update waits for lease peers of the same availability policy',
+            { memberId: request.memberId, waitingFor: blockers }
+          );
           await Promise.resolve(request.onWait?.(blockers)).catch(() => undefined);
         }
         continue;

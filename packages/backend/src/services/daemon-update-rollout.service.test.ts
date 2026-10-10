@@ -165,6 +165,74 @@ describe('DaemonUpdateRollout', () => {
     expect(rollout.pending()).toEqual([]);
   });
 
+  it('lets an ingress node of a batch restart only after the other nodes finished their updates', async () => {
+    const cluster = fakeCluster({ checkout: ['d1', 'd2', 'witness'] });
+    const rollout = new DaemonUpdateRollout({
+      loadView: async () => cluster.view(),
+      now: cluster.now,
+      ...manualPasses,
+    });
+    // app-node-1 restarts now (no lease member); d1 is queued as a lease member (its update shows in progress).
+    const updating = new Set(['app-node-1', 'd1']);
+    const order: string[] = [];
+    const waits: string[] = [];
+    const ingress = rollout.enqueue({
+      memberId: 'ingress-1',
+      run: async () => void order.push('ingress-1'),
+      waitFor: async () =>
+        [...updating].map((memberId) => ({ memberId, policyId: '', reason: 'ingress_last' as const })),
+      onWait: (blockers) => void waits.push(blockers.map((b) => `${b.memberId}:${b.reason}`).join(',')),
+    });
+    const d1 = rollout.enqueue({
+      memberId: 'd1',
+      run: async () => {
+        order.push('d1');
+        cluster.set('d1', { updating: true });
+      },
+    });
+    await rollout.runPass();
+    await d1;
+    expect(order).toEqual(['d1']);
+    expect(waits).toEqual(['app-node-1:ingress_last,d1:ingress_last']);
+
+    updating.delete('app-node-1');
+    await rollout.runPass();
+    expect(order).toEqual(['d1']);
+
+    updating.delete('d1');
+    await rollout.runPass();
+    await ingress;
+    expect(order).toEqual(['d1', 'ingress-1']);
+  });
+
+  it('runs an ingress node with nothing else updating at once, and past its timeout without waiting more', async () => {
+    const cluster = fakeCluster({});
+    const rollout = new DaemonUpdateRollout({
+      loadView: async () => cluster.view(),
+      now: cluster.now,
+      ...manualPasses,
+    });
+    const alone = vi.fn(async () => undefined);
+    const first = rollout.enqueue({ memberId: 'ingress-1', run: alone, waitFor: async () => [] });
+    await rollout.runPass();
+    await first;
+    expect(alone).toHaveBeenCalledTimes(1);
+
+    const stuck = vi.fn(async () => undefined);
+    const second = rollout.enqueue({
+      memberId: 'ingress-2',
+      run: stuck,
+      timeoutMs: 60_000,
+      waitFor: async () => [{ memberId: 'app-node-1', policyId: '', reason: 'ingress_last' }],
+    });
+    await rollout.runPass();
+    expect(stuck).not.toHaveBeenCalled();
+    cluster.clock.t += 60_000;
+    await rollout.runPass();
+    await second;
+    expect(stuck).toHaveBeenCalledTimes(1);
+  });
+
   it('waits after a relay restart until it reports an acceptor that votes, bounded', async () => {
     const cluster = fakeCluster({ checkout: ['d1', 'd2', 'r1'] });
     const since = cluster.clock.t;

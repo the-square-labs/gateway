@@ -44,7 +44,11 @@ export interface LeaseUpdatePeerState {
   abstaining: boolean;
 }
 
-export type LeaseUpdateBlockReason = 'updating' | 'reconnecting' | 'abstaining';
+/**
+ * Why a member waits. `ingress_last`: an ingress (nginx) node of a batch waits for the other nodes of the batch to
+ * finish their updates (the blocker's memberId is that node; it has no policy).
+ */
+export type LeaseUpdateBlockReason = 'updating' | 'reconnecting' | 'abstaining' | 'ingress_last';
 
 export interface LeaseUpdateBlocker {
   memberId: string;

@@ -1,6 +1,6 @@
 import { SQL } from 'drizzle-orm';
 import { describe, expect, it, vi } from 'vitest';
-import { dispatchNodeDaemonUpdate, resumeQueuedDaemonUpdates } from './daemon-node-update.js';
+import { batchUpdatesBefore, dispatchNodeDaemonUpdate, resumeQueuedDaemonUpdates } from './daemon-node-update.js';
 import {
   connectorReplacementToRecord,
   DaemonUpdateService,
@@ -21,11 +21,12 @@ function harness(
     metadata?: Record<string, unknown>;
     daemonVersion?: string;
     capabilities?: Record<string, unknown>;
+    type?: string;
   } = {}
 ) {
   const node = {
     id: NODE_ID,
-    type: 'docker',
+    type: options.type ?? 'docker',
     daemonVersion: options.daemonVersion ?? 'v2.12.0',
     capabilities: options.capabilities ?? { architecture: 'amd64', capabilities: ['daemon_stream_handover_v1'] },
     metadata: { ...(options.metadata ?? {}) } as Record<string, unknown>,
@@ -77,6 +78,7 @@ function harness(
     rollout: { isLeaseMember: async () => options.leaseMember === true, enqueue } as never,
     listLongTasks: async () => state.tasks,
     taskWait: { pollMs: 1, timeoutMs: 30 * 60_000, now: () => state.clock },
+    ingressWaitFor: vi.fn(async () => [] as never[]),
   };
   return { node, deps, service, state, sendUpdateDaemonCommand, enqueue, events, sqlWrites };
 }
@@ -158,6 +160,44 @@ describe('daemon update task wait', () => {
     });
     expect(sendUpdateDaemonCommand).toHaveBeenCalledTimes(1);
     expect(node.metadata.updateWarnings).toEqual(['Updated on request while 1 running task (Backup of orders) ran']);
+  });
+
+  it('sends an ingress node through the rollout queue, where it waits for the other nodes of its batch', async () => {
+    const { deps, node, enqueue, sendUpdateDaemonCommand } = harness({ type: 'nginx' });
+    await expect(dispatchNodeDaemonUpdate(NODE_ID, deps)).resolves.toEqual({
+      scheduled: true,
+      targetVersion: 'v2.12.1',
+    });
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    const request = (enqueue.mock.calls[0] as unknown as [{ waitFor?: () => Promise<unknown> }])[0];
+    await request.waitFor?.();
+    expect(deps.ingressWaitFor).toHaveBeenCalledWith(NODE_ID);
+    await vi.waitFor(() => expect(sendUpdateDaemonCommand).toHaveBeenCalledTimes(1));
+    expect(node.metadata.updatePhase).toBe('executing');
+  });
+
+  it('lets an ingress node wait for the other nodes whose update restarts them now or soon', async () => {
+    const rows = [
+      { id: 'executing', metadata: { updateInProgress: true, updatePhase: 'executing' } },
+      { id: 'reconnecting', metadata: { updateInProgress: true, updatePhase: 'reconnecting' } },
+      { id: 'queued', metadata: { updateInProgress: true, updatePhase: 'waiting_for_lease_peers' } },
+      // Restarts later, on its own, once its tasks end.
+      { id: 'tasks', metadata: { updateInProgress: true, updatePhase: 'waiting_for_tasks' } },
+    ];
+    const query: any = Promise.resolve(rows);
+    query.from = () => query;
+    query.where = () => query;
+    const blockers = await batchUpdatesBefore({ select: () => query } as never, NODE_ID);
+    expect(blockers).toEqual(
+      ['executing', 'reconnecting', 'queued'].map((memberId) => ({ memberId, policyId: '', reason: 'ingress_last' }))
+    );
+  });
+
+  it('keeps other nodes that are no lease members on the fast path', async () => {
+    const { deps, enqueue, sendUpdateDaemonCommand } = harness({ type: 'docker' });
+    await dispatchNodeDaemonUpdate(NODE_ID, deps);
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(sendUpdateDaemonCommand).toHaveBeenCalledTimes(1);
   });
 
   it('waits for tasks first, then for lease peers', async () => {
