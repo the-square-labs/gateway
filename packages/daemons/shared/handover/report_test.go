@@ -122,7 +122,8 @@ func TestEndedByPeerKeepsALateResetRefusalAsThisUpdatesCut(t *testing.T) {
 		{"refused finished", relayresume.StateReset, refused(relayresume.RejectFinished), late, true},
 		{"refused reset early", relayresume.StateReset, refused(relayresume.RejectReset), early, true},
 		{"refused reset after the peer's suspend timeout", relayresume.StateReset, refused(relayresume.RejectReset), late, false},
-		{"refused unknown", relayresume.StateReset, refused(relayresume.RejectUnknown), early, false},
+		{"refused unknown after the peer's suspend timeout", relayresume.StateReset, refused(relayresume.RejectUnknown), late, false},
+		{"refused unauthorized", relayresume.StateReset, refused(relayresume.RejectUnauthorized), early, false},
 		{"peer reset", relayresume.StateReset, &relayresume.ResetError{Code: relayresume.RstAborted, Remote: true}, late, true},
 		{"peer suspend timeout", relayresume.StateReset, &relayresume.ResetError{Code: relayresume.RstSuspendTimeout, Remote: true}, early, false},
 		{"local reset", relayresume.StateReset, &relayresume.ResetError{Code: relayresume.RstAborted}, early, false},
@@ -130,5 +131,26 @@ func TestEndedByPeerKeepsALateResetRefusalAsThisUpdatesCut(t *testing.T) {
 		if got := endedByPeer(tc.state, tc.err, tc.after); got != tc.peer {
 			t.Errorf("%s: endedByPeer = %v, want %v", tc.name, got, tc.peer)
 		}
+	}
+}
+
+// Stand rc.12 F-1: in a mixed batch, storage-1's update cut its TLS-terminated
+// DB links (postgres_tls, left out of its handover), and app-node-1 and
+// secure-node-1, updated in the same batch, had handed over their ends of those
+// streams. Their resumes reached storage-1's new process, which does not know
+// the streams and refuses them with code 1 (unknown). That is storage-1's cut,
+// counted in its own record, not resume_failed on the nodes that resumed.
+func TestEndedByPeerCountsAnUnknownStreamRefusalInABatchAsThePeersCut(t *testing.T) {
+	refusedUnknown := &relayresume.ResetError{Code: relayresume.RstResumeRejected, Reject: relayresume.RejectUnknown, Err: relayresume.ErrProtocol}
+	if refusedUnknown.Error() != "relayresume: resume rejected (code 1)" {
+		t.Fatalf("not the stand's error: %v", refusedUnknown)
+	}
+	for _, after := range []time.Duration{2 * time.Second, 7 * time.Second, relayresume.TargetSuspendTimeout - time.Second} {
+		if !endedByPeer(relayresume.StateReset, refusedUnknown, after) {
+			t.Errorf("refused as unknown %v after the update started: counted as this update's cut", after)
+		}
+	}
+	if endedByPeer(relayresume.StateReset, refusedUnknown, relayresume.TargetSuspendTimeout) {
+		t.Error("refused as unknown once the peer could have given up waiting: left out of this update's record")
 	}
 }

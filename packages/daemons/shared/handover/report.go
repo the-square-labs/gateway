@@ -352,9 +352,13 @@ func (t *Tracker) finish(pending *Report, sessions []*relayresume.Session, ended
 // resumed (state and err: how it ended; after: how long after the update
 // started it ended): it finished, the peer reset it, or the peer refused its
 // resume because it had reset or finished it there (a connection the peer's
-// own update cut). A refusal for any other reason, or a peer that gave up
-// waiting for this side (suspend timeout), stays this update's cut. A refusal
-// for a reset carries no reason: once the peer could have given up waiting
+// own update cut). A peer that does not know the stream at all lost it too:
+// its own update left it out of its handover (storage-1's TLS DB links in a
+// mixed batch, stand rc.12 F-1), and a peer that ended it itself answers from
+// its tombstone (relayresume.TombstoneTTL) instead. A refusal for any other
+// reason, or a peer that gave up waiting for this side (suspend timeout),
+// stays this update's cut. A refusal for a reset or an unknown stream carries
+// no reason: once the peer could have given up waiting
 // (relayresume.TargetSuspendTimeout after the update started, before the
 // streams froze), it is this update's cut too.
 func endedByPeer(state relayresume.State, err error, after time.Duration) bool {
@@ -368,7 +372,7 @@ func endedByPeer(state relayresume.State, err error, after time.Duration) bool {
 	switch reset.Reject {
 	case relayresume.RejectFinished:
 		return true
-	case relayresume.RejectReset:
+	case relayresume.RejectReset, relayresume.RejectUnknown:
 		return after < relayresume.TargetSuspendTimeout
 	case 0:
 		return reset.Remote && reset.Code != relayresume.RstSuspendTimeout && reset.Code != relayresume.RstProtocol &&
