@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -73,6 +74,9 @@ type loopHost struct {
 	// attach binds a free loop device to an image; mount mounts a device.
 	attach func(ctx context.Context, image string) (string, error)
 	mount  func(ctx context.Context, device, path, options string) error
+	// directIO switches a bound loop device to direct I/O; nil leaves devices
+	// as they are.
+	directIO func(ctx context.Context, device string) error
 	// placeholder mounts the read-only empty placeholder at path.
 	placeholder func(ctx context.Context, path string) error
 }
@@ -101,9 +105,56 @@ var systemLoopHost = &loopHost{
 	mount: func(ctx context.Context, device, path, options string) error {
 		return runLoopCommand(ctx, "mount", "-o", options, device, path)
 	},
+	directIO: setLoopDirectIO,
 	placeholder: func(ctx context.Context, path string) error {
 		return runLoopCommand(ctx, "mount", "-t", "tmpfs", "-o", "ro,nodev,nosuid,noexec,size=16k,mode=0555", volumePlaceholderSource, path)
 	},
+}
+
+// setLoopDirectIO makes device read and write its backing file with direct
+// I/O. A buffered loop device caches every block twice, once for the
+// filesystem in the image and once for the image file, and both copies count
+// against the memory limit of the container that reads it: on a busy instance
+// the page cache then holds half as much, and reads go to the disk again and
+// again.
+func setLoopDirectIO(ctx context.Context, device string) error {
+	state, err := os.ReadFile(filepath.Join(sysBlockRoot, filepath.Base(device), "loop", "dio"))
+	if err == nil && strings.TrimSpace(string(state)) == "1" {
+		return nil
+	}
+	return runLoopCommand(ctx, "losetup", "--direct-io=on", device)
+}
+
+// loopDirectIORefused remembers the images whose loop device refused direct
+// I/O (a backing filesystem without O_DIRECT, or a block size mismatch), so
+// the disk watch asks once per binding instead of every pass.
+var loopDirectIORefused sync.Map
+
+// ensureDirectIO switches the loop device mounted at mountPath to direct I/O.
+// Devices bound by an older daemon are switched in place; the filesystem in
+// the image keeps its own page cache. A device that refuses keeps buffered
+// I/O, which works as before.
+func (h *loopHost) ensureDirectIO(ctx context.Context, logger *slog.Logger, label, id, mountPath string) {
+	if h.directIO == nil {
+		return
+	}
+	device := h.mountedLoop(mountPath)
+	if device == "" {
+		return
+	}
+	key := device + "\x00" + canonicalLoopPath(mountPath)
+	if _, refused := loopDirectIORefused.Load(key); refused {
+		return
+	}
+	if err := h.directIO(ctx, device); err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		loopDirectIORefused.Store(key, struct{}{})
+		if logger != nil {
+			logger.Info(label+" disk keeps buffered I/O: its loop device refused direct I/O", "id", id, "device", device, "error", err)
+		}
+	}
 }
 
 func runLoopCommand(ctx context.Context, name string, args ...string) error {
@@ -349,6 +400,11 @@ func (h *loopHost) mountImage(ctx context.Context, imagePath, mountPath, options
 	device, err := h.attach(ctx, imagePath)
 	if err != nil {
 		return "", err
+	}
+	if h.directIO != nil {
+		// Best effort: a refusal leaves buffered I/O, and the disk watch
+		// reports it.
+		_ = h.directIO(ctx, device)
 	}
 	if err := h.mount(ctx, device, mountPath, options); err != nil {
 		// Nothing holds the fresh device yet, so the detach is immediate.

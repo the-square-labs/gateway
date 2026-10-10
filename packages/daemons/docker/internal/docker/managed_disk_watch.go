@@ -120,6 +120,7 @@ func (m *managedDatabaseManager) watchDisks(ctx context.Context, trims *diskTrim
 			}
 			continue
 		}
+		m.loopHost().ensureDirectIO(ctx, m.logger, "managed database", record.ID, record.MountPath)
 		if trims.due("database/"+record.ID, urgent) {
 			trimInstanceDisk(m.loopHost(), m.logger, "managed database", record.ID, record.MountPath)
 		}
@@ -153,6 +154,7 @@ func (m *managedStorageManager) watchDisks(ctx context.Context, trims *diskTrims
 			}
 			continue
 		}
+		m.loopHost().ensureDirectIO(ctx, m.logger, "managed storage", record.ID, record.MountPath)
 		if trims.due("storage/"+record.ID, urgent) {
 			trimInstanceDisk(m.loopHost(), m.logger, "managed storage", record.ID, record.MountPath)
 		}
