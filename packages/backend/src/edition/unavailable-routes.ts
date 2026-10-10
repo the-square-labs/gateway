@@ -4,10 +4,10 @@ import type { AppEnv } from '@/types.js';
 import { commercialModuleUnavailable } from './unavailable.js';
 
 /**
- * Console and API prefixes only the commercial module serves. Mounted after its routes, so
- * without the module they answer COMMERCIAL_MODULE_UNAVAILABLE, which opens the paywall,
- * instead of 404. Endpoints for ingest and deploy tokens and the public PKI and status page
- * endpoints keep answering 404.
+ * Console and API prefixes only the commercial module serves. Mounted only while the module is
+ * not ready, so without it they answer COMMERCIAL_MODULE_UNAVAILABLE, which opens the paywall,
+ * instead of 404; with it, what its routes do not serve answers 404. Endpoints for ingest and
+ * deploy tokens and the public PKI and status page endpoints keep answering 404.
  */
 export const COMMERCIAL_ONLY_ROUTE_PREFIXES = [
   '/api/cas',

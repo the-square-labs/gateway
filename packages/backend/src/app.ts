@@ -874,7 +874,14 @@ export function createApp(): GatewayAppRuntime {
   app.route('/api/object-storage', objectStorageRoutes);
   app.route('/api/databases', databaseRoutes);
   app.route('/api/managed-storage', managedStorageRoutes);
-  for (const prefix of COMMERCIAL_ONLY_ROUTE_PREFIXES) app.route(prefix, commercialUnavailableRoutes);
+  // Only without the module: with it, a path or method its routes do not serve is a plain 404, not the paywall's 503
+  // (stand rc.11 O-3: PATCH /api/status-page/incidents/{id} and GET /api/status-page/config).
+  const commercialRoutesServed =
+    container.isRegistered(TOKENS.CommercialEdition) &&
+    container.resolve<CommercialEditionRuntime>(TOKENS.CommercialEdition).status.state === 'ready';
+  if (!commercialRoutesServed) {
+    for (const prefix of COMMERCIAL_ONLY_ROUTE_PREFIXES) app.route(prefix, commercialUnavailableRoutes);
+  }
 
   // AI WebSocket endpoint
   const wsHandlers = createWSHandlers();
