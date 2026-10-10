@@ -239,6 +239,9 @@ type Core struct {
 	// rollback) may answer there, and a new one announces it again with its
 	// first ACK.
 	peerExtended bool
+	// peerLaneMigration: the peer announced LaneMigration since the stream
+	// last resumed (forgotten on a resume as peerExtended is).
+	peerLaneMigration bool
 
 	// The window's round trip: from sending an offset to the peer's ack of
 	// it (delivered to its socket). One timed offset at a time; minRTT is the
@@ -423,11 +426,12 @@ func (c *Core) PeerExtended() bool { return c.peerExtended }
 
 // announcedWindow is the window as this side announces it: with the
 // extension bit.
-func (c *Core) announcedWindow() uint64 { return c.wnd | WindowExtension }
+func (c *Core) announcedWindow() uint64 { return c.wnd | WindowExtension | LaneMigration }
 
 // notePeerWindow takes a window the peer announced.
 func (c *Core) notePeerWindow(wnd uint64) {
 	c.peerExtended = wnd&WindowExtension != 0
+	c.peerLaneMigration = wnd&LaneMigration != 0
 	c.peerWnd = clampPeerWindow(wnd)
 }
 
@@ -900,7 +904,7 @@ func (c *Core) resumed(now time.Time) {
 	if c.peerDelivered < c.sndUna {
 		c.awaitPeerAck = now.Add(resumeAckFallback)
 	}
-	c.peerExtended = false
+	c.peerExtended, c.peerLaneMigration = false, false
 	c.newPathTiming()
 	c.sendAck(true)
 }
@@ -1060,12 +1064,21 @@ func (c *Core) Abort(code byte, reason string, cause error) {
 }
 
 // RequestMigrate sends MIGRATE_REQ on the current path (target).
-func (c *Core) RequestMigrate(reason byte) {
-	if c.cfg.Role != RoleTarget || !c.canSendOn(c.cur) {
-		return
+//
+// MigrateLane goes only to a source that announced LaneMigration: an older
+// one moves the stream off the relay on any MIGRATE_REQ, so its stream
+// finishes on the path it has. It reports whether the request was sent.
+func (c *Core) RequestMigrate(reason byte) bool {
+	if c.cfg.Role != RoleTarget || !c.canSendOn(c.cur) || (reason == MigrateLane && !c.peerLaneMigration) {
+		return false
 	}
 	c.emitRecord(c.cur, &Record{Type: TypeMigrateReq, Code: reason})
+	return true
 }
+
+// PeerLaneMigration reports a peer that announced LaneMigration since the
+// stream last resumed.
+func (c *Core) PeerLaneMigration() bool { return c.peerLaneMigration }
 
 // DropPath closes a path the session never used.
 func (c *Core) DropPath(p *Path) {
@@ -1478,5 +1491,5 @@ func (c *Core) halfCloseArmed() bool {
 var initialWindow uint64 = InitialWindow
 
 func clampPeerWindow(wnd uint64) uint64 {
-	return min(max(wnd&^WindowExtension, 1024), MaxExtendedWindow)
+	return min(max(wnd&^(WindowExtension|LaneMigration), 1024), MaxExtendedWindow)
 }

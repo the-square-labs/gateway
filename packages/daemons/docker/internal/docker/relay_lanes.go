@@ -253,10 +253,10 @@ func (r *relayTunnelRouter) rotateLane(ctx context.Context, lane *relaySourceLan
 			}
 		}
 		// Streams this node accepted on the lane: their sources open new paths on the same relay (MIGRATE_REQ
-		// lane), which arrive on the new connection.
+		// lane), which arrive on the new connection. A source that predates the lane request (it would move the
+		// stream off the relay) is not asked: its stream finishes on the old connection.
 		for _, session := range sides.targets.Sessions() {
-			if current, _ := session.CurrentLane().(*relaySourceLane); current == lane {
-				session.RequestMigrate(relayresume.MigrateLane)
+			if current, _ := session.CurrentLane().(*relaySourceLane); current == lane && session.RequestMigrate(relayresume.MigrateLane) {
 				moved++
 			}
 		}

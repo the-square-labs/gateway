@@ -45,6 +45,12 @@
 // peer's last HELLO, HELLO_ACK or ACK since the stream last resumed was odd;
 // after a resume it waits for the peer's next ACK to learn it again.
 //
+// Lane migration: a session that takes MIGRATE_REQ reason 3 (a new path on
+// the same relay) also sets the second lowest bit (wnd | 2). A target sends
+// reason 3 only to a source whose last window since the stream last resumed
+// carried it; sessions before it move a stream off the relay on any
+// MIGRATE_REQ.
+//
 // # MACs
 //
 // mac = HMAC-SHA256(key, transcript)[:16]. Transcript fields are

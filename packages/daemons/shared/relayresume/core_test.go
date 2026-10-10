@@ -656,3 +656,53 @@ func TestCoreRefusalCarriedOverAHandoverIsThePeersReset(t *testing.T) {
 		}
 	}
 }
+
+// A target asks for a new path on the same relay (MIGRATE_REQ lane) only from a source that announced LaneMigration:
+// an older source (rc.8 announces only the window extension, 2.11.3 neither) moves the stream off the relay on any
+// MIGRATE_REQ, so its stream finishes where it is. Other reasons still go to every source.
+func TestCoreLaneRequestOnlyToASourceThatTakesIt(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		strip uint64
+		lane  bool
+	}{{"this release", 0, true}, {"rc.8", LaneMigration, false}, {"2.11.3", LaneMigration | WindowExtension, false}} {
+		key := bytes.Repeat([]byte{7}, KeyLen)
+		now := time.Unix(1_700_000_000, 0)
+		srcPath := NewPath(nil, "relay-a", MaxFrameBytes)
+		src := NewSource(Config{RouteID: "route-1", KeyID: "v1", Key: key, SessionID: [16]byte{1, 2, 3}}, srcPath, now)
+		out := src.TakeOutputs()
+		hello, rest, err := ParseRecord(out[0].Frame)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if hello.Wnd&LaneMigration == 0 {
+			t.Fatalf("HELLO window %d without the lane migration bit", hello.Wnd)
+		}
+		hello.Wnd &^= tc.strip
+		hello.MAC = ComputeMAC(key, srcPath.mac.HelloTranscript(hello.Wnd))
+		srcPath.mac.HelloMAC = hello.MAC
+		tgtPath := NewPath(nil, "relay-a", MaxFrameBytes)
+		tgt := NewTarget(Config{RouteID: "route-1", Keys: func(string) []byte { return key }, TargetNonce: [16]byte{9},
+			Authorize: func() error { return nil }}, tgtPath, &hello, hello.KeyID, key, rest, now)
+		for _, output := range tgt.TakeOutputs() {
+			src.PathFrame(srcPath, output.Frame, now)
+		}
+		if src.State() != StateOpen || tgt.PeerLaneMigration() != tc.lane {
+			t.Fatalf("%s: source %s, target sees lane migration %v", tc.name, src.State(), tgt.PeerLaneMigration())
+		}
+		sent := tgt.RequestMigrate(MigrateLane)
+		outputs := tgt.TakeOutputs()
+		if sent != tc.lane || (len(outputs) != 0) != tc.lane {
+			t.Fatalf("%s: lane request sent %v with %d outputs", tc.name, sent, len(outputs))
+		}
+		for _, output := range outputs {
+			src.PathFrame(srcPath, output.Frame, now)
+		}
+		if reason, ok := src.TakeMigrateRequest(); ok != tc.lane || (ok && reason != MigrateLane) {
+			t.Fatalf("%s: source took %d %v", tc.name, reason, ok)
+		}
+		if !tgt.RequestMigrate(MigrateDrain) || len(tgt.TakeOutputs()) == 0 {
+			t.Fatalf("%s: drain request not sent", tc.name)
+		}
+	}
+}

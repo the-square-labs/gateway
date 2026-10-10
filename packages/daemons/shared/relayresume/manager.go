@@ -259,15 +259,17 @@ func (s *Session) Tag() any {
 	return s.source.cfg.Tag
 }
 
-// RequestMigrate asks the source of a target session to move (MIGRATE_REQ).
-func (s *Session) RequestMigrate(reason byte) {
+// RequestMigrate asks the source of a target session to move (MIGRATE_REQ;
+// see Core.RequestMigrate) and reports whether the request was sent.
+func (s *Session) RequestMigrate(reason byte) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.detached {
-		return
+		return false
 	}
-	s.core.RequestMigrate(reason)
+	sent := s.core.RequestMigrate(reason)
 	s.afterLocked(false)
+	return sent
 }
 
 // observeLocked runs after every session event (mu held): it starts the

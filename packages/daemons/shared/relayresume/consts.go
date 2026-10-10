@@ -71,7 +71,8 @@ const (
 	// MigrateLane: the target replaced the connection its path runs on (its
 	// congestion state went stale): the source opens a new path on the same
 	// relay, which the target accepts on the new connection. Sources that
-	// predate it move off the relay where they can.
+	// predate it move off the relay where they can, so a target sends it only
+	// to a source that announces LaneMigration.
 	MigrateLane byte = 3
 )
 
@@ -98,6 +99,10 @@ const (
 	// MaxExtendedWindow. Windows are otherwise multiples of 1 KiB, and a
 	// session before the extension announces only those.
 	WindowExtension = 1
+	// LaneMigration is the bit a session sets in every window it announces
+	// to say it takes MIGRATE_REQ MigrateLane (a new path on the same relay).
+	// Sessions before it announce windows without it.
+	LaneMigration = 2
 	// DefaultProcessBudget bounds the unacked bytes all sessions of a process
 	// may hold beyond their floor windows.
 	DefaultProcessBudget = 256 * 1024 * 1024

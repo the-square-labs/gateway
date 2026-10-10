@@ -72,6 +72,11 @@ export const MAX_WINDOW = 4 * 1024 * 1024;
 export const MAX_EXTENDED_WINDOW = 32 * 1024 * 1024;
 /** The bit a session sets in every window it announces (HELLO, HELLO_ACK, ACK): it takes MAX_EXTENDED_WINDOW. */
 export const WINDOW_EXTENSION = 1;
+/**
+ * The bit a session sets in every window it announces: it takes MIGRATE_REQ `lane` (a new path on the same relay).
+ * Targets send `lane` only to sources that announce it.
+ */
+export const LANE_MIGRATION = 2;
 export const DEFAULT_PROCESS_BUDGET = 256 * 1024 * 1024;
 export const DELAYED_ACK_MS = 20;
 
@@ -1396,9 +1401,9 @@ export class ResumeSession {
     return this.sndNxt - this.sndUna < this.effectiveWindow;
   }
 
-  /** The window as this side announces it: with the extension bit. */
+  /** The window as this side announces it: with the extension and lane migration bits. */
   private announcedWindow(): bigint {
-    return BigInt(this.window) | BigInt(WINDOW_EXTENSION);
+    return BigInt(this.window) | BigInt(WINDOW_EXTENSION) | BigInt(LANE_MIGRATION);
   }
 
   private notePeerWindow(wnd: bigint): void {
@@ -1687,7 +1692,7 @@ export class ResumeSession {
 }
 
 function clampWindow(announced: bigint): number {
-  const value = announced & ~BigInt(WINDOW_EXTENSION);
+  const value = announced & ~BigInt(WINDOW_EXTENSION | LANE_MIGRATION);
   if (value < BigInt(MIN_WINDOW)) return MIN_WINDOW;
   if (value > BigInt(MAX_EXTENDED_WINDOW)) return MAX_EXTENDED_WINDOW;
   return Number(value);
