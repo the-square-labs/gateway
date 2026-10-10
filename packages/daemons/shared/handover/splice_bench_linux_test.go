@@ -17,8 +17,9 @@ import (
 //
 //	go test -run x -bench PipeCost -benchtime 6x ./handover
 //
-// "splice-8k" is the rc.10 splicer once the user's pipe budget is spent
-// (stand rc.10 F-2); "buffer" is the copy through the 32/256 KiB buffers;
+// "splice" runs through splicePipeSize pipes, "splice-1m" through rc.11's
+// 1 MiB ones; "splice-8k" is the rc.10 splicer once the user's pipe budget is
+// spent (stand rc.10 F-2); "buffer" is the copy through the 32/256 KiB buffers;
 // "io.Copy" what rc.8 ran.
 func BenchmarkPipeCost(b *testing.B) {
 	const size = 256 << 20
@@ -27,7 +28,7 @@ func BenchmarkPipeCost(b *testing.B) {
 		leftUnix, rightUnix bool
 	}{{"tcp-tcp", false, false}, {"unix-tcp", true, false}, {"tcp-unix", false, true}, {"unix-unix", true, true}}
 	for _, pair := range pairs {
-		for _, method := range []string{"splice", "splice-8k", "buffer", "io.Copy"} {
+		for _, method := range []string{"splice", "splice-1m", "splice-8k", "buffer", "io.Copy"} {
 			b.Run(pair.name+"/"+method, func(b *testing.B) {
 				b.SetBytes(size)
 				restore := benchMethod(method)
@@ -86,6 +87,10 @@ func benchMethod(method string) func() {
 		spliceWorth = func(bool, bool) bool { return false }
 	case "splice-8k":
 		splicePipeBytes, splicePipeMin = 8192, 0
+	case "splice-1m":
+		// The rc.11 pipes.
+		spliceWorth = func(bool, bool) bool { return true }
+		splicePipeBytes = 1 << 20
 	case "splice":
 		spliceWorth = func(bool, bool) bool { return true }
 	}

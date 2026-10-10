@@ -15,8 +15,15 @@ import (
 )
 
 const (
-	// spliceChunk bounds one splice(2) and sizes the pipes.
+	// spliceChunk bounds one splice(2).
 	spliceChunk = 1 << 20
+	// splicePipeSize sizes the pipes: 64 pages, a quarter of what the rc.11
+	// pipes asked for. The user's pipe budget is shared by every process of
+	// the uid on the host (and, in unprivileged containers sharing an id
+	// map, by all of them): with 1 MiB pipes a few busy connectors spent it,
+	// and the next pipes were refused (stand rc.11 F-2: 9 of 20 same-node
+	// transfers copied through the buffers at 1.6-2.6 CPU-s/GiB).
+	splicePipeSize = 256 << 10
 	// spliceMinPipe is the smallest pipe worth splicing through. Linux
 	// accounts pipe buffers per user: once a user holds more than
 	// fs.pipe-user-pages-soft (64 MiB by default, every process of that uid
@@ -28,20 +35,21 @@ const (
 	// cheaper than that.
 	spliceMinPipe = 256 << 10
 	// splicePipesMax bounds the pipes this process holds, in use or idle
-	// (each up to spliceChunk of the user's pipe budget); a direction that
+	// (each splicePipeSize of the user's pipe budget); a direction that
 	// finds none copies through its buffers until one is free.
 	splicePipesMax = 32
 	// splicePipesIdle is how many emptied pipes are kept for the next bulk
 	// read instead of being closed.
-	splicePipesIdle = 8
+	splicePipesIdle = 4
 	// spliceRetry is how long after the system refused a full-size pipe no
-	// new one is asked for.
-	spliceRetry = 30 * time.Second
+	// new one is asked for: one refused pipe costs a few system calls, and
+	// the budget comes back as soon as another process closes its pipes.
+	spliceRetry = time.Second
 )
 
-// splicePipeBytes and splicePipeMin are spliceChunk and spliceMinPipe
-// (variables for the benchmark of a small pipe).
-var splicePipeBytes, splicePipeMin = spliceChunk, spliceMinPipe
+// splicePipeBytes and splicePipeMin are splicePipeSize and spliceMinPipe
+// (variables for the benchmarks of other pipe sizes).
+var splicePipeBytes, splicePipeMin = splicePipeSize, spliceMinPipe
 
 // errNoPipe: no pipe is free for this read; the direction copies through its
 // buffers this time.
@@ -89,8 +97,8 @@ func takePipe() *splicePipe {
 	return pipe
 }
 
-// openPipe opens a pipe of spliceChunk bytes; false when the system has no
-// pipe or gives less than spliceMinPipe.
+// openPipe opens a pipe of splicePipeBytes; false when the system has no
+// pipe or gives less than splicePipeMin.
 func openPipe() (*splicePipe, bool) {
 	var fds [2]int
 	if err := unix.Pipe2(fds[:], unix.O_NONBLOCK|unix.O_CLOEXEC); err != nil {
