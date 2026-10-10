@@ -1578,15 +1578,38 @@ live_verdict() {
   # Clients cut -> the report counts at least that many cut and never only kept; clients kept -> at least that many kept.
   check "${label} daemon update: reported kept/cut matches the clients (${seen} cut, ${live} kept)" \
     "kept $(window_value "$report" 'D["kept"]'), cut $(window_value "$report" 'D["cut"]'), handover $(window_value "$report" 'D["handover"]')" \
-    test "$(window_value "$report" '(sum(D["cut"].values()) >= int(args[0]) and not (D["kept"] > 0 and sum(D["cut"].values()) == 0)) if int(args[0]) else D["kept"] >= int(args[1])' "$seen" "$live")" = true
+    test "$(window_value "$report" '((D["cut"].get("uncounted", 0) > 0 or sum(D["cut"].values()) >= int(args[0])) and not (D["kept"] > 0 and sum(D["cut"].values()) == 0)) if int(args[0]) else D["kept"] >= int(args[1])' "$seen" "$live")" = true
   if ! base_has_launcher_report; then
     # The base launcher predates launcher self-update: this first update restarts the whole service once.
     check "${label} daemon update from the ${BASE} launcher reported as cuts, not kept" \
       "kept $(window_value "$report" 'D["kept"]'), cut $(window_value "$report" 'D["cut"]'); clients: ${seen} cut, ${live} kept" \
       test "$(window_value "$report" 'D["kept"] == 0 and sum(D["cut"].values()) > 0')" = true
+    restart_window "$label" "$node"
   fi
   check "Secure Link target not restarted by the ${label} daemon update" "$(container_identity e2e-sl | cut -d' ' -f2-)" \
     test "$(container_identity e2e-sl)" = "${FACT[sl_identity]}"
+}
+
+# restart_window LABEL NODE: after an update from a launcher before 2.11.4 the service restarts once more for the new
+# launcher. A stream opened right after the update's cut shows whether that restart is a second disruption window.
+restart_window() {
+  local label="$1" node="$2" base="$WORK/live/$1-after" opened
+  rm -f "${base}".*
+  start_background "after-${label}" sh -c 'curl -sS -N -m 900 --resolve "$1:80:127.0.0.1" "http://$1/stream?seconds=600" -o "$2.stream" 2>"$2.stream.err"
+    echo "$? $(date +%s%3N)" >"$2.stream.status"' sh "$SECURE_LINK_DOMAIN" "$base"
+  opened="$(now_ms)"
+  wait_for 150 "${label} launcher switch" launcher_is "$node" "$CANDIDATE"
+  sleep 10
+  api GET "/api/nodes/${node}"
+  keep_json "node-${label}-after-launcher-switch"
+  say "${label} after the launcher switch: lastUpdate $(jx "$RESP" '(D.get("metadata") or {}).get("lastUpdate")')"
+  if [[ -f "${base}.stream.status" ]]; then
+    fail "${label} daemon update: one disruption window (a stream opened after the update's cut survives the launcher switch)"       "cut $(( ($(cut -d' ' -f2 "${base}.stream.status") - opened) / 1000 )) s after it opened: curl exit $(cut -d' ' -f1 "${base}.stream.status") after $(wc -l <"${base}.stream") lines; launcher $(jx "$RESP" '(D.get("capabilities") or {}).get("launcherVersion")')"
+  else
+    pass "${label} daemon update: one disruption window (a stream opened after the update's cut survives the launcher switch)"       "$(wc -l <"${base}.stream") lines, still open; launcher $(jx "$RESP" '(D.get("capabilities") or {}).get("launcherVersion")')"
+  fi
+  check "${label} daemon update: the record shows the launcher-switch restart"     "serviceRestart: $(jx "$RESP" '(D.get("metadata") or {}).get("lastUpdate", {}).get("serviceRestart")'); cut $(jx "$RESP" '(D.get("metadata") or {}).get("lastUpdate", {}).get("connections", {}).get("cut")')"     test -n "$(jx "$RESP" '(lambda u: u.get("serviceRestart") or ((u.get("connections") or {}).get("cut") or {}).get("service_restart") or None)((D.get("metadata") or {}).get("lastUpdate") or {})')"
+  stop_background "after-${label}"
 }
 
 # Whether the base daemons report their launcher (from 2.11.4 on).
@@ -1601,6 +1624,7 @@ check_launcher() {
   local type id launcher handover
   for type in docker nginx; do
     id="${FACT[${type}_node]}"
+    wait_for 120 "${type} launcher ${CANDIDATE}" launcher_is "$id" "$CANDIDATE"
     api GET "/api/nodes/${id}"
     launcher="$(jx "$RESP" '(D.get("capabilities") or {}).get("launcherVersion")')"
     check "${type} node details show the ${CANDIDATE#v} launcher" "launcherVersion ${launcher:-unreported}, daemon $(jx "$RESP" 'D.get("daemonVersion")')" \
@@ -1622,6 +1646,42 @@ check_launcher() {
   else
     skip "re-run the docker daemon update to ${CANDIDATE} (in place)" "the product refuses it: HTTP ${CODE} $(short "$RESP" 160); the next update is judged by handoverAvailable above"
   fi
+}
+
+launcher_is() {
+  api GET "/api/nodes/$1"
+  [[ "$(jx "$RESP" '(D.get("capabilities") or {}).get("launcherVersion")')" == "$2" || "v$(jx "$RESP" '(D.get("capabilities") or {}).get("launcherVersion")')" == "$2" ]]
+}
+
+# kill_cut_check LABEL UNIT PATH: a request through the Route Secure Link is running when UNIT is killed (SIGKILL to
+# every process of the service). A cut mid-response must reach the client as an error (curl non-zero), never as a
+# clean end of a shorter body; a connection the kill does not cut is a SKIP (nothing to judge).
+kill_cut_check() {
+  local label="$1" unit="$2" path="$3" base="$WORK/live/kill-$1" node="${FACT[${2%-daemon}_node]}" before status
+  mkdir -p "$WORK/live"
+  rm -f "${base}".*
+  start_background "kill-${label}" sh -c 'curl -sS -N -m 900 --resolve "$1:80:127.0.0.1" "http://$1$3" -o "$2.out" 2>"$2.err"
+    echo "$? $(date +%s%3N)" >"$2.status"' sh "$SECURE_LINK_DOMAIN" "$base" "$path"
+  sleep 8
+  before="$(stat -c %s "${base}.out" 2>/dev/null || echo 0)"
+  if [[ -f "${base}.status" ]]; then
+    fail "${label}: request running before the kill" "ended early: $(cat "${base}.status") $(short "${base}.err" 160)"
+    return 0
+  fi
+  systemctl kill --signal=SIGKILL "$unit"
+  say "${label}: killed ${unit} with ${before} bytes received"
+  wait_for 90 "${label} client to end" test -f "${base}.status"
+  if [[ -f "${base}.status" ]]; then
+    status="$(cut -d' ' -f1 "${base}.status")"
+    check "${label}: cut mid-response reaches the client as an error"       "curl exit ${status} after $(stat -c %s "${base}.out") bytes ($(short "${base}.err" 140)); $(tail -c 60 "${base}.out" | LC_ALL=C tr -cd '0-9. \n' | tail -n1)"       test "$status" != 0
+  else
+    skip "${label}: cut mid-response reaches the client as an error" "the kill of ${unit} did not cut the request ($(stat -c %s "${base}.out") bytes, still receiving)"
+  fi
+  stop_background "kill-${label}"
+  wait_for 180 "${unit} back online" node_online "$node"
+  check "${label}: node back online after the kill" "$(node_status "$node")" node_online "$node"
+  wait_for 120 "route ${SECURE_LINK_DOMAIN}" sl_ok
+  check "${label}: Route Secure Link serves again" "http://${SECURE_LINK_DOMAIN}/ok" sl_ok
 }
 
 update_preview_reported() {
@@ -1730,7 +1790,7 @@ check_logs() {
     docker logs --since "$since" "$(service_id relay)" 2>&1 | sed 's/^/relay: /'
     journalctl -u docker-daemon -u nginx-daemon -u gateway-lease-watchdog --since "@${since}" --no-pager -o cat 2>/dev/null | sed 's/^/daemon: /'
   } | grep -aiE '"level":"?(warn|warning|error|fatal|40|50|60)("|,)|level=(WARN|ERROR)' >"$out"
-  bad="$(python3 - "$out" "${LOG_ALLOW[@]}" <<'PY'
+  bad="$(python3 - "$out" "${LOG_ALLOW[@]}" 2>"${out%.txt}-grouped.txt" <<'PY'
 import collections, json, re, sys
 allow = [re.compile(p, re.I) for p in sys.argv[2:]]
 groups = collections.OrderedDict()
@@ -1752,7 +1812,7 @@ for (source, key, _), (n, allowed, sample) in groups.items():
     bad += 0 if allowed else 1
 print(bad)
 PY
-)" 2>"${out%.txt}-grouped.txt"
+)"
   sed 's/^/    /' "${out%.txt}-grouped.txt" | head -n 40
   check "${label}: no warnings or errors in app, relay and daemon logs beyond the allow-list" \
     "$(grep -c . "$out") lines, ${bad:-?} unexpected kinds (logs/$(basename "${out%.txt}-grouped.txt"))" test "${bad:-1}" = 0
@@ -1983,6 +2043,14 @@ phase3_components() {
     check "Route Secure Link serves after the relay update" "http://${SECURE_LINK_DOMAIN}/ok" sl_ok
   fi
   check_logs "after the daemon and relay updates" "${FACT[phase3_epoch]}"
+  # After the log check: the kills log warnings on purpose.
+  if [[ "${FACT[sl_ready]}" == 1 ]]; then
+    kill_cut_check "docker daemon killed mid-download" docker-daemon "/blob?rate=${BLOB_RATE}"
+    kill_cut_check "docker daemon killed mid-stream" docker-daemon "/stream?seconds=600"
+    kill_cut_check "nginx daemon killed mid-stream" nginx-daemon "/stream?seconds=600"
+  else
+    skip "Route Secure Link cut on a daemon kill" "the base Route Secure Link was not set up"
+  fi
 }
 
 # ── Phase 4: forced rollback with the base updater's rollback() ───────
