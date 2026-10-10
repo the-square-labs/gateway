@@ -34,6 +34,7 @@ import {
 } from "@/components/ui/select";
 import { TruncateStart } from "@/components/ui/truncate-start";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
+import { useCanManageSomeFolders } from "@/hooks/use-folder-access";
 import { useRealtime } from "@/hooks/use-realtime";
 import { formatDisplayImageRef } from "@/lib/docker-image-ref";
 import { loadVisibleDockerNodes } from "@/lib/docker-node-access";
@@ -219,7 +220,8 @@ export function DockerImages({
     [images, search, filterUsage]
   );
   const truncatedListMeta = images.find((img) => img._listTruncated);
-  const canManageFolders = !fixedNodeId && hasScope("docker:folders:manage");
+  const canManageSomeFolders = useCanManageSomeFolders("docker:folders:manage");
+  const canManageFolders = !fixedNodeId && canManageSomeFolders;
   const usageColumns = useMemo<SimpleTableColumn<DockerImageUsageContainer>[]>(
     () => [
       {

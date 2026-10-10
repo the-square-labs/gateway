@@ -103,6 +103,7 @@ export const ACCESS_TYPES: readonly AccessType[] = [
       ],
     },
     delete: ["docker:containers:delete"],
+    foldersManage: "docker:folders:manage",
   },
   {
     id: "compose",
@@ -116,6 +117,7 @@ export const ACCESS_TYPES: readonly AccessType[] = [
       operator: ["docker:compose:view", "docker:compose:manage", "docker:compose:create"],
     },
     delete: ["docker:compose:delete"],
+    foldersManage: "docker:folders:manage",
   },
   {
     id: "routes",
@@ -179,6 +181,7 @@ export const ACCESS_TYPES: readonly AccessType[] = [
       ],
     },
     delete: ["databases:delete"],
+    foldersManage: "databases:folders:manage",
   },
   {
     id: "storage",
@@ -199,6 +202,7 @@ export const ACCESS_TYPES: readonly AccessType[] = [
       ],
     },
     delete: ["storage:delete"],
+    foldersManage: "storage:folders:manage",
   },
   {
     id: "pages",
@@ -225,6 +229,7 @@ export const ACCESS_TYPES: readonly AccessType[] = [
       ],
     },
     delete: ["pages:delete"],
+    foldersManage: "pages:folders:manage",
   },
 ];
 

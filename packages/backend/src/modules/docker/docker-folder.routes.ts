@@ -6,6 +6,11 @@ import { dockerAccessResources, dockerDeployments } from '@/db/schema/index.js';
 import { getFolderScopedIds } from '@/lib/folder-scopes.js';
 import { getResourceScopedIds, hasScope, hasScopeBase } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
+import {
+  assertFolderManage,
+  assertFolderManageForFolder,
+  assertFolderManageForFolders,
+} from '@/modules/resource-folders/resource-folder-access.js';
 import type { AppEnv } from '@/types.js';
 import {
   createDockerFolderRoute,
@@ -206,6 +211,40 @@ export async function assertDockerFolderMoveAccess(
   for (const item of resources) assertNetworkDestinationScope(scopes, moveScope, item.nodeId, destinationFolderId);
 }
 
+const DOCKER_FOLDER_MANAGE = 'docker:folders:manage';
+
+/**
+ * Moving or reordering Docker resources needs folder management at the destination (pass `undefined` for a reorder
+ * in place) and at each resource's current folder; ungrouped resources need the broad scope. A folder grant manages
+ * its subfolders in that folder's own Docker list (see resource-folder-access.ts).
+ */
+export async function assertDockerFolderManageForResources(
+  scopes: readonly string[],
+  resourceType: DockerFolderResourceType,
+  items: ReadonlyArray<{ nodeId: string; resourceKey: string }>,
+  destinationFolderId: string | null | undefined
+): Promise<void> {
+  if (hasScope([...scopes], DOCKER_FOLDER_MANAGE)) return;
+  if (destinationFolderId !== undefined) assertFolderManage(scopes, DOCKER_FOLDER_MANAGE, destinationFolderId);
+  const placements = await container
+    .resolve(DockerFolderService)
+    .getResourcePlacementsForRefs(resourceType, [...items]);
+  const folderByRef = new Map(
+    placements.map((placement) => [`${placement.nodeId}\u0000${placement.resourceKey}`, placement.folderId ?? null])
+  );
+  const places = new Set(items.map((item) => folderByRef.get(`${item.nodeId}\u0000${item.resourceKey}`) ?? null));
+  for (const folderId of places) assertFolderManage(scopes, DOCKER_FOLDER_MANAGE, folderId);
+}
+
+/** The folder-move authorizer of the HTTP route and the AI/MCP folder tool. */
+export function dockerFolderMoveAuthorizer(scopes: string[]): DockerFolderMoveAuthorizer {
+  return async (context) => {
+    assertFolderManage(scopes, DOCKER_FOLDER_MANAGE, context.sourceParentId);
+    assertFolderManage(scopes, DOCKER_FOLDER_MANAGE, context.destinationFolderId);
+    await assertDockerFolderMoveAccess(scopes, context);
+  };
+}
+
 /** Who may list Docker folders of a resource type and which folders they see; shared with the AI/MCP folder tools. */
 export async function dockerFolderTreeOptions(scopes: string[], resourceType: DockerFolderResourceType) {
   const viewScope = VIEW_SCOPE_BY_RESOURCE_TYPE[resourceType];
@@ -218,7 +257,7 @@ export async function dockerFolderTreeOptions(scopes: string[], resourceType: Do
   if (
     !hasScopeBase(scopes, viewScope) &&
     !hasScopeBase(scopes, createScope) &&
-    !hasScope(scopes, 'docker:folders:manage')
+    !hasScopeBase(scopes, 'docker:folders:manage')
   ) {
     throw new AppError(403, 'FORBIDDEN', 'Docker folders require resource view access or docker:folders:manage');
   }
@@ -230,7 +269,7 @@ export async function dockerFolderTreeOptions(scopes: string[], resourceType: Do
     ? { resourceType, includeAllFolders: true }
     : {
         resourceType,
-        allowedFolderIds: getFolderScopedIds(scopes, [viewScope, createScope]),
+        allowedFolderIds: getFolderScopedIds(scopes, [viewScope, createScope, DOCKER_FOLDER_MANAGE]),
         ...(resourceType === 'container'
           ? await containerFolderVisibility(scopes, viewScope)
           : resourceType === 'compose'
@@ -256,6 +295,7 @@ export function registerDockerFolderRoutes(router: OpenAPIHono<AppEnv>) {
     const user = c.get('user')!;
     const body = await c.req.json();
     const input = CreateDockerFolderSchema.parse(body);
+    assertFolderManage(scopes, DOCKER_FOLDER_MANAGE, input.parentId ?? null);
     const service = container.resolve(DockerFolderService);
     const data = await service.createFolder(input, user.id);
     return c.json({ data }, 201);
@@ -268,6 +308,12 @@ export function registerDockerFolderRoutes(router: OpenAPIHono<AppEnv>) {
     const body = await c.req.json();
     const input = ReorderDockerFoldersSchema.parse(body);
     const service = container.resolve(DockerFolderService);
+    await assertFolderManageForFolders(
+      service,
+      scopes,
+      DOCKER_FOLDER_MANAGE,
+      input.items.map((item) => item.id)
+    );
     await service.reorderFolders(input, user.id);
     return c.json({ success: true });
   });
@@ -282,6 +328,7 @@ export function registerDockerFolderRoutes(router: OpenAPIHono<AppEnv>) {
     const user = c.get('user')!;
     const body = await c.req.json();
     const input = ReorderDockerResourcesSchema.parse(body);
+    await assertDockerFolderManageForResources(scopes, input.resourceType, input.items, undefined);
     if (input.resourceType === 'container') {
       await assertContainerScopes(
         scopes,
@@ -309,6 +356,12 @@ export function registerDockerFolderRoutes(router: OpenAPIHono<AppEnv>) {
     const user = c.get('user')!;
     const body = await c.req.json();
     const input = ReorderDockerContainersSchema.parse(body);
+    await assertDockerFolderManageForResources(
+      scopes,
+      'container',
+      input.items.map((item) => ({ nodeId: item.nodeId, resourceKey: item.containerName })),
+      undefined
+    );
     await assertContainerScopes(scopes, 'docker:containers:edit', input.items);
     const service = container.resolve(DockerFolderService);
     await service.reorderContainers(input, user.id);
@@ -322,6 +375,7 @@ export function registerDockerFolderRoutes(router: OpenAPIHono<AppEnv>) {
     const body = await c.req.json();
     const input = UpdateDockerFolderSchema.parse(body);
     const service = container.resolve(DockerFolderService);
+    await assertFolderManageForFolder(service, scopes, DOCKER_FOLDER_MANAGE, c.req.param('id')!);
     const data = await service.updateFolder(c.req.param('id')!, input, user.id);
     return c.json({ data });
   });
@@ -332,9 +386,7 @@ export function registerDockerFolderRoutes(router: OpenAPIHono<AppEnv>) {
     const user = c.get('user')!;
     const input = MoveDockerFolderSchema.parse(await c.req.json());
     const service = container.resolve(DockerFolderService);
-    const data = await service.moveFolder(c.req.param('id')!, input, user.id, (context) =>
-      assertDockerFolderMoveAccess(scopes, context)
-    );
+    const data = await service.moveFolder(c.req.param('id')!, input, user.id, dockerFolderMoveAuthorizer(scopes));
     return c.json({ data });
   });
 
@@ -343,6 +395,7 @@ export function registerDockerFolderRoutes(router: OpenAPIHono<AppEnv>) {
     requireAnyDockerScope(scopes, 'docker:folders:manage', 'Deleting Docker folders requires docker:folders:manage');
     const user = c.get('user')!;
     const service = container.resolve(DockerFolderService);
+    await assertFolderManageForFolder(service, scopes, DOCKER_FOLDER_MANAGE, c.req.param('id')!);
     await service.deleteFolder(c.req.param('id')!, user.id);
     return c.body(null, 204);
   });
@@ -357,6 +410,12 @@ export function registerDockerFolderRoutes(router: OpenAPIHono<AppEnv>) {
     const user = c.get('user')!;
     const body = await c.req.json();
     const input = MoveDockerContainersToFolderSchema.parse(body);
+    await assertDockerFolderManageForResources(
+      scopes,
+      'container',
+      input.items.map((item) => ({ nodeId: item.nodeId, resourceKey: item.containerName })),
+      input.folderId
+    );
     await assertContainerScopes(scopes, 'docker:containers:edit', input.items);
     for (const item of input.items)
       assertNetworkDestinationScope(scopes, 'docker:containers:edit', item.nodeId, input.folderId);
@@ -375,6 +434,7 @@ export function registerDockerFolderRoutes(router: OpenAPIHono<AppEnv>) {
     const user = c.get('user')!;
     const body = await c.req.json();
     const input = MoveDockerResourcesToFolderSchema.parse(body);
+    await assertDockerFolderManageForResources(scopes, input.resourceType, input.items, input.folderId);
     if (input.resourceType === 'container') {
       await assertContainerScopes(
         scopes,

@@ -9,6 +9,7 @@ import {
   authMiddleware,
   rejectImpersonation,
   requireScope,
+  requireScopeBase,
   requireScopeForResource,
 } from '@/modules/auth/auth.middleware.js';
 import {
@@ -84,6 +85,7 @@ export const storageRouteRuntime = {
   AppError,
   authMiddleware,
   requireScope,
+  requireScopeBase,
   requireScopeForResource,
   rejectImpersonation,
   CreateResourceFolderSchema,

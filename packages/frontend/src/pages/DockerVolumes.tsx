@@ -32,6 +32,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { TruncateStart } from "@/components/ui/truncate-start";
+import { useCanManageSomeFolders } from "@/hooks/use-folder-access";
 import { useRealtime } from "@/hooks/use-realtime";
 import { canCreateDockerResourceOnNode, loadVisibleDockerNodes } from "@/lib/docker-node-access";
 import { canEditDockerVolume } from "@/lib/docker-volume-access";
@@ -171,7 +172,8 @@ export function DockerVolumes({
     );
   }, [volumes, search]);
   const truncatedListMeta = volumes.find((volume) => volume._listTruncated);
-  const canManageFolders = !fixedNodeId && hasScope("docker:folders:manage");
+  const canManageSomeFolders = useCanManageSomeFolders("docker:folders:manage");
+  const canManageFolders = !fixedNodeId && canManageSomeFolders;
 
   const handleRemove = useCallback(
     async (name: string, nodeId?: string) => {

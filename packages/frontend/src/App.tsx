@@ -676,7 +676,6 @@ function NodesPageGuard() {
 }
 
 function DockerPageGuard() {
-  const hasScope = useAuthStore((s) => s.hasScope);
   const hasScopedAccess = useAuthStore((s) => s.hasScopedAccess);
 
   const canAccessDocker =
@@ -686,7 +685,7 @@ function DockerPageGuard() {
     hasScopedAccess("docker:networks:view") ||
     hasScopedAccess("docker:compose:view") ||
     hasScopedAccess("docker:tasks") ||
-    hasScope("docker:folders:manage");
+    hasScopedAccess("docker:folders:manage");
 
   if (!canAccessDocker) {
     return <Navigate to="/" replace />;

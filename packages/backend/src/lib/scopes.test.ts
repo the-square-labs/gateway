@@ -378,10 +378,12 @@ describe('canonical scope definitions', () => {
     }
     expect(RESOURCE_SCOPABLE).toContain('pages:create');
     expect(FOLDER_SCOPABLE).toContain('pages:create');
-    for (const scope of ['pages:folders:manage', 'pages:settings:view', 'pages:settings:edit']) {
+    for (const scope of ['pages:settings:view', 'pages:settings:edit']) {
       expect(RESOURCE_SCOPABLE).not.toContain(scope);
       expect(FOLDER_SCOPABLE).not.toContain(scope);
     }
+    // Folder management takes a folder qualifier only (it manages that folder's subfolders).
+    expect(FOLDER_SCOPABLE).toContain('pages:folders:manage');
     expect(canonicalizeScopes(['pages:view:project-2', 'pages:view:project-1'])).toEqual([
       'pages:view:project-1',
       'pages:view:project-2',
@@ -715,7 +717,7 @@ describe('canonical scope definitions', () => {
 describe('folder management scopes', () => {
   const FOLDER_ID = '22222222-2222-4222-8222-222222222222';
 
-  it('accept a folder qualifier only where the folder routes check it', async () => {
+  it('accept a folder qualifier only', async () => {
     const { delegatedScopeIssue } = await import('./scopes-schemas.js');
     for (const scope of FOLDER_MANAGE_SCOPES) {
       expect(delegatedScopeIssue(`${scope}:folder/${FOLDER_ID}`), scope).toBeNull();
@@ -730,8 +732,10 @@ describe('folder management scopes', () => {
       'logs:environments:folders:manage',
       'logs:schemas:folders:manage',
     ]) {
-      expect(FOLDER_MANAGE_SCOPES as readonly string[]).not.toContain(scope);
-      expect(delegatedScopeIssue(`${scope}:folder/${FOLDER_ID}`), scope).not.toBeNull();
+      expect(FOLDER_MANAGE_SCOPES as readonly string[]).toContain(scope);
     }
+    // Snapshot folders stay qualified by their hosting resource.
+    expect(FOLDER_MANAGE_SCOPES as readonly string[]).not.toContain('hosting:snapshots:folders:manage');
+    expect(delegatedScopeIssue('docker:folders:manage:node/node-1')).toContain('can only be restricted to a folder');
   });
 });

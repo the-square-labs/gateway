@@ -348,10 +348,10 @@ export function canAccessNavigationItem(
         hasScopeBase(scopes, "docker:volumes:view") ||
         hasScopeBase(scopes, "docker:networks:view") ||
         hasScopeBase(scopes, "docker:tasks") ||
-        scopeMatches(scopes, "docker:folders:manage");
+        hasScopeBase(scopes, "docker:folders:manage");
       return (
         canAccess &&
-        (context.hasDockerNodes !== false || scopeMatches(scopes, "docker:folders:manage"))
+        (context.hasDockerNodes !== false || hasScopeBase(scopes, "docker:folders:manage"))
       );
     }
     case "pages":

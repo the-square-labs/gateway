@@ -1,9 +1,9 @@
 import { and, asc, desc, eq, ilike, inArray, isNull, or, sql } from 'drizzle-orm';
-import type { DrizzleClient } from '@/db/client.js';
+import type { DrizzleClient, DrizzleExecutor, DrizzleTransaction } from '@/db/client.js';
 import { proxyHostFolders } from '@/db/schema/proxy-host-folders.js';
 import { proxyHosts } from '@/db/schema/proxy-hosts.js';
 import { createChildLogger } from '@/lib/logger.js';
-import { transactionWithScopeCleanup } from '@/lib/resource-scope-cleanup.js';
+import { announceResourceScopeChanges, removeDanglingResourceScopes } from '@/lib/resource-scope-cleanup.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
@@ -111,39 +111,29 @@ export class FolderService {
   // -----------------------------------------------------------------------
 
   async createFolder(input: CreateFolderInput, userId: string) {
-    let depth = 0;
-
-    if (input.parentId) {
-      const parent = await this.db.query.proxyHostFolders.findFirst({
-        where: eq(proxyHostFolders.id, input.parentId),
-      });
-      if (!parent) throw new AppError(404, 'FOLDER_NOT_FOUND', 'Parent folder not found');
-      if (parent.depth >= MAX_DEPTH) {
-        throw new AppError(400, 'MAX_DEPTH_EXCEEDED', `Maximum folder nesting depth is ${MAX_DEPTH + 1} levels`);
+    const folder = await this.withTreeLock(async (tx) => {
+      let depth = 0;
+      if (input.parentId) {
+        const parent = await this.findFolder(input.parentId, tx);
+        if (!parent) throw new AppError(404, 'FOLDER_NOT_FOUND', 'Parent folder not found');
+        if (parent.depth >= MAX_DEPTH) {
+          throw new AppError(400, 'MAX_DEPTH_EXCEEDED', `Maximum folder nesting depth is ${MAX_DEPTH + 1} levels`);
+        }
+        depth = parent.depth + 1;
       }
-      depth = parent.depth + 1;
-    }
 
-    // Get next sort order within same parent
-    const siblings = await this.db
-      .select({ sortOrder: proxyHostFolders.sortOrder })
-      .from(proxyHostFolders)
-      .where(input.parentId ? eq(proxyHostFolders.parentId, input.parentId) : isNull(proxyHostFolders.parentId))
-      .orderBy(desc(proxyHostFolders.sortOrder))
-      .limit(1);
-
-    const nextSortOrder = siblings.length > 0 ? siblings[0].sortOrder + 1 : 0;
-
-    const [folder] = await this.db
-      .insert(proxyHostFolders)
-      .values({
-        name: input.name,
-        parentId: input.parentId ?? null,
-        sortOrder: nextSortOrder,
-        depth,
-        createdById: userId,
-      })
-      .returning();
+      const [created] = await tx
+        .insert(proxyHostFolders)
+        .values({
+          name: input.name,
+          parentId: input.parentId ?? null,
+          sortOrder: await this.nextSortOrder(input.parentId ?? null, tx),
+          depth,
+          createdById: userId,
+        })
+        .returning();
+      return created;
+    });
 
     await this.auditService.log({
       userId,
@@ -156,6 +146,33 @@ export class FolderService {
     logger.info('Created folder', { folderId: folder.id, name: folder.name });
     this.emitLayoutChanged('folder_created', folder.id);
     return folder;
+  }
+
+  /**
+   * Folder create, move and delete run one at a time, in one transaction under an advisory lock, like
+   * FolderedResourceService. Two concurrent moves (A under B, B under A) would otherwise both pass the descendant
+   * check and commit a parent cycle, and depth bookkeeping would drift.
+   */
+  private withTreeLock<T>(fn: (tx: DrizzleTransaction) => Promise<T>): Promise<T> {
+    return this.db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${'resource-folders:proxy_host_folder'}))`);
+      return fn(tx);
+    });
+  }
+
+  private async findFolder(id: string, db: DrizzleExecutor = this.db) {
+    const [folder] = await db.select().from(proxyHostFolders).where(eq(proxyHostFolders.id, id)).limit(1);
+    return folder;
+  }
+
+  private async nextSortOrder(parentId: string | null, db: DrizzleExecutor = this.db): Promise<number> {
+    const siblings = await db
+      .select({ sortOrder: proxyHostFolders.sortOrder })
+      .from(proxyHostFolders)
+      .where(parentId ? eq(proxyHostFolders.parentId, parentId) : isNull(proxyHostFolders.parentId))
+      .orderBy(desc(proxyHostFolders.sortOrder))
+      .limit(1);
+    return siblings.length > 0 ? siblings[0].sortOrder + 1 : 0;
   }
 
   async assertFolderExists(id: string | null | undefined): Promise<void> {
@@ -204,122 +221,94 @@ export class FolderService {
     access: FolderMoveAccess,
     manage?: FolderManageAccess
   ) {
-    const folder = await this.db.query.proxyHostFolders.findFirst({
-      where: eq(proxyHostFolders.id, id),
-    });
-    if (!folder) throw new AppError(404, 'FOLDER_NOT_FOUND', 'Folder not found');
-
-    // Same parent — no-op
-    if (folder.parentId === input.parentId) return folder;
-    if (input.parentId === id) {
-      throw new AppError(400, 'CIRCULAR_REFERENCE', 'Cannot move folder into its own descendant');
-    }
-    // A folder-scoped manager must manage both the place the folder leaves and the place it goes.
-    if (manage) {
-      assertFolderManage(manage.scopes, manage.manageScope, folder.parentId);
-      assertFolderManage(manage.scopes, manage.manageScope, input.parentId);
-    }
-
-    // Validate new parent
-    let newDepth = 0;
-    if (input.parentId) {
-      const newParent = await this.db.query.proxyHostFolders.findFirst({
-        where: eq(proxyHostFolders.id, input.parentId),
-      });
-      if (!newParent) throw new AppError(404, 'FOLDER_NOT_FOUND', 'Target parent folder not found');
-
-      // Circular reference check: target parent must not be a descendant
-      const descendants = await this.getDescendantIds(id);
-      if (descendants.includes(input.parentId)) {
-        throw new AppError(400, 'CIRCULAR_REFERENCE', 'Cannot move folder into its own descendant');
+    const result = await this.withTreeLock(async (tx) => {
+      // Read inside the lock: a concurrent move has either committed or not started.
+      const folder = await this.findFolder(id, tx);
+      if (!folder) throw new AppError(404, 'FOLDER_NOT_FOUND', 'Folder not found');
+      if (folder.parentId === input.parentId) return { folder, moved: false as const };
+      // A folder-scoped manager must manage both the place the folder leaves and the place it goes.
+      if (manage) {
+        assertFolderManage(manage.scopes, manage.manageScope, folder.parentId);
+        assertFolderManage(manage.scopes, manage.manageScope, input.parentId);
       }
 
-      newDepth = newParent.depth + 1;
-    }
+      const descendants = await this.getDescendantIds(id, tx);
+      let newDepth = 0;
+      if (input.parentId) {
+        if (input.parentId === id || descendants.includes(input.parentId)) {
+          throw new AppError(400, 'CIRCULAR_REFERENCE', 'Cannot move folder into its own descendant');
+        }
+        const newParent = await this.findFolder(input.parentId, tx);
+        if (!newParent) throw new AppError(404, 'FOLDER_NOT_FOUND', 'Target parent folder not found');
+        newDepth = newParent.depth + 1;
+      }
 
-    const siblingNames = await this.db
-      .select({ id: proxyHostFolders.id, name: proxyHostFolders.name })
-      .from(proxyHostFolders)
-      .where(input.parentId ? eq(proxyHostFolders.parentId, input.parentId) : isNull(proxyHostFolders.parentId));
-    const nameKey = folderNameKey(folder.name);
-    if (siblingNames.some((sibling) => sibling.id !== id && folderNameKey(sibling.name) === nameKey)) {
-      throw new AppError(
-        409,
-        'FOLDER_NAME_CONFLICT',
-        `A folder named "${folder.name.trim()}" already exists in the destination`
+      const siblings = await tx
+        .select({ id: proxyHostFolders.id, name: proxyHostFolders.name })
+        .from(proxyHostFolders)
+        .where(input.parentId ? eq(proxyHostFolders.parentId, input.parentId) : isNull(proxyHostFolders.parentId));
+      const nameKey = folderNameKey(folder.name);
+      if (siblings.some((sibling) => sibling.id !== id && folderNameKey(sibling.name ?? '') === nameKey)) {
+        throw new AppError(
+          409,
+          'FOLDER_NAME_CONFLICT',
+          `A folder named "${folder.name.trim()}" already exists in the destination`
+        );
+      }
+
+      // Check depth constraints for the entire subtree
+      const subtreeHeight = (await this.getMaxSubtreeDepth(id, descendants, tx)) - folder.depth;
+      if (newDepth + subtreeHeight > MAX_DEPTH) {
+        throw new AppError(
+          400,
+          'MAX_DEPTH_EXCEEDED',
+          `Moving this folder would exceed the maximum nesting depth of ${MAX_DEPTH + 1} levels`
+        );
+      }
+
+      const movedHosts = await tx
+        .select({ id: proxyHosts.id })
+        .from(proxyHosts)
+        .where(inArray(proxyHosts.folderId, [id, ...descendants]));
+      assertFolderMoveAccess(
+        access,
+        movedHosts.map((host) => host.id),
+        input.parentId
       );
-    }
 
-    // Check depth constraints for entire subtree
-    const maxSubtreeDepth = await this.getMaxSubtreeDepth(id);
-    const subtreeHeight = maxSubtreeDepth - folder.depth;
-    if (newDepth + subtreeHeight > MAX_DEPTH) {
-      throw new AppError(
-        400,
-        'MAX_DEPTH_EXCEEDED',
-        `Moving this folder would exceed the maximum nesting depth of ${MAX_DEPTH + 1} levels`
-      );
-    }
+      const [updated] = await tx
+        .update(proxyHostFolders)
+        .set({
+          parentId: input.parentId,
+          depth: newDepth,
+          sortOrder: await this.nextSortOrder(input.parentId, tx),
+          updatedAt: new Date(),
+        })
+        .where(eq(proxyHostFolders.id, id))
+        .returning();
 
-    const movedHosts = await this.db
-      .select({ id: proxyHosts.id })
-      .from(proxyHosts)
-      .where(inArray(proxyHosts.folderId, [id, ...(await this.getDescendantIds(id))]));
-    assertFolderMoveAccess(
-      access,
-      movedHosts.map((host) => host.id),
-      input.parentId
-    );
-
-    // Update folder and all descendants' depths
-    const depthDelta = newDepth - folder.depth;
-
-    // Get next sort order in new parent
-    const siblings = await this.db
-      .select({ sortOrder: proxyHostFolders.sortOrder })
-      .from(proxyHostFolders)
-      .where(input.parentId ? eq(proxyHostFolders.parentId, input.parentId) : isNull(proxyHostFolders.parentId))
-      .orderBy(desc(proxyHostFolders.sortOrder))
-      .limit(1);
-    const nextSortOrder = siblings.length > 0 ? siblings[0].sortOrder + 1 : 0;
-
-    // Update the folder itself
-    const [updated] = await this.db
-      .update(proxyHostFolders)
-      .set({
-        parentId: input.parentId,
-        depth: newDepth,
-        sortOrder: nextSortOrder,
-        updatedAt: new Date(),
-      })
-      .where(eq(proxyHostFolders.id, id))
-      .returning();
-
-    // Update descendants' depths if delta != 0
-    if (depthDelta !== 0) {
-      const descendantIds = await this.getDescendantIds(id);
-      if (descendantIds.length > 0) {
-        await this.db
+      const depthDelta = newDepth - folder.depth;
+      if (depthDelta !== 0 && descendants.length > 0) {
+        await tx
           .update(proxyHostFolders)
-          .set({
-            depth: sql`${proxyHostFolders.depth} + ${depthDelta}`,
-            updatedAt: new Date(),
-          })
-          .where(inArray(proxyHostFolders.id, descendantIds));
+          .set({ depth: sql`${proxyHostFolders.depth} + ${depthDelta}`, updatedAt: new Date() })
+          .where(inArray(proxyHostFolders.id, descendants));
       }
-    }
+      return { folder, moved: true as const, updated };
+    });
+    if (!result.moved) return result.folder;
 
     await this.auditService.log({
       userId,
       action: 'proxy_host_folder.move',
       resourceType: 'proxy_host_folder',
       resourceId: id,
-      details: { oldParentId: folder.parentId, newParentId: input.parentId },
+      details: { oldParentId: result.folder.parentId, newParentId: input.parentId },
     });
 
     logger.info('Moved folder', { folderId: id, newParentId: input.parentId });
     this.emitLayoutChanged('folder_updated', id);
-    return updated;
+    return result.updated;
   }
 
   // -----------------------------------------------------------------------
@@ -350,22 +339,22 @@ export class FolderService {
   }
 
   async deleteFolder(id: string, userId: string) {
-    const folder = await this.db.query.proxyHostFolders.findFirst({
-      where: eq(proxyHostFolders.id, id),
+    const { folder, descendantIds, affectedHosts, scopeChanges } = await this.withTreeLock(async (tx) => {
+      const folder = await this.findFolder(id, tx);
+      if (!folder) throw new AppError(404, 'FOLDER_NOT_FOUND', 'Folder not found');
+
+      // Count affected items for audit log
+      const descendantIds = await this.getDescendantIds(id, tx);
+      const affectedHosts = await tx
+        .select({ id: proxyHosts.id })
+        .from(proxyHosts)
+        .where(inArray(proxyHosts.folderId, [id, ...descendantIds]));
+
+      // CASCADE deletes subfolders, SET NULL ungroups hosts; grants on the deleted folders go with them.
+      await tx.delete(proxyHostFolders).where(eq(proxyHostFolders.id, id));
+      return { folder, descendantIds, affectedHosts, scopeChanges: await removeDanglingResourceScopes(tx) };
     });
-    if (!folder) throw new AppError(404, 'FOLDER_NOT_FOUND', 'Folder not found');
-
-    // Count affected items for audit log
-    const descendantIds = await this.getDescendantIds(id);
-    const allFolderIds = [id, ...descendantIds];
-
-    const affectedHosts = await this.db
-      .select({ id: proxyHosts.id })
-      .from(proxyHosts)
-      .where(inArray(proxyHosts.folderId, allFolderIds));
-
-    // CASCADE deletes subfolders, SET NULL ungroups hosts
-    await transactionWithScopeCleanup(this.db, (tx) => tx.delete(proxyHostFolders).where(eq(proxyHostFolders.id, id)));
+    await announceResourceScopeChanges(scopeChanges);
 
     await this.auditService.log({
       userId,
@@ -641,39 +630,40 @@ export class FolderService {
       .filter((node) => allowedFolderIds.has(node.id) || node.hosts.length > 0 || node.children.length > 0);
   }
 
-  private async getDescendantIds(folderId: string): Promise<string[]> {
-    // BFS to collect all descendant IDs
+  /**
+   * Every folder below `folderId`. The visited set keeps this finite even if the stored tree already contains a
+   * parent cycle (written before moves were serialized).
+   */
+  private async getDescendantIds(folderId: string, db: DrizzleExecutor = this.db): Promise<string[]> {
+    const visited = new Set<string>([folderId]);
     const descendants: string[] = [];
     let currentLevel = [folderId];
-
     while (currentLevel.length > 0) {
-      const children = await this.db
+      const children = await db
         .select({ id: proxyHostFolders.id })
         .from(proxyHostFolders)
         .where(inArray(proxyHostFolders.parentId, currentLevel));
-
-      const childIds = children.map((c) => c.id);
-      descendants.push(...childIds);
-      currentLevel = childIds;
+      const nextLevel: string[] = [];
+      for (const child of children) {
+        if (visited.has(child.id)) continue;
+        visited.add(child.id);
+        descendants.push(child.id);
+        nextLevel.push(child.id);
+      }
+      currentLevel = nextLevel;
     }
-
     return descendants;
   }
 
-  private async getMaxSubtreeDepth(folderId: string): Promise<number> {
-    const descendantIds = await this.getDescendantIds(folderId);
-    if (descendantIds.length === 0) {
-      const folder = await this.db.query.proxyHostFolders.findFirst({
-        where: eq(proxyHostFolders.id, folderId),
-      });
-      return folder?.depth ?? 0;
-    }
-
-    const maxDepthResult = await this.db
+  private async getMaxSubtreeDepth(
+    folderId: string,
+    descendantIds: readonly string[],
+    db: DrizzleExecutor = this.db
+  ): Promise<number> {
+    const [result] = await db
       .select({ maxDepth: sql<number>`max(${proxyHostFolders.depth})` })
       .from(proxyHostFolders)
       .where(inArray(proxyHostFolders.id, [folderId, ...descendantIds]));
-
-    return maxDepthResult[0]?.maxDepth ?? 0;
+    return result?.maxDepth ?? 0;
   }
 }

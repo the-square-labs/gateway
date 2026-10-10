@@ -160,8 +160,10 @@ async function expandDockerFamily(db: DrizzleClient, grants: FolderScopedGrant[]
   // follow the granted folder's own type; every other Docker scope names its folder type.
   const folderTypeByGrant = new Map(
     grants.map((grant) => {
-      if (grant.baseScope !== 'docker:availability:manage') return [grant.scope, dockerFolderType(grant.baseScope)];
       const type = folderRows.find((row) => row.id === grant.folderId)?.resourceType;
+      // Folder management covers the granted folder's subtree in whichever Docker list it belongs to.
+      if (grant.baseScope === 'docker:folders:manage') return [grant.scope, type ?? null];
+      if (grant.baseScope !== 'docker:availability:manage') return [grant.scope, dockerFolderType(grant.baseScope)];
       return [grant.scope, type === 'container' || type === 'compose' ? type : null];
     })
   );
@@ -261,7 +263,7 @@ async function expandDockerFamily(db: DrizzleClient, grants: FolderScopedGrant[]
     return [
       ...[...folderIds].map((folderId) => folderScopedScope(grant.baseScope, folderId)),
       ...assignments.flatMap((assignment) => {
-        if (CREATION_SCOPES.has(grant.baseScope)) return [];
+        if (CREATION_SCOPES.has(grant.baseScope) || FOLDER_MANAGE_SCOPE_SET.has(grant.baseScope)) return [];
         if (!assignment.folderId || !folderIds.has(assignment.folderId)) return [];
         const expectedType = folderTypeByGrant.get(grant.scope);
         if (assignment.resourceType !== expectedType) return [];
@@ -349,7 +351,7 @@ function familyForBaseScope(baseScope: string) {
   if (baseScope.startsWith('nodes:')) return 'nodes';
   if (baseScope.startsWith('ingress:groups:')) return 'ingress-groups';
   if (baseScope.startsWith('docker:containers:')) return 'docker';
-  if (baseScope === 'docker:availability:manage') return 'docker';
+  if (baseScope === 'docker:availability:manage' || baseScope === 'docker:folders:manage') return 'docker';
   if (baseScope.startsWith('docker:compose:')) return 'docker';
   if (
     baseScope.startsWith('docker:networks:') ||

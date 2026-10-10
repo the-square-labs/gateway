@@ -133,6 +133,11 @@ describe('folder-scoped permissions', () => {
     'admin:users:folders:manage',
     'admin:groups:folders:manage',
     'pki:templates:folders:manage',
+    'databases:folders:manage',
+    'storage:folders:manage',
+    'pages:folders:manage',
+    'logs:environments:folders:manage',
+    'logs:schemas:folders:manage',
   ])('expands a %s folder grant to the folder and its subfolders only', async (base) => {
     const folderRows = [
       { id: 'folder-1', parentId: null },
@@ -200,6 +205,37 @@ describe('folder-scoped permissions', () => {
       'docker:containers:view:node-1/access-1',
       'docker:containers:view:node-1/deployment-1',
     ]);
+  });
+
+  it('expands a docker:folders:manage grant to the subtree in the folder own Docker list, never to resources', async () => {
+    const select = vi.fn((fields: Record<string, unknown>) => ({
+      from: vi.fn(() => {
+        if ('parentId' in fields) {
+          return Promise.resolve([
+            { id: 'volumes', parentId: null, resourceType: 'volume' },
+            { id: 'volumes-sub', parentId: 'volumes', resourceType: 'volume' },
+            { id: 'containers', parentId: null, resourceType: 'container' },
+          ]);
+        }
+        if ('folderId' in fields) {
+          return {
+            where: vi
+              .fn()
+              .mockResolvedValue([
+                { folderId: 'volumes-sub', nodeId: 'node-1', resourceType: 'volume', resourceKey: 'data' },
+              ]),
+          };
+        }
+        return { where: vi.fn().mockResolvedValue([]) };
+      }),
+    }));
+
+    const scopes = await expandFolderScopes({ select } as any, [folderScopedScope('docker:folders:manage', 'volumes')]);
+
+    expect(scopes).toEqual(['docker:folders:manage:folder/volumes', 'docker:folders:manage:folder/volumes-sub']);
+    expect(hasScopeForCreation(scopes, 'docker:folders:manage', 'volumes-sub')).toBe(true);
+    expect(hasScopeForCreation(scopes, 'docker:folders:manage', 'containers')).toBe(false);
+    expect(hasScopeForCreation(scopes, 'docker:folders:manage', null)).toBe(false);
   });
 
   it('expands Compose folders to stable project resource IDs only', async () => {

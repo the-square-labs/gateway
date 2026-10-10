@@ -88,6 +88,7 @@ describe('PUT /docker/folders/:id/move', () => {
       authorize({
         resourceType: 'volume',
         resources: [{ nodeId: NODE, resourceKey: 'data' }],
+        sourceParentId: null,
         destinationFolderId: DESTINATION,
       })
     ).rejects.toMatchObject({ statusCode: 403 });
@@ -98,6 +99,7 @@ describe('assertDockerFolderMoveAccess', () => {
   const context = {
     resourceType: 'volume' as const,
     resources: [{ nodeId: NODE, resourceKey: 'data' }],
+    sourceParentId: null,
     destinationFolderId: DESTINATION,
   };
 
@@ -122,7 +124,110 @@ describe('assertDockerFolderMoveAccess', () => {
 
   it('has nothing to check for an empty folder', async () => {
     await expect(
-      assertDockerFolderMoveAccess([], { resourceType: 'container', resources: [], destinationFolderId: null })
+      assertDockerFolderMoveAccess([], {
+        resourceType: 'container',
+        resources: [],
+        sourceParentId: null,
+        destinationFolderId: null,
+      })
     ).resolves.toBeUndefined();
+  });
+});
+
+describe('Docker folder management limited to a folder', () => {
+  const TEAM = '44444444-4444-4444-8444-444444444444';
+  const SUB = '55555555-5555-4555-8555-555555555555';
+  const OTHER = '66666666-6666-4666-8666-666666666666';
+  const PARENTS: Record<string, string | null> = { [TEAM]: null, [SUB]: TEAM, [OTHER]: null };
+  // A grant on TEAM as folder-scopes.ts expands it: TEAM and its subfolder SUB.
+  const granted = [
+    `docker:folders:manage:folder/${TEAM}`,
+    `docker:folders:manage:folder/${SUB}`,
+    'docker:volumes:delete',
+  ];
+
+  function setup() {
+    const service = {
+      createFolder: vi.fn().mockResolvedValue({ id: SUB }),
+      updateFolder: vi.fn().mockResolvedValue({ id: SUB }),
+      deleteFolder: vi.fn().mockResolvedValue(undefined),
+      moveFolder: vi.fn().mockResolvedValue({ id: SUB }),
+      moveResourcesToFolder: vi.fn().mockResolvedValue(undefined),
+      getFolderParentIds: vi.fn(async (ids: string[]) => new Map(ids.map((id) => [id, PARENTS[id] ?? null]))),
+      getResourcePlacementsForRefs: vi.fn(
+        async (_type: string, items: Array<{ nodeId: string; resourceKey: string }>) =>
+          items.map((item) => ({ ...item, folderId: item.resourceKey === 'in-sub' ? SUB : null }))
+      ),
+    };
+    container.registerInstance(DockerFolderService, service as never);
+    const router = app(granted);
+    const call = (path: string, method: string, body?: unknown) =>
+      router.request(path, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+    return { service, call };
+  }
+
+  it('creates, renames and deletes only inside the granted folder', async () => {
+    const { service, call } = setup();
+
+    expect((await call('/folders', 'POST', { name: 'Data', resourceType: 'volume', parentId: TEAM })).status).toBe(201);
+    expect((await call('/folders', 'POST', { name: 'Data', resourceType: 'volume' })).status).toBe(403);
+    expect((await call('/folders', 'POST', { name: 'Data', resourceType: 'volume', parentId: OTHER })).status).toBe(
+      403
+    );
+    expect(service.createFolder).toHaveBeenCalledTimes(1);
+    expect((await call(`/folders/${SUB}`, 'PUT', { name: 'Renamed' })).status).toBe(200);
+    expect((await call(`/folders/${TEAM}`, 'PUT', { name: 'Renamed' })).status).toBe(403);
+    expect((await call(`/folders/${TEAM}`, 'DELETE')).status).toBe(403);
+    expect(service.deleteFolder).not.toHaveBeenCalled();
+  });
+
+  it('moves resources only from and to managed folders', async () => {
+    const { service, call } = setup();
+    const items = (resourceKey: string) => [{ nodeId: NODE, resourceKey }];
+
+    expect(
+      (
+        await call('/folders/move-resources', 'POST', {
+          resourceType: 'volume',
+          items: items('in-sub'),
+          folderId: TEAM,
+        })
+      ).status
+    ).toBe(200);
+    expect(
+      (
+        await call('/folders/move-resources', 'POST', {
+          resourceType: 'volume',
+          items: items('in-sub'),
+          folderId: OTHER,
+        })
+      ).status
+    ).toBe(403);
+    expect(
+      (await call('/folders/move-resources', 'POST', { resourceType: 'volume', items: items('loose'), folderId: TEAM }))
+        .status
+    ).toBe(403);
+    expect(service.moveResourcesToFolder).toHaveBeenCalledTimes(1);
+  });
+
+  it('moves a folder only between managed places', async () => {
+    const { service, call } = setup();
+    expect((await call(`/folders/${SUB}/move`, 'PUT', { parentId: OTHER })).status).toBe(200);
+    const authorize = service.moveFolder.mock.calls[0][3] as (context: unknown) => Promise<void>;
+    const context = (sourceParentId: string | null, destinationFolderId: string | null) => ({
+      resourceType: 'volume',
+      resources: [],
+      sourceParentId,
+      destinationFolderId,
+    });
+
+    await expect(authorize(context(TEAM, OTHER))).rejects.toMatchObject({ statusCode: 403 });
+    await expect(authorize(context(TEAM, null))).rejects.toMatchObject({ statusCode: 403 });
+    await expect(authorize(context(null, SUB))).rejects.toMatchObject({ statusCode: 403 });
+    await expect(authorize(context(TEAM, SUB))).resolves.toBeUndefined();
   });
 });

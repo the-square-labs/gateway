@@ -70,9 +70,12 @@ export function DockerFolderedResourceList<TItem extends DockerFolderedResourceI
     toggleFolder,
   } = useDockerFolderStore();
 
-  // Visible only through folder grants: one top-most granted folder works as the root.
-  // Docker folder management stays global (`docker:folders:manage` spans every Docker list).
-  const { limitedToFolders, isGrantedFolder } = useFolderAccess(DOCKER_VIEW_SCOPE[resourceType]);
+  // Visible only through folder grants: one top-most granted folder works as the root. Folder
+  // management may be limited to a folder's subtree (`docker:folders:manage:folder/<id>`).
+  const { limitedToFolders, isGrantedFolder, canManageFolderAt } = useFolderAccess(
+    DOCKER_VIEW_SCOPE[resourceType],
+    "docker:folders:manage"
+  );
 
   const store = useMemo<FolderedListStore<DockerResourceRef>>(
     () => ({
@@ -136,6 +139,7 @@ export function DockerFolderedResourceList<TItem extends DockerFolderedResourceI
       lockExpanded={!!fixedNodeId}
       limitedToFolders={limitedToFolders}
       isGrantedFolder={isGrantedFolder}
+      canManageFolderAt={canManageFolderAt}
     />
   );
 }

@@ -37,6 +37,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { TruncateStart } from "@/components/ui/truncate-start";
+import { useCanManageSomeFolders } from "@/hooks/use-folder-access";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 import { createClientUuid } from "@/lib/client-id";
@@ -100,7 +101,7 @@ export function DockerComposeProjects({
 } = {}) {
   const navigate = useNavigate();
   const location = useLocation();
-  const { hasScope, hasScopedAccess, user } = useAuthStore();
+  const { hasScopedAccess, user } = useAuthStore();
   const projects = useDockerStore((state) => state.composeProjects);
   const fetchProjects = useDockerStore((state) => state.fetchComposeProjects);
   const loading = useDockerStore((state) => state.loading.compose);
@@ -122,7 +123,8 @@ export function DockerComposeProjects({
   >({});
   const createFolderRef = useRef<(() => void) | null>(null);
   const visibleNodeId = fixedNodeId ?? selectedNodeId;
-  const canManageFolders = !fixedNodeId && hasScope("docker:folders:manage");
+  const canManageSomeFolders = useCanManageSomeFolders("docker:folders:manage");
+  const canManageFolders = !fixedNodeId && canManageSomeFolders;
   const canCreate = hasScopedAccess("docker:compose:create");
 
   const openCreate = useCallback(() => {

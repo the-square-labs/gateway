@@ -126,7 +126,7 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
     // Layout invalidations contain no domain data; an object with no identity is
     // not implicitly treated as a readable domain.
     return (
-      hasScope(scopes, 'domains:folders:manage') ||
+      hasScopeBase(scopes, 'domains:folders:manage') ||
       (hasScopeBase(scopes, 'domains:view') &&
         typeof event?.action === 'string' &&
         [
@@ -177,7 +177,8 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
       hasScope(scopes, 'docker:volumes:view') ||
       hasScope(scopes, 'docker:networks:view') ||
       hasScope(scopes, 'docker:compose:view') ||
-      hasScope(scopes, 'docker:folders:manage')
+      // Layout events carry only the action, folder id and node ids; a folder-limited manager refetches its tree.
+      hasScopeBase(scopes, 'docker:folders:manage')
     ) {
       return true;
     }
@@ -286,7 +287,7 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
     return hasScope(scopes, 'docker:networks:view') || !!(nodeId && hasScope(scopes, `docker:networks:view:${nodeId}`));
   }
   if (channel === 'database.folder.changed') {
-    return hasScopeBase(scopes, 'databases:view') || hasScope(scopes, 'databases:folders:manage');
+    return hasScopeBase(scopes, 'databases:view') || hasScopeBase(scopes, 'databases:folders:manage');
   }
   if (channel.startsWith('database.')) {
     const databaseId = (payload as { id?: string } | undefined)?.id;
@@ -302,7 +303,7 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
     // Folder layout events carry only an action and a folder id, never project data, and the client
     // refetches the folder tree (filtered server-side). Folder-only and create-only users need them too.
     return (
-      hasScope(scopes, 'pages:folders:manage') ||
+      hasScopeBase(scopes, 'pages:folders:manage') ||
       hasScopeBase(scopes, 'pages:view') ||
       hasScopeBase(scopes, 'pages:create')
     );
@@ -324,7 +325,7 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
     return (
       hasScope(scopes, 'logs:environments:view') ||
       !!(environmentId && hasScope(scopes, `logs:environments:view:${environmentId}`)) ||
-      (!environmentId && hasScope(scopes, 'logs:environments:folders:manage'))
+      (!environmentId && hasScopeBase(scopes, 'logs:environments:folders:manage'))
     );
   }
   if (channel === 'logging.schema.changed') {
@@ -332,7 +333,7 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
     return (
       hasScope(scopes, 'logs:schemas:view') ||
       !!(schemaId && hasScope(scopes, `logs:schemas:view:${schemaId}`)) ||
-      (!schemaId && hasScope(scopes, 'logs:schemas:folders:manage'))
+      (!schemaId && hasScopeBase(scopes, 'logs:schemas:folders:manage'))
     );
   }
   if (channel === 'logging.token.changed') {
@@ -347,7 +348,7 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
       hasScope(scopes, 'proxy:view') ||
       !!(hostId && hasScope(scopes, `proxy:view:${hostId}`)) ||
       (hasScopeBase(scopes, 'proxy:view') && !hostId && isProxyFolderLayoutPayload(payload)) ||
-      (hasScope(scopes, 'proxy:folders:manage') && !hostId && isProxyFolderLayoutPayload(payload))
+      (hasScopeBase(scopes, 'proxy:folders:manage') && !hostId && isProxyFolderLayoutPayload(payload))
     );
   }
   if (channel.startsWith('ssl.cert')) {
@@ -378,14 +379,14 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
     );
   }
   if (channel === 'node.folder.changed') {
-    return hasScope(scopes, 'nodes:details') || hasScope(scopes, 'nodes:folders:manage');
+    return hasScope(scopes, 'nodes:details') || hasScopeBase(scopes, 'nodes:folders:manage');
   }
   if (channel === 'user.changed') {
     const userId = (payload as { id?: string } | undefined)?.id;
     return (
       hasScope(scopes, 'admin:users') ||
       !!(userId && hasScope(scopes, `admin:users:${userId}`)) ||
-      (!userId && hasScope(scopes, 'admin:users:folders:manage'))
+      (!userId && hasScopeBase(scopes, 'admin:users:folders:manage'))
     );
   }
   if (channel === 'group.changed') {
@@ -393,7 +394,7 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
     return (
       hasScope(scopes, 'admin:groups') ||
       !!(groupId && hasScope(scopes, `admin:groups:${groupId}`)) ||
-      (!groupId && hasScope(scopes, 'admin:groups:folders:manage'))
+      (!groupId && hasScopeBase(scopes, 'admin:groups:folders:manage'))
     );
   }
   if (channel === 'nginx.template.changed') {

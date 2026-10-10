@@ -42,6 +42,8 @@ type DockerContainerLike = {
 export type DockerFolderMoveAuthorizer = (context: {
   resourceType: DockerFolderResourceType;
   resources: DockerFolderResourceRef[];
+  /** Where the folder sits now (null: the top level of its list). */
+  sourceParentId: string | null;
   destinationFolderId: string | null;
 }) => void | Promise<void>;
 
@@ -294,7 +296,12 @@ export class DockerFolderService {
             inArray(dockerContainerFolderAssignments.folderId, [id, ...descendants.map((descendant) => descendant.id)])
           )
         );
-      await authorize({ resourceType, resources, destinationFolderId: newParentId });
+      await authorize({
+        resourceType,
+        resources,
+        sourceParentId: folder.parentId ?? null,
+        destinationFolderId: newParentId,
+      });
 
       const [updated] = await tx
         .update(dockerContainerFolders)
@@ -332,6 +339,18 @@ export class DockerFolderService {
     });
     this.emitLayoutChanged('folder_updated', id, result.nodeIds);
     return result.updated;
+  }
+
+  /** Parent of each folder (null: the top level of its list); 404 when one does not exist. */
+  async getFolderParentIds(ids: readonly string[]): Promise<Map<string, string | null>> {
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return new Map();
+    const rows = await this.db
+      .select({ id: dockerContainerFolders.id, parentId: dockerContainerFolders.parentId })
+      .from(dockerContainerFolders)
+      .where(inArray(dockerContainerFolders.id, unique));
+    if (rows.length !== unique.length) throw new AppError(404, 'FOLDER_NOT_FOUND', 'Folder not found');
+    return new Map(rows.map((row) => [row.id, row.parentId ?? null]));
   }
 
   async deleteFolder(id: string, userId: string) {

@@ -192,6 +192,7 @@ describe('DockerFolderService.moveFolder', () => {
     expect(refuse).toHaveBeenCalledWith({
       resourceType: 'container',
       resources: [{ nodeId: NODE, resourceKey: 'web' }],
+      sourceParentId: null,
       destinationFolderId: 'r',
     });
     expect(update).not.toHaveBeenCalled();
@@ -211,6 +212,7 @@ describe('DockerFolderService.moveFolder', () => {
     expect(authorize).toHaveBeenCalledWith({
       resourceType: 'container',
       resources: [{ nodeId: NODE, resourceKey: 'web' }],
+      sourceParentId: null,
       destinationFolderId: 'r',
     });
     expect(moved).toMatchObject({ id: 'a', parentId: 'r', depth: 1, sortOrder: 5 });

@@ -53,7 +53,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { TruncateStart } from "@/components/ui/truncate-start";
-import { useFolderAccess } from "@/hooks/use-folder-access";
+import { useCanManageSomeFolders, useFolderAccess } from "@/hooks/use-folder-access";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { useRealtime } from "@/hooks/use-realtime";
 import { matchesDockerContainerStatus } from "@/lib/docker-container-filters";
@@ -427,9 +427,15 @@ export function DockerContainers({
   const hasActiveFilters = filters.search !== "" || filters.status !== "all";
   const hasActiveNodeFilter = !fixedNodeId && !!selectedNodeId;
   const isSearchFiltering = filters.search.trim() !== "";
-  const canManageFolders = !fixedNodeId && hasScope("docker:folders:manage");
+  const canManageSomeFolders = useCanManageSomeFolders("docker:folders:manage");
+  const canManageFolders = !fixedNodeId && canManageSomeFolders;
   // Visible only through folder grants: one top-most granted folder works as the root.
-  const { limitedToFolders, isGrantedFolder } = useFolderAccess("docker:containers:view");
+  const { limitedToFolders, isGrantedFolder, canManageFolderAt } = useFolderAccess(
+    "docker:containers:view",
+    "docker:folders:manage"
+  );
+  const canManageFolder = (folder: { parentId: string | null; isSystem?: boolean }) =>
+    canManageFolders && !folder.isSystem && canManageFolderAt(folder.parentId ?? null);
   const shown = fixedNodeId
     ? { folders: folderTree, ungrouped: ungroupedContainers, root: null }
     : applyRootFolderView(folderTree, ungroupedContainers, (folder) => folder.containers, {
@@ -697,6 +703,7 @@ export function DockerContainers({
       const activeGroup = findFolderSiblings(folders, activeData.folderId as string);
       const overGroup = findFolderSiblings(folders, dropData.folderId as string);
       if (!activeGroup || !overGroup || activeGroup.parentId !== overGroup.parentId) return;
+      if (!canManageFolderAt(activeGroup.parentId)) return;
       const oldIndex = activeGroup.siblings.findIndex(
         (folder) => folder.id === activeData.folderId
       );
@@ -716,11 +723,12 @@ export function DockerContainers({
     }
 
     const source = activeData?.container as DockerContainerListItem | undefined;
-    if (!source || source.folderIsSystem) return;
+    if (!source || source.folderIsSystem || !canManageFolderAt(source.folderId ?? null)) return;
 
     if (dropData?.type === "folder") {
       const targetFolderId = dropData.folderId as string | null;
       if (dropData.isSystem || source.folderId === targetFolderId) return;
+      if (!canManageFolderAt(targetFolderId)) return;
       await moveContainer(source, targetFolderId);
       return;
     }
@@ -730,6 +738,7 @@ export function DockerContainers({
     if (overContainer.folderIsSystem) return;
 
     if (source.folderId !== overContainer.folderId) {
+      if (!canManageFolderAt(overContainer.folderId ?? null)) return;
       await moveContainer(source, overContainer.folderId ?? null);
       return;
     }
@@ -877,7 +886,10 @@ export function DockerContainers({
               // A container waiting for its first build has no runtime to start or stop, but it can move
               // between folders like any other container: it materializes where it sits.
               const manage = !pending && canManageContainer(container);
-              const reorganize = canReorganizeContainer(container);
+              const reorganize =
+                canReorganizeContainer(container) &&
+                canManageFolders &&
+                canManageFolderAt(container.folderId ?? null);
               const lifecycleActions = pending
                 ? { canStart: false, canStop: false, canRestart: false }
                 : containerLifecycleActions(container.state);
@@ -1170,8 +1182,8 @@ export function DockerContainers({
             fixedNodeId ? true : expandedFolderIds.has(folder.id) || folder.id === defaultOpenId,
           isFolderSystem: (folder) => folder.isSystem,
           isFolderCollapsible: () => !fixedNodeId,
-          canManageFolder: (folder) => canManageFolders && !folder.isSystem,
-          canReorderFolder: (folder) => canDragFolders && !folder.isSystem,
+          canManageFolder,
+          canReorderFolder: (folder) => canDragFolders && canManageFolder(folder),
           canCreateSubfolder: (folder) => folder.depth < 2,
           onToggleFolder: fixedNodeId
             ? () => {}
@@ -1190,7 +1202,7 @@ export function DockerContainers({
           ungroupedDroppable: {
             id: "docker-folder-ungrouped",
             data: { type: "folder", folderId: rootFolderId, isSystem: false },
-            disabled: !canDragFolders,
+            disabled: !canDragFolders || !canManageFolderAt(rootFolderId),
           },
         }}
         items={{
@@ -1199,7 +1211,10 @@ export function DockerContainers({
           getItemSortableData: (container) => ({ type: "container", container }),
           canViewItem: canViewContainer,
           isItemDragDisabled: (container) =>
-            !canDragFolders || !canReorganizeContainer(container) || !!container.folderIsSystem,
+            !canDragFolders ||
+            !canReorganizeContainer(container) ||
+            !!container.folderIsSystem ||
+            !canManageFolderAt(container.folderId ?? null),
           onItemClick: (container) => {
             if (container.kind === "deployment") {
               navigate(dockerDeploymentRoute(container._nodeSlug, container.name), {
@@ -1229,7 +1244,7 @@ export function DockerContainers({
             "docker:containers:edit",
             folderId,
             moveDialogContainer?._nodeId
-          )
+          ) && canManageFolderAt(folderId)
         }
         onMove={(folderId) => {
           if (moveDialogContainer) void moveContainer(moveDialogContainer, folderId);
@@ -1255,6 +1270,7 @@ export function DockerContainers({
         canMoveTo={(parentId) =>
           !!moveFolderId &&
           canMoveFolderInto(generalFolders, moveFolderId, parentId) &&
+          canManageFolderAt(parentId) &&
           !(parentId && findFolderTreeNode(generalFolders, parentId)?.isSystem)
         }
         onMove={(parentId) => {

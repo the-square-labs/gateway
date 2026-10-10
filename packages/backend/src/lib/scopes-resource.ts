@@ -19,9 +19,9 @@ export const FOLDER_CREATION_SCOPES = [
 
 /**
  * Folder-tree management scopes that take a folder qualifier: `<scope>:folder/<id>` manages the folder's
- * subfolders and the placement of items in them, never the folder itself or the top level. Not listed (broad
- * only): Docker folders; databases, storage, Pages and logging folders, whose folder routes do not check
- * per-folder grants yet; hosting snapshot folders, which are qualified by their hosting resource.
+ * subfolders and the placement of items in them, never the folder itself or the top level. A Docker folder grant
+ * covers the subtree in that folder's own Docker list. Hosting snapshot folders are not listed: they are qualified
+ * by their hosting resource.
  */
 export const FOLDER_MANAGE_SCOPES = [
   'domains:folders:manage',
@@ -34,6 +34,12 @@ export const FOLDER_MANAGE_SCOPES = [
   'nodes:folders:manage',
   'admin:users:folders:manage',
   'admin:groups:folders:manage',
+  'docker:folders:manage',
+  'storage:folders:manage',
+  'databases:folders:manage',
+  'pages:folders:manage',
+  'logs:environments:folders:manage',
+  'logs:schemas:folders:manage',
 ] as const;
 
 export const RESOURCE_SCOPABLE: readonly string[] = [

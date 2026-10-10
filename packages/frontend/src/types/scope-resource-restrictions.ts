@@ -58,6 +58,12 @@ export const FOLDER_MANAGE_SCOPES = [
   "nodes:folders:manage",
   "admin:users:folders:manage",
   "admin:groups:folders:manage",
+  "docker:folders:manage",
+  "storage:folders:manage",
+  "databases:folders:manage",
+  "pages:folders:manage",
+  "logs:environments:folders:manage",
+  "logs:schemas:folders:manage",
 ] as const;
 
 export const RESOURCE_SCOPABLE_SCOPES = [

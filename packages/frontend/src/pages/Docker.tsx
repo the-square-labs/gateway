@@ -111,7 +111,7 @@ export function Docker() {
   const refreshNetworksRef = useRef<(() => void) | null>(null);
   const refreshComposeRef = useRef<(() => void) | null>(null);
 
-  const canManageContainerFolders = hasScope("docker:folders:manage");
+  const canManageContainerFolders = hasScopedAccess("docker:folders:manage");
   const visibleTabs = TABS.filter(
     (t) => hasScopedAccess(t.scope) || (t.value === "containers" && canManageContainerFolders)
   );

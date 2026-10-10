@@ -381,6 +381,8 @@ describe("overlapping lines after a save", () => {
       manageFolders: true,
     };
     const scopes = lineScopes(line, ctx);
+    // Every resource type offers it, Docker lists through the shared Docker folder scope.
+    expect(ACCESS_TYPES.every((type) => !!type.foldersManage)).toBe(true);
     expect(scopes).toContain("proxy:folders:manage:folder/proxy-orders");
     expect(scopes).toContain("ssl:cert:folders:manage:folder/ssl-orders");
     expect(scopesToLines(scopes, ctx)).toEqual([line]);

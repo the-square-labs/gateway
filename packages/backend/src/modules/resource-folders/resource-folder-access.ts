@@ -38,7 +38,7 @@ const holdsBroadly = (scopes: readonly string[], manageScope: string) => hasScop
 
 /** Rename or delete folder `folderId`: needs management at its parent. */
 export async function assertFolderManageForFolder(
-  lookup: FolderPlacementLookup,
+  lookup: Pick<FolderPlacementLookup, 'getFolderParentIds'>,
   scopes: readonly string[],
   manageScope: string,
   folderId: string
@@ -50,7 +50,7 @@ export async function assertFolderManageForFolder(
 
 /** Reorder folders: needs management at every reordered folder's parent. */
 export async function assertFolderManageForFolders(
-  lookup: FolderPlacementLookup,
+  lookup: Pick<FolderPlacementLookup, 'getFolderParentIds'>,
   scopes: readonly string[],
   manageScope: string,
   folderIds: readonly string[]
@@ -66,7 +66,7 @@ export async function assertFolderManageForFolders(
  * destination and at each resource's current folder (ungrouped resources need the broad scope).
  */
 export async function assertFolderManageForResources(
-  lookup: FolderPlacementLookup,
+  lookup: Pick<FolderPlacementLookup, 'getResourceFolderIds'>,
   scopes: readonly string[],
   manageScope: string,
   resourceIds: readonly string[],

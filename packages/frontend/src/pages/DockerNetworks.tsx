@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/select";
 import { TruncateStart } from "@/components/ui/truncate-start";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
+import { useCanManageSomeFolders } from "@/hooks/use-folder-access";
 import { useRealtime } from "@/hooks/use-realtime";
 import { canCreateDockerResourceOnNode, loadVisibleDockerNodes } from "@/lib/docker-node-access";
 import { nodeBadgeClassName } from "@/lib/node-appearance";
@@ -288,7 +289,8 @@ export function DockerNetworks({
     );
   }, [networks, search]);
   const truncatedListMeta = networks.find((network) => network._listTruncated);
-  const canManageFolders = !fixedNodeId && hasScope("docker:folders:manage");
+  const canManageSomeFolders = useCanManageSomeFolders("docker:folders:manage");
+  const canManageFolders = !fixedNodeId && canManageSomeFolders;
 
   const containerCount = useCallback((net: DockerNetwork): number => {
     if (typeof (net as any).containersCount === "number") return (net as any).containersCount;

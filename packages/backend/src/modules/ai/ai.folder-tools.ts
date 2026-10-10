@@ -14,7 +14,11 @@ import {
   DockerAccessResourceService,
   hasDockerResourceScope,
 } from '@/modules/docker/docker-access-resource.service.js';
-import { assertDockerFolderMoveAccess, dockerFolderTreeOptions } from '@/modules/docker/docker-folder.routes.js';
+import {
+  assertDockerFolderManageForResources,
+  dockerFolderMoveAuthorizer,
+  dockerFolderTreeOptions,
+} from '@/modules/docker/docker-folder.routes.js';
 import {
   CreateDockerFolderSchema,
   DockerFolderResourceTypeSchema,
@@ -123,12 +127,6 @@ function operationArg(value: unknown): string {
 function folderIdArg(args: Record<string, unknown>): string {
   if (typeof args.folderId === 'string' && args.folderId) return args.folderId;
   throw new Error('folderId is required for this folder operation');
-}
-
-function ensureScope(user: User, scope: string) {
-  if (!hasScope(user.scopes, scope)) {
-    throw new Error(`PERMISSION_DENIED: Missing required scope ${scope}`);
-  }
 }
 
 /** Folder management held broadly or on some folder; each operation then checks the exact place it changes. */
@@ -444,7 +442,8 @@ async function executeDockerFolderTool(user: User, args: Record<string, unknown>
     return annotateFolderAccess(tree, user.scopes, bases, DOCKER_CREATE_SCOPE_BY_RESOURCE_TYPE[resourceType]);
   }
 
-  ensureScope(user, 'docker:folders:manage');
+  // Same per-place rule as the Docker folder routes: a folder grant manages its subfolders in that Docker list.
+  ensureScopeBase(user, 'docker:folders:manage');
   const items = (Array.isArray(args.items) ? args.items : []).filter(
     (item): item is { nodeId: string; resourceKey: string } =>
       !!item &&
@@ -468,30 +467,56 @@ async function executeDockerFolderTool(user: User, args: Record<string, unknown>
     }
   }
 
+  const manageScope = 'docker:folders:manage';
   switch (operation) {
-    case 'create':
-      return service.createFolder(CreateDockerFolderSchema.parse({ ...args, resourceType }), user.id);
-    case 'update':
-      return service.updateFolder(folderIdArg(args), UpdateResourceFolderSchema.parse(args), user.id);
+    case 'create': {
+      const input = CreateDockerFolderSchema.parse({ ...args, resourceType });
+      assertFolderManage(user.scopes, manageScope, input.parentId ?? null);
+      return service.createFolder(input, user.id);
+    }
+    case 'update': {
+      const input = UpdateResourceFolderSchema.parse(args);
+      await assertFolderManageForFolder(service, user.scopes, manageScope, folderIdArg(args));
+      return service.updateFolder(folderIdArg(args), input, user.id);
+    }
     case 'delete':
+      await assertFolderManageForFolder(service, user.scopes, manageScope, folderIdArg(args));
       await service.deleteFolder(folderIdArg(args), user.id);
       return { success: true };
-    case 'reorder_folders':
-      await service.reorderFolders(ReorderDockerFoldersSchema.parse({ ...args, resourceType }), user.id);
-      return { success: true };
-    case 'move_resources':
-      await service.moveResourcesToFolder(
-        MoveDockerResourcesToFolderSchema.parse({ resourceType, items: args.items, folderId: args.folderId }),
-        user.id
+    case 'reorder_folders': {
+      const input = ReorderDockerFoldersSchema.parse({ ...args, resourceType });
+      await assertFolderManageForFolders(
+        service,
+        user.scopes,
+        manageScope,
+        input.items.map((item) => item.id)
       );
+      await service.reorderFolders(input, user.id);
       return { success: true };
-    case 'reorder_resources':
-      await service.reorderResources(ReorderDockerResourcesSchema.parse({ ...args, resourceType }), user.id);
+    }
+    case 'move_resources': {
+      const input = MoveDockerResourcesToFolderSchema.parse({
+        resourceType,
+        items: args.items,
+        folderId: args.folderId,
+      });
+      await assertDockerFolderManageForResources(user.scopes, resourceType, input.items, input.folderId);
+      await service.moveResourcesToFolder(input, user.id);
       return { success: true };
+    }
+    case 'reorder_resources': {
+      const input = ReorderDockerResourcesSchema.parse({ ...args, resourceType });
+      await assertDockerFolderManageForResources(user.scopes, resourceType, input.items, undefined);
+      await service.reorderResources(input, user.id);
+      return { success: true };
+    }
     case 'move_folder':
-      // Same per-resource and destination checks as PUT /docker/folders/:id/move (docker-folder.routes.ts).
-      return service.moveFolder(folderIdArg(args), MoveDockerFolderSchema.parse(args), user.id, (context) =>
-        assertDockerFolderMoveAccess(user.scopes, context)
+      // Same folder-management, per-resource and destination checks as PUT /docker/folders/:id/move.
+      return service.moveFolder(
+        folderIdArg(args),
+        MoveDockerFolderSchema.parse(args),
+        user.id,
+        dockerFolderMoveAuthorizer(user.scopes)
       );
     default:
       throw new Error(`Unsupported docker folder operation: ${operation}`);
