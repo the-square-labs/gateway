@@ -49,6 +49,7 @@ import { accessContextKey, useAuthStore } from "@/stores/auth";
 import { useDaemonUpdatesStore } from "@/stores/daemon-updates";
 import { useNodesStore } from "@/stores/nodes";
 import { usePinnedNodesStore } from "@/stores/pinned-nodes";
+import { useUIStore } from "@/stores/ui";
 import type { Node, NodeStatus } from "@/types";
 import {
   effectiveNodeStatus,
@@ -191,6 +192,8 @@ export function AdminNodes() {
   const daemonUpdates = useDaemonUpdatesStore((s) => s.statuses);
   const daemonUpdatesLoaded = useDaemonUpdatesStore((s) => s.lastLoadedAt > 0);
   const fetchDaemonUpdates = useDaemonUpdatesStore((s) => s.fetchDaemonUpdates);
+  // Hidden update notifications show the node's status instead of the available version.
+  const showUpdateNotifications = useUIStore((s) => s.showUpdateNotifications);
   // The status column shows available daemon updates, so the first list waits for them.
   const [daemonUpdatesSettled, setDaemonUpdatesSettled] = useState(false);
   const daemonUpdatesLoading =
@@ -357,6 +360,7 @@ export function AdminNodes() {
           const daemonType = daemonTypeForNode(node.type);
           const typeStatus = daemonUpdates.find((s) => s.daemonType === daemonType);
           if (
+            showUpdateNotifications &&
             eStatus === "online" &&
             isDaemonUpdateAvailable(node.daemonVersion, typeStatus?.latestVersion)
           ) {
@@ -404,7 +408,7 @@ export function AdminNodes() {
           ) : null,
       },
     ],
-    [daemonUpdates, hasScope, handleDelete, hostingBindings]
+    [daemonUpdates, hasScope, handleDelete, hostingBindings, showUpdateNotifications]
   );
 
   return (

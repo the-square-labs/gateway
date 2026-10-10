@@ -412,8 +412,9 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
           throw error;
         })
     : Promise.resolve(null);
+  // Hidden update notifications also hide the Nodes sidebar dot for pending daemon updates.
   const daemonUpdatesPromise =
-    canViewNodes && hasScope(scopes, 'admin:update')
+    canViewNodes && hasScope(scopes, 'admin:update') && request.showUpdateNotifications
       ? container.resolve(DaemonUpdateService).getCachedStatus()
       : Promise.resolve([]);
   const dockerNavigationHealthPromise = hasScopeBase(scopes, 'docker:containers:view')
