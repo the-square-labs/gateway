@@ -229,4 +229,10 @@ describe('registry sync failures that are expected states (rc.8 O-6)', () => {
     );
     expect(isExpectedSyncFailure(new Error('Docker daemon rejected internal registry bindings'))).toBe(false);
   });
+
+  it('also for a node whose daemon is being updated and grants waiting for a policy revision (rc.9 O-1)', async () => {
+    const { isExpectedSyncFailure } = await import('./relay-registry-sync.js');
+    expect(isExpectedSyncFailure(new Error('Node daemon update is in progress'))).toBe(true);
+    expect(isExpectedSyncFailure(new Error('Relay policy revision 412 has not been durably acknowledged'))).toBe(true);
+  });
 });

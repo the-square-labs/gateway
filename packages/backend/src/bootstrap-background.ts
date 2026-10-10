@@ -87,6 +87,7 @@ import { NodeRegistryService } from '@/services/node-registry.service.js';
 import { ReadModelCoordinator } from '@/services/read-model-coordinator.service.js';
 import { RelayPolicyService } from '@/services/relay-policy.service.js';
 import { RelayPoolService } from '@/services/relay-pool.service.js';
+import { isExpectedSyncFailure } from '@/services/relay-registry-sync.js';
 import { RelaySupervisorService } from '@/services/relay-supervisor.service.js';
 import { ResourceSnapshotStore } from '@/services/resource-snapshot.store.js';
 import { SchedulerService } from '@/services/scheduler.service.js';
@@ -296,7 +297,17 @@ export async function initializeBackgroundServices(): Promise<void> {
   ).unref?.();
   if (relayPolicyService) {
     scheduler.registerInterval('relay-policy-sync', 30_000, () =>
-      relayPolicyService!.reconcileAndSync().then(() => undefined)
+      relayPolicyService!
+        .reconcileAndSync()
+        .then(() => undefined)
+        .catch((error) => {
+          // The local relay is away (stopped, restarting, Gateway started before it): its outage is reported on its
+          // own, and this job runs again in 30 s (stand rc.9, O-1: ERROR "Name resolution failed for dns:relay").
+          if (!isExpectedSyncFailure(error)) throw error;
+          logger.debug('Relay policy sync waits for the local relay', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        })
     );
     scheduler.registerInterval('relay-grant-refresh', 15 * 60 * 1000, () =>
       relayPolicyService!.refreshAllNodeGrantsIfDue().then(() => undefined)

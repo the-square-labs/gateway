@@ -44,7 +44,11 @@ export function withinNodeSyncBound(sync: Promise<void>, nodeId: string): Promis
 export function isExpectedSyncFailure(error: unknown): boolean {
   if (isNodeConnectionError(error)) return true;
   const message = error instanceof Error ? error.message : String(error);
-  return /Name resolution failed for target dns:|^14 UNAVAILABLE:|ECONNREFUSED/.test(message);
+  // Also a node whose daemon is being updated (it is synced when its new daemon connects), and grants waiting for the
+  // local relay to apply a new policy revision (a Relay Pool update changes it): stand rc.9, O-1.
+  return /Name resolution failed for target dns:|^14 UNAVAILABLE:|ECONNREFUSED|daemon update is in progress|Relay policy revision \d+ has not been durably acknowledged/i.test(
+    message
+  );
 }
 
 export class RegistrySyncFailureLog {
