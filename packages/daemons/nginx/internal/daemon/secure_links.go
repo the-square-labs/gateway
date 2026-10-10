@@ -20,11 +20,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/wiolett-industries/gateway/daemon-shared/connector"
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 	"github.com/wiolett-industries/gateway/daemon-shared/listenerkeep"
 	"github.com/wiolett-industries/gateway/daemon-shared/logepisode"
 	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
+	"github.com/wiolett-industries/gateway/daemon-shared/relaylane"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -54,6 +56,15 @@ type nginxRelayTunnel struct {
 	client   relayv1.TunnelBrokerClient
 	targetID string
 	active   atomic.Int64
+	// dataOnly: a lane the daemon opened beyond the bundle's lanes for tunnels alone (no lease gate watch), so its
+	// connection can be replaced when its TCP state collapsed or learned a much shorter round trip (relay_lanes.go).
+	// socket, origin, rotated, retiring and trigger serve that; retiring is under relayTunnelMu.
+	dataOnly bool
+	socket   *connector.LaneSocket
+	origin   *nginxRelayTunnel
+	rotated  bool
+	retiring bool
+	trigger  relaylane.Trigger
 }
 
 // connected reports a lane whose transport to its relay is up. A lane whose
@@ -895,6 +906,11 @@ func (p *NginxPlugin) SyncRelayGrants(command *pb.SyncRelayGrantsCommand) (strin
 }
 
 func (p *NginxPlugin) RelayTunnelLaneCount() int {
+	return p.leaseWatchLaneCount() + nginxDataOnlyLanes
+}
+
+// leaseWatchLaneCount is the bundle's lane count: the lanes that also watch the lease gates.
+func (p *NginxPlugin) leaseWatchLaneCount() int {
 	lanes := int(p.relayGrants.get().GetDataLanes())
 	if lanes < 1 {
 		return 4
@@ -1028,22 +1044,20 @@ func (p *NginxPlugin) RunRelayTunnels(ctx context.Context, conn *grpc.ClientConn
 
 func (p *NginxPlugin) RunRelayTargetTunnels(ctx context.Context, conn *grpc.ClientConn, _ string, relayInstanceID string) {
 	tunnel := &nginxRelayTunnel{ctx: ctx, conn: conn, client: relayv1.NewTunnelBrokerClient(conn), targetID: relayInstanceID}
+	tunnel.origin = tunnel
+	if lane, ok := nginxLaneDialers.Load(conn); ok && lane.(nginxLaneDialer).index >= p.leaseWatchLaneCount() {
+		tunnel.dataOnly, tunnel.socket = true, connector.LaneSocketOf(conn)
+		go p.rotateRelayLane(ctx, tunnel)
+	}
 	p.relayTunnelMu.Lock()
 	p.relayTunnels = append(p.relayTunnels, tunnel)
 	p.relayTunnelMu.Unlock()
-	p.logger.Debug("proxy secure-link relay lane ready")
-	if p.availabilityLease != nil {
+	p.logger.Debug("proxy secure-link relay lane ready", "data_only", tunnel.dataOnly)
+	if p.availabilityLease != nil && !tunnel.dataOnly {
 		go p.availabilityLease.runForTarget(ctx, conn, relayInstanceID)
 	}
 	<-ctx.Done()
-	p.relayTunnelMu.Lock()
-	for index, candidate := range p.relayTunnels {
-		if candidate == tunnel {
-			p.relayTunnels = append(p.relayTunnels[:index], p.relayTunnels[index+1:]...)
-			break
-		}
-	}
-	p.relayTunnelMu.Unlock()
+	p.removeRelayLane(tunnel)
 }
 
 func (p *NginxPlugin) openProxySecureLink(linkID string, connection net.Conn) {
@@ -1295,21 +1309,30 @@ func (p *NginxPlugin) relayRTTFunc() func(string) (time.Duration, bool) {
 	return relaybridge.Latency.RTT
 }
 
-// selectRelayTunnel picks the least busy connected lane to the relay, or the
-// least busy lane while none is connected.
+// selectRelayTunnel picks the lane for a new tunnel: the least busy connected data-only lane, whose connection can be
+// replaced (relay_lanes.go); otherwise the least busy connected lane, or the least busy lane while none is connected.
+// Retiring lanes take none.
 func (p *NginxPlugin) selectRelayTunnel(targetID string) *nginxRelayTunnel {
 	p.relayTunnelMu.Lock()
 	defer p.relayTunnelMu.Unlock()
 	var selected *nginxRelayTunnel
-	selectedConnected := false
 	for _, tunnel := range p.relayTunnels {
-		if tunnel.targetID != targetID {
-			continue
+		if tunnel.targetID == targetID && tunnel.dataOnly && !tunnel.retiring && tunnel.connected() &&
+			(selected == nil || tunnel.active.Load() < selected.active.Load()) {
+			selected = tunnel
 		}
-		connected := tunnel.connected()
-		if selected == nil || (connected && !selectedConnected) ||
-			(connected == selectedConnected && tunnel.active.Load() < selected.active.Load()) {
-			selected, selectedConnected = tunnel, connected
+	}
+	if selected == nil {
+		selectedConnected := false
+		for _, tunnel := range p.relayTunnels {
+			if tunnel.targetID != targetID || tunnel.retiring {
+				continue
+			}
+			connected := tunnel.connected()
+			if selected == nil || (connected && !selectedConnected) ||
+				(connected == selectedConnected && tunnel.active.Load() < selected.active.Load()) {
+				selected, selectedConnected = tunnel, connected
+			}
 		}
 	}
 	if selected != nil {
@@ -1354,6 +1377,11 @@ func (p *NginxPlugin) openProxySecureLinkOnTunnel(ownerKind, linkID string, conn
 	first, err := stream.Recv()
 	if err != nil {
 		return openFailure(err), failedWith("ready", err)
+	}
+	if tunnel.socket != nil {
+		if header, headerErr := stream.Header(); headerErr == nil {
+			tunnel.trigger.NoteHeader(header)
+		}
 	}
 	if first.GetReady() == nil {
 		code := "unexpected_frame"

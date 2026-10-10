@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/wiolett-industries/gateway/daemon-shared/connector"
-	"github.com/wiolett-industries/gateway/daemon-shared/slowstart"
+	"github.com/wiolett-industries/gateway/daemon-shared/relaylane"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -42,55 +42,9 @@ func TestSourceLanePrefersExtraLanes(t *testing.T) {
 	}
 }
 
-// A lane is rotated when its own sending side collapsed, when the relay says
-// its side did, or when its round trip under bulk data grew far beyond the
-// one it learned on; not for a round trip measured on small writes.
-func TestLaneRotateReason(t *testing.T) {
-	ms := func(d int) uint32 { return uint32(d * 1000) }
-	lane := &relaySourceLane{}
-	state := func(sent, received uint64, rttMs, rcvRTTMs int) slowstart.State {
-		return slowstart.State{SlowStartThreshold: slowstart.InfiniteThreshold, BytesAcked: sent, BytesReceived: received,
-			RTTUs: ms(rttMs), RcvRTTUs: ms(rcvRTTMs)}
-	}
-	if why := laneRotateReason(lane, state(1000, 1000, 1, 1), true); why != "" {
-		t.Fatalf("first look: %q", why)
-	}
-	// A LAN download: the lane learns the receiver's 1 ms, not its own 40 ms (delayed acks of its small writes).
-	if why := laneRotateReason(lane, state(2000, 1000+laneBulkBytes, 40, 1), true); why != "" || lane.bulkRTT != time.Millisecond {
-		t.Fatalf("LAN bulk: %q, learned %v", why, lane.bulkRTT)
-	}
-	// Small writes with a 60 ms round trip: nothing.
-	if why := laneRotateReason(lane, state(3000, 2000+laneBulkBytes, 60, 60), true); why != "" {
-		t.Fatalf("small writes: %q", why)
-	}
-	// A download at 60 ms: the round trip grew.
-	if why := laneRotateReason(lane, state(4000, 2000+3*laneBulkBytes, 90, 60), true); why != "round_trip_grew" {
-		t.Fatalf("bulk after the round trip grew: %q", why)
-	}
-	upload := &relaySourceLane{}
-	laneRotateReason(upload, state(1000, 1000, 1, 0), true)
-	laneRotateReason(upload, state(1000+laneBulkBytes, 1000, 1, 0), true)
-	if why := laneRotateReason(upload, state(1000+3*laneBulkBytes, 1000, 60, 0), true); why != "round_trip_grew" {
-		t.Fatalf("upload after the round trip grew: %q", why)
-	}
-	collapsed := slowstart.State{SlowStartThreshold: 7, RTTUs: ms(60)}
-	if why := laneRotateReason(&relaySourceLane{}, collapsed, true); why != "collapsed" {
-		t.Fatalf("collapsed sender: %q", why)
-	}
-	lan := slowstart.State{SlowStartThreshold: 7, RTTUs: ms(1)}
-	if why := laneRotateReason(&relaySourceLane{}, lan, true); why != "" {
-		t.Fatalf("a small threshold on a LAN: %q", why)
-	}
-	hinted := &relaySourceLane{}
-	hinted.hinted.Store(true)
-	if why := laneRotateReason(hinted, slowstart.State{}, false); why != "relay_collapsed" {
-		t.Fatalf("relay's word: %q", why)
-	}
-}
-
 // A rotation puts the new connection in the lane's place, keeps the old one
 // out of selection until its tunnels ended, and closes only connections the
-// router dialled; a lane rotates at most once per laneRotateEvery.
+// router dialled; a lane rotates at most once per relaylane.Every.
 func TestRotateLaneReplacesTheConnection(t *testing.T) {
 	router, lanes := testLaneRouter(1)
 	old := lanes[0]
@@ -128,9 +82,9 @@ func TestRotateLaneReplacesTheConnection(t *testing.T) {
 	// The replacement collapses too, at once: its slot rotated a moment ago.
 	now := time.Now()
 	router.laneRotatedAt = map[*relaySourceLane]time.Time{old: now}
-	replacement.hinted.Store(true)
-	if lane, _ := router.laneToRotate(now.Add(laneRotateSpacing)); lane != nil {
-		t.Fatal("a lane rotated twice within laneRotateEvery")
+	replacement.trigger.NoteHeader(map[string][]string{connector.LaneRenewHeader: {"1"}})
+	if lane, _ := router.laneToRotate(now.Add(relaylane.Spacing)); lane != nil {
+		t.Fatal("a lane rotated twice within relaylane.Every")
 	}
 	router.removeLane(old)
 	if len(router.extraLanes) != 0 || replacement.conn.GetState().String() != "SHUTDOWN" {

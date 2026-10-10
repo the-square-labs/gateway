@@ -12,6 +12,7 @@ import (
 	"github.com/wiolett-industries/gateway/daemon-shared/handover"
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
+	"github.com/wiolett-industries/gateway/daemon-shared/relaylane"
 	"github.com/wiolett-industries/gateway/daemon-shared/relayresume"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 	"google.golang.org/grpc"
@@ -520,7 +521,7 @@ func (p *DockerPlugin) relayStreamStats() *pb.RelayStreamStats {
 		MigrationStallP50Ms:     uint32(source.StallP50.Milliseconds()),
 		MigrationStallP95Ms:     uint32(source.StallP95.Milliseconds()),
 		ResumeRefusedTotal:      target.Refused,
-		LaneRotationsTotal:      laneRotations.Load(),
+		LaneRotationsTotal:      relaylane.Rotations.Load(),
 		LaneMovesTotal:          source.LaneMoves,
 	}
 	relays := make([]string, 0, len(source.ByRelay))

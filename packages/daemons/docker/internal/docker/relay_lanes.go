@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/wiolett-industries/gateway/daemon-shared/connector"
+	"github.com/wiolett-industries/gateway/daemon-shared/relaylane"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
-	"github.com/wiolett-industries/gateway/daemon-shared/slowstart"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
 )
@@ -39,12 +39,8 @@ type relaySourceLane struct {
 	// Rotation state, under the router's lanesMu: retiring lanes take no tunnels; rotatedAt is when the lane's slot
 	// (origin) was last rotated.
 	retiring bool
-	// Trigger state, owned by the rotation loop: bulkRTT is the shortest round trip seen while the lane carried bulk
-	// data (0: none yet), lastSent and lastReceived the socket's byte counts at the last look.
-	bulkRTT                time.Duration
-	lastSent, lastReceived uint64
-	// hinted: the relay said its sending side of this connection collapsed (connector.LaneRenewHeader).
-	hinted atomic.Bool
+	// trigger decides when the lane's connection is replaced (relaylane).
+	trigger relaylane.Trigger
 }
 
 func (l *relaySourceLane) connected() bool {
@@ -65,7 +61,7 @@ func (l *relaySourceLane) tunnelContext(parent context.Context) (context.Context
 var laneDialers sync.Map // *grpc.ClientConn -> func(context.Context) (*grpc.ClientConn, error)
 
 // RelayLaneDialer implements lifecycle.RelayLaneDialerPlugin.
-func (p *DockerPlugin) RelayLaneDialer(conn *grpc.ClientConn, dial func(context.Context) (*grpc.ClientConn, error)) {
+func (p *DockerPlugin) RelayLaneDialer(conn *grpc.ClientConn, _ int, dial func(context.Context) (*grpc.ClientConn, error)) {
 	laneDialers.Store(conn, dial)
 }
 
@@ -151,36 +147,15 @@ func (r *relayTunnelRouter) sourceLane() *relaySourceLane {
 
 // noteLaneHint records the relay's word (a tunnel's response header) that its sending side of lane collapsed.
 func (r *relayTunnelRouter) noteLaneHint(lane *relaySourceLane, header map[string][]string) {
-	if lane != nil && lane.socket != nil && len(header[connector.LaneRenewHeader]) > 0 {
-		lane.hinted.Store(true)
+	if lane != nil && lane.socket != nil {
+		lane.trigger.NoteHeader(header)
 	}
 }
-
-const (
-	// laneRotateCheck is how often the lanes' TCP state is looked at.
-	laneRotateCheck = 250 * time.Millisecond
-	// laneRotateEvery bounds the rotations of one lane: a new connection per lane at most this often.
-	laneRotateEvery = 10 * time.Minute
-	// laneRotateSpacing spaces the rotations of one relay's lanes: one at a time.
-	laneRotateSpacing = 2 * time.Second
-	// laneRotateDialTimeout bounds the dial of a replacement connection.
-	laneRotateDialTimeout = 15 * time.Second
-	// laneBulkBytes is how much a lane carries within one laneRotateCheck for its round trip to count as the one it
-	// learned its congestion state on (an ack of bulk data is not delayed; one of a lone small write may be).
-	laneBulkBytes = 256 << 10
-	// laneRTTGrowth and laneRTTGrowthMin: a lane whose round trip under bulk data grew this far beyond the one it
-	// learned on is rotated.
-	laneRTTGrowth    = 4
-	laneRTTGrowthMin = 10 * time.Millisecond
-)
-
-// laneRotations and the lane moves of the RSv1 manager are reported in health (relay stream stats).
-var laneRotations atomic.Uint64
 
 // rotateLanes looks at the extra lanes' TCP state and rotates a lane whose congestion state is no longer worth
 // keeping (see relaySourceLane), and closes rotated-out connections once their last tunnel ended.
 func (r *relayTunnelRouter) rotateLanes(ctx context.Context) {
-	ticker := time.NewTicker(laneRotateCheck)
+	ticker := time.NewTicker(relaylane.Check)
 	defer ticker.Stop()
 	defer r.closeRotatedLanes()
 	for {
@@ -196,53 +171,13 @@ func (r *relayTunnelRouter) rotateLanes(ctx context.Context) {
 	}
 }
 
-// laneRotateReason decides from a lane's TCP state whether it is rotated; it keeps the lane's trigger state. Owned
-// by the rotation loop. The lane's round trip is read where bulk data flows: the sender's smoothed round trip while
-// the lane sends bulk, the receiver's estimate while it receives bulk (the acks it sends meanwhile are small writes
-// whose round trip the peer's delayed acks inflate).
-func laneRotateReason(lane *relaySourceLane, state slowstart.State, known bool) string {
-	if lane.hinted.Load() {
-		return "relay_collapsed"
-	}
-	if !known {
-		return ""
-	}
-	if state.Collapsed() {
-		return "collapsed"
-	}
-	sent, received := state.BytesAcked-lane.lastSent, state.BytesReceived-lane.lastReceived
-	first := lane.lastSent == 0 && lane.lastReceived == 0
-	lane.lastSent, lane.lastReceived = state.BytesAcked, state.BytesReceived
-	if first {
-		return ""
-	}
-	var rttUs uint32
-	switch {
-	case sent >= laneBulkBytes && state.RTTUs != 0:
-		rttUs = state.RTTUs
-	case received >= laneBulkBytes && state.RcvRTTUs != 0:
-		rttUs = state.RcvRTTUs
-	default:
-		return ""
-	}
-	rtt := time.Duration(rttUs) * time.Microsecond
-	if lane.bulkRTT == 0 || rtt < lane.bulkRTT {
-		lane.bulkRTT = rtt
-		return ""
-	}
-	if rtt >= laneRTTGrowth*lane.bulkRTT && rtt >= lane.bulkRTT+laneRTTGrowthMin {
-		return "round_trip_grew"
-	}
-	return ""
-}
-
 func (r *relayTunnelRouter) laneToRotate(now time.Time) (*relaySourceLane, string) {
 	r.lanesMu.Lock()
 	if r.laneRotatedAt == nil {
 		r.laneRotatedAt = map[*relaySourceLane]time.Time{}
 	}
 	lanes := slices.Clone(r.extraLanes)
-	busy := r.rotating || now.Sub(r.lastRotation) < laneRotateSpacing
+	busy := r.rotating || now.Sub(r.lastRotation) < relaylane.Spacing
 	r.lanesMu.Unlock()
 	var chosen *relaySourceLane
 	reason := ""
@@ -251,12 +186,12 @@ func (r *relayTunnelRouter) laneToRotate(now time.Time) (*relaySourceLane, strin
 			continue
 		}
 		state, known := lane.socket.State()
-		why := laneRotateReason(lane, state, known)
+		why := lane.trigger.Reason(state, known)
 		if why == "" || chosen != nil || busy {
 			continue
 		}
 		r.lanesMu.Lock()
-		recent := now.Sub(r.laneRotatedAt[lane.origin]) < laneRotateEvery && !r.laneRotatedAt[lane.origin].IsZero()
+		recent := now.Sub(r.laneRotatedAt[lane.origin]) < relaylane.Every && !r.laneRotatedAt[lane.origin].IsZero()
 		if !recent {
 			if _, ok := laneDialers.Load(lane.origin.conn); ok && lane.connected() {
 				chosen, reason = lane, why
@@ -267,7 +202,7 @@ func (r *relayTunnelRouter) laneToRotate(now time.Time) (*relaySourceLane, strin
 		r.lanesMu.Unlock()
 		if recent {
 			// Rotated not long ago: the relay's word is spent until the lane may rotate again.
-			lane.hinted.Store(false)
+			lane.trigger.ClearHint()
 		}
 	}
 	return chosen, reason
@@ -275,7 +210,7 @@ func (r *relayTunnelRouter) laneToRotate(now time.Time) (*relaySourceLane, strin
 
 // rotateLane dials a replacement for lane, puts it in lane's place and moves lane's resumable source streams to new
 // paths (the dialer picks the new connection: the old one takes no tunnels). The old connection carries its other
-// tunnels until they end. Runs in the rotation loop; the dial waits at most laneRotateDialTimeout.
+// tunnels until they end. Runs in the rotation loop; the dial waits at most relaylane.DialTimeout.
 func (r *relayTunnelRouter) rotateLane(ctx context.Context, lane *relaySourceLane, reason string, now time.Time) {
 	defer func() {
 		r.lanesMu.Lock()
@@ -286,7 +221,7 @@ func (r *relayTunnelRouter) rotateLane(ctx context.Context, lane *relaySourceLan
 	if !ok {
 		return
 	}
-	dialCtx, cancel := context.WithTimeout(ctx, laneRotateDialTimeout)
+	dialCtx, cancel := context.WithTimeout(ctx, relaylane.DialTimeout)
 	conn, err := value.(func(context.Context) (*grpc.ClientConn, error))(dialCtx)
 	cancel()
 	if err != nil {
@@ -307,7 +242,7 @@ func (r *relayTunnelRouter) rotateLane(ctx context.Context, lane *relaySourceLan
 	r.retiringLanes = append(r.retiringLanes, lane)
 	r.lanesMu.Unlock()
 	go keepLaneConnected(ctx, conn)
-	laneRotations.Add(1)
+	relaylane.Rotations.Add(1)
 	moved := 0
 	if sides := r.plugin.relayStreamsIfAny(); sides != nil {
 		for _, session := range sides.sources.Sessions() {

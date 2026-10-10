@@ -189,7 +189,7 @@ func runRelayPoolTarget(
 				if dialerPlugin, ok := plugin.(RelayLaneDialerPlugin); ok {
 					// Another connection like this lane, for a plugin that replaces a lane's connection while it runs.
 					dialTarget, dialAddresses := target, addresses
-					dialerPlugin.RelayLaneDialer(conn, func(dialCtx context.Context) (*grpc.ClientConn, error) {
+					dialerPlugin.RelayLaneDialer(conn, len(connections)-1, func(dialCtx context.Context) (*grpc.ClientConn, error) {
 						if len(dialAddresses) == 0 {
 							return connector.ConnectLaneWithRetry(dialCtx)
 						}

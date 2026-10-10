@@ -54,11 +54,16 @@ type NginxPlugin struct {
 	pagesRuntimeConfigAvailable bool
 	relayTunnelMu               sync.Mutex
 	relayTunnels                []*nginxRelayTunnel
-	relaySelection              uint64
-	configWatchMu               sync.Mutex
-	validatedConfigFingerprint  string
-	pendingConfigFingerprint    string
-	configFingerprintReady      bool
+	// Lane rotation (relay_lanes.go), under relayTunnelMu: lanes rotated out that still carry tunnels, and per relay
+	// and per data-only pool lane when they last rotated.
+	retiringRelayTunnels       []*nginxRelayTunnel
+	relayLaneRotations         map[string]*relayLaneRotation
+	relayLaneRotatedAt         map[*nginxRelayTunnel]time.Time
+	relaySelection             uint64
+	configWatchMu              sync.Mutex
+	validatedConfigFingerprint string
+	pendingConfigFingerprint   string
+	configFingerprintReady     bool
 	// registryListenersRelease releases kept registry sockets no sync claimed.
 	registryListenersRelease *time.Timer
 	registryListenersOnce    sync.Once

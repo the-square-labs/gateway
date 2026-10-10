@@ -13,6 +13,7 @@ import (
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 	"github.com/wiolett-industries/gateway/daemon-shared/logepisode"
 	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
+	"github.com/wiolett-industries/gateway/daemon-shared/relaylane"
 	"github.com/wiolett-industries/gateway/daemon-shared/relayresume"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 	"google.golang.org/grpc"
@@ -166,7 +167,7 @@ func (p *NginxPlugin) dialRelayStreamPath(ctx context.Context, ownerKind, linkID
 		if ctx.Err() != nil {
 			return relayresume.OpenedPath{}, ctx.Err()
 		}
-		if request.Avoid == "" && request.FromGeneration != 0 && candidate.GetRelayInstanceId() == request.FromRelay &&
+		if !request.NewPath && request.Avoid == "" && request.FromGeneration != 0 && candidate.GetRelayInstanceId() == request.FromRelay &&
 			candidate.GetAssignmentGeneration() == request.FromGeneration && p.relayLaneConnected(request.FromRelay) {
 			return relayresume.OpenedPath{}, relayresume.ErrStay
 		}
@@ -251,6 +252,11 @@ func openRelayStreamPath(ctx context.Context, tunnel *nginxRelayTunnel, grant *p
 	if err != nil {
 		return fail(err)
 	}
+	if tunnel.socket != nil {
+		if header, headerErr := stream.Header(); headerErr == nil {
+			tunnel.trigger.NoteHeader(header)
+		}
+	}
 	if first.GetReady() == nil {
 		code := "unexpected_frame"
 		if relayError := first.GetError(); relayError != nil {
@@ -263,7 +269,7 @@ func openRelayStreamPath(ctx context.Context, tunnel *nginxRelayTunnel, grant *p
 	}
 	return relayresume.OpenedPath{
 		Stream: stream, Cancel: release, CloseSend: stream.CloseSend,
-		RelayID: tunnel.targetID, MaxFrame: int(first.GetReady().GetMaxFrameBytes()),
+		RelayID: tunnel.targetID, MaxFrame: int(first.GetReady().GetMaxFrameBytes()), Lane: tunnel,
 	}, nil
 }
 
@@ -290,7 +296,7 @@ func (p *NginxPlugin) bridgeRelayStream(ownerKind, linkID string, connection net
 	}
 	first := relayresume.OpenedPath{
 		Stream: stream, Cancel: relayStreamPathRelease(tunnel, cancel), CloseSend: stream.CloseSend,
-		RelayID: tunnel.targetID, MaxFrame: maxFrame, Generation: generation,
+		RelayID: tunnel.targetID, MaxFrame: maxFrame, Generation: generation, Lane: tunnel,
 	}
 	session, err := p.relayStreams.NewSource(config, first)
 	if err != nil {
@@ -458,6 +464,8 @@ func relayStreamStatsReport(stats relayresume.SourceStats) *pb.RelayStreamStats 
 		UnackedBytes:            stats.Unacked,
 		MigrationStallP50Ms:     uint32(stats.StallP50.Milliseconds()),
 		MigrationStallP95Ms:     uint32(stats.StallP95.Milliseconds()),
+		LaneRotationsTotal:      relaylane.Rotations.Load(),
+		LaneMovesTotal:          stats.LaneMoves,
 	}
 	for relayID, counts := range stats.ByRelay {
 		report.ByRelay = append(report.ByRelay, &pb.RelayStreamRelaySessions{RelayInstanceId: relayID, Resumable: counts[0], Legacy: counts[1]})
