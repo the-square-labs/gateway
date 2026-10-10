@@ -322,6 +322,7 @@ export interface DashboardBootstrap {
     nodes: NavigationAttentionSeverity | null;
     "proxy-hosts": NavigationAttentionSeverity | null;
     docker: NavigationAttentionSeverity | null;
+    "status-page": NavigationAttentionSeverity | null;
   };
 }
 

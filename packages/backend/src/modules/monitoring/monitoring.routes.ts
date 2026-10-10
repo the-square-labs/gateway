@@ -28,6 +28,7 @@ import { CAService } from '@/modules/pki/ca.service.js';
 import { CertService } from '@/modules/pki/cert.service.js';
 import { ProxyService } from '@/modules/proxy/proxy.service.js';
 import { SSLService } from '@/modules/ssl/ssl.service.js';
+import { StatusPageService } from '@/modules/status-page/status-page.service.js';
 import { DaemonUpdateService } from '@/services/daemon-update.service.js';
 import { NginxCertificateDistributionService } from '@/services/nginx-certificate-distribution.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
@@ -61,7 +62,11 @@ import {
   proxyLogStreamRoute,
 } from './monitoring.docs.js';
 import { MonitoringService } from './monitoring.service.js';
-import { healthNavigationAttention, nodeNavigationAttention } from './navigation-attention.js';
+import {
+  healthNavigationAttention,
+  nodeNavigationAttention,
+  statusPageNavigationAttention,
+} from './navigation-attention.js';
 import { subscribeNginxHostLogs } from './nginx-log-subscriptions.js';
 
 export const monitoringRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
@@ -417,6 +422,17 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
     canViewNodes && hasScope(scopes, 'admin:update') && request.showUpdateNotifications
       ? container.resolve(DaemonUpdateService).getCachedStatus()
       : Promise.resolve([]);
+  // Active incidents of an enabled status page give its sidebar item a dot.
+  const statusPageIncidentsPromise =
+    hasScope(scopes, 'status-page:view') && container.isRegistered(StatusPageService)
+      ? (async () => {
+          const statusPage = container.resolve(StatusPageService);
+          if (!(await statusPage.getConfig()).enabled) return [];
+          return statusPage.listIncidents({ status: 'active', limit: 200 });
+        })()
+          // Optional indicator: a failing read must not take the dashboard down.
+          .catch(() => [])
+      : Promise.resolve([]);
   const dockerNavigationHealthPromise = hasScopeBase(scopes, 'docker:containers:view')
     ? container
         .resolve(DockerHealthCheckService)
@@ -652,6 +668,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
     dockerNavigationHealth,
     managedCertificates,
     license,
+    statusPageIncidents,
   ] = await Promise.all([
     statsPromise,
     healthPromise,
@@ -675,6 +692,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
     dockerNavigationHealthPromise,
     managedCertificatesPromise,
     licensePromise,
+    statusPageIncidentsPromise,
   ]);
   const now = Date.now();
   const nodeCardIds = nodeResponse.data
@@ -889,6 +907,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
           health.map((host) => ({ enabled: host.enabled, healthStatus: host.healthStatus }))
         ),
         docker: healthNavigationAttention(dockerNavigationHealth),
+        'status-page': statusPageNavigationAttention(statusPageIncidents),
       },
     },
   });

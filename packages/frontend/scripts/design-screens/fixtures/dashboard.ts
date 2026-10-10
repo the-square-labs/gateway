@@ -175,5 +175,10 @@ export const dashboardBootstrap = (request: {
       sidebar: pinned(request.pins?.sidebar),
     },
     attention: { severity: "warning", notices: [{ id: "node-offline", severity: "warning" }] },
-    navigationAttention: { nodes: "warning", "proxy-hosts": "warning", docker: null },
+    navigationAttention: {
+      nodes: "warning",
+      "proxy-hosts": "warning",
+      docker: null,
+      "status-page": null,
+    },
   }) as unknown as DashboardBootstrap;

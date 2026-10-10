@@ -4,7 +4,14 @@ export function navigationAttentionForItem(
   snapshot: DashboardBootstrap | null,
   itemId: string
 ): NavigationAttentionSeverity | null {
-  if (itemId !== "nodes" && itemId !== "proxy-hosts" && itemId !== "docker") return null;
+  if (
+    itemId !== "nodes" &&
+    itemId !== "proxy-hosts" &&
+    itemId !== "docker" &&
+    itemId !== "status-page"
+  ) {
+    return null;
+  }
   return snapshot?.navigationAttention?.[itemId] ?? null;
 }
 
@@ -14,6 +21,11 @@ export function navigationAttentionLabel(
 ): string {
   if (itemId === "nodes") {
     return severity === "critical" ? "Some nodes are offline" : "Some nodes have pending updates";
+  }
+  if (itemId === "status-page") {
+    return severity === "critical"
+      ? "The status page has a critical incident"
+      : "The status page has an active incident";
   }
   if (itemId === "proxy-hosts") {
     return severity === "critical" ? "Some routes are offline" : "Some routes are degraded";

@@ -14,3 +14,13 @@ export function nodeNavigationAttention(offlineCount: number, hasPendingUpdates:
   if (hasPendingUpdates) return 'warning';
   return null;
 }
+
+/** Active status page incidents: a critical one is red, any other active one is yellow. */
+export function statusPageNavigationAttention(
+  incidents: Array<{ status?: unknown; severity?: unknown }>
+): NavigationAttentionSeverity {
+  const active = incidents.filter((incident) => incident.status === 'active');
+  if (active.some((incident) => incident.severity === 'critical')) return 'critical';
+  if (active.length > 0) return 'warning';
+  return null;
+}

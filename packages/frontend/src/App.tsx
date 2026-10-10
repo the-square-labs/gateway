@@ -1228,8 +1228,12 @@ export function RealtimeBridge() {
     ) {
       return;
     }
-    return eventStream.subscribe("status-page.changed", invalidateUIBootstrap);
-  }, [invalidateUIBootstrap, user]);
+    // The dashboard snapshot carries the Status Page sidebar dot for active incidents.
+    const unsubscribe = [invalidateUIBootstrap, invalidateDashboardBootstrap].map((invalidate) =>
+      eventStream.subscribe("status-page.changed", invalidate)
+    );
+    return () => unsubscribe.forEach((dispose) => dispose());
+  }, [invalidateDashboardBootstrap, invalidateUIBootstrap, user]);
 
   useEffect(() => {
     if (!user) return;
