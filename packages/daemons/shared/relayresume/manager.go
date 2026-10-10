@@ -46,6 +46,15 @@ type SourceConfig struct {
 	Key              func() (keyID string, key []byte, ok bool)
 	HalfCloseTimeout time.Duration
 	Dial             Dialer
+	// Wake, if set, returns a channel that closes when a relay path may have
+	// become available (a relay transport got ready, the assignment
+	// changed): a migration attempt that failed retries then instead of
+	// waiting out its backoff. Streams a daemon took over from its previous
+	// process fail their first attempts until the new process's relay
+	// connections are up; with the backoff alone (250 ms, 500 ms, 1 s) a
+	// pause grew from 0.4 s to 1.0-1.2 s whenever they took longer than the
+	// first step (stand rc.10 O-6: four nodes updated at once).
+	Wake func() <-chan struct{}
 	// Tag is the caller's (owner kind and id, for logs).
 	Tag any
 }
@@ -513,6 +522,12 @@ func (m *Manager) attempts(s *Session, unplanned bool, move plannedMove) (bool, 
 			request.FromRelay, request.FromGeneration = current.RelayID(), currentGeneration
 			request.NewPath = move.newPath
 		}
+		// Taken before the attempt, so a path that comes up while it fails
+		// is not missed.
+		var wake <-chan struct{}
+		if s.source.cfg.Wake != nil {
+			wake = s.source.cfg.Wake()
+		}
 		ok, to, err := m.attempt(s, unplanned, request)
 		if ok {
 			return true, to, nil
@@ -524,6 +539,8 @@ func (m *Manager) attempts(s *Session, unplanned bool, move plannedMove) (bool, 
 		timer := time.NewTimer(backoff + time.Duration(rand.Int64N(int64(backoff/4)+1)))
 		select {
 		case <-timer.C:
+		case <-wake:
+			timer.Stop()
 		case <-s.done:
 			timer.Stop()
 			return false, "", lastErr

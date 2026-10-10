@@ -188,6 +188,7 @@ func (p *DockerPlugin) SyncRelayGrants(command *pb.SyncRelayGrantsCommand) (stri
 		return "", err
 	}
 	p.reconcileRelayRegistrations()
+	p.relayPathWake.Fire()
 	// Resumable streams follow the bundle: off draining relays, ended when
 	// their route or endpoint is gone.
 	p.relayStreamsOnBundle()

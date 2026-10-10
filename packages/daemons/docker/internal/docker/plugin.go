@@ -87,6 +87,9 @@ type DockerPlugin struct {
 	// relayStability is since when each relay's transport has been up without a break: resumable streams return
 	// to a nearer relay only once it was stable for a while (relayresume.Returner).
 	relayStability relaybridge.RelayStability
+	// relayPathWake wakes resumable streams waiting to retry a move when a
+	// relay path may have become available (relayresume.SourceConfig.Wake).
+	relayPathWake relayresume.Signal
 	// relayRTT replaces relaybridge.Latency.RTT in tests.
 	relayRTT func(string) (time.Duration, bool)
 	// memberReadiness gates availability member endpoints on their workload

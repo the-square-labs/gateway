@@ -35,6 +35,10 @@ import (
 
 // NginxPlugin implements lifecycle.DaemonPlugin for the nginx daemon.
 type NginxPlugin struct {
+	// relayPathWake wakes resumable streams waiting to retry a move when a
+	// relay lane or assignment may have made a path available
+	// (relayresume.SourceConfig.Wake).
+	relayPathWake               relayresume.Signal
 	handoverOnce                sync.Once
 	shutdownOnce                sync.Once
 	cfg                         *config.Config

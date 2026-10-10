@@ -142,7 +142,8 @@ func (p *NginxPlugin) resumeConfig(ownerKind, linkID string, assignment *pb.Rela
 		Dial: func(ctx context.Context, request relayresume.DialRequest) (relayresume.OpenedPath, error) {
 			return p.dialRelayStreamPath(ctx, ownerKind, linkID, request)
 		},
-		Tag: relayStreamTag{ownerKind: ownerKind, linkID: linkID},
+		Wake: p.relayPathWake.Wait,
+		Tag:  relayStreamTag{ownerKind: ownerKind, linkID: linkID},
 	}, true
 }
 

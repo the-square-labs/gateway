@@ -73,6 +73,7 @@ func (r *relayTunnelRouter) addLane(conn *grpc.ClientConn) *relaySourceLane {
 	r.lanesMu.Lock()
 	defer r.lanesMu.Unlock()
 	r.extraLanes = append(r.extraLanes, lane)
+	r.plugin.relayPathWake.Fire()
 	return lane
 }
 

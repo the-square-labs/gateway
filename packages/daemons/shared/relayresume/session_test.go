@@ -143,6 +143,8 @@ type harness struct {
 	helloDelay atomic.Int64
 	backend    net.Listener
 	wg         sync.WaitGroup
+	// wake is the sources' SourceConfig.Wake (nil: none).
+	wake func() <-chan struct{}
 }
 
 func newHarness(t *testing.T, relays ...string) *harness {
@@ -276,7 +278,7 @@ func (h *harness) stream() (net.Conn, *Session) {
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	session, err := h.mgr.NewSource(SourceConfig{RouteID: "route-1", Dial: h.dialer,
+	session, err := h.mgr.NewSource(SourceConfig{RouteID: "route-1", Dial: h.dialer, Wake: h.wake,
 		Key: func() (string, []byte, bool) { return "v1", h.key, true }}, first)
 	if err != nil {
 		h.t.Fatal(err)
@@ -440,6 +442,46 @@ func TestSessionSameRelayComesBack(t *testing.T) {
 		relay.cut()
 		time.Sleep(700 * time.Millisecond)
 		relay.down.Store(false)
+	})
+	waitDone(t, session)
+	if session.State() != StateFinished {
+		t.Fatalf("state %s err %v", session.State(), session.Err())
+	}
+}
+
+// A stream whose move fails because no relay path is up retries as soon as its
+// source says one may be (SourceConfig.Wake), not after the rest of its backoff
+// (stand rc.10 O-6: streams a daemon took over waited 1.0-1.2 s for relay
+// connections that were up after 0.5 s).
+func TestUnplannedMoveRetriesWhenWoken(t *testing.T) {
+	h := newHarness(t, "relay-a")
+	var wake Signal
+	h.wake = wake.Wait
+	moved := make(chan time.Time, 8)
+	h.mgr.OnMigration = func(event MigrationEvent) {
+		if event.OK {
+			moved <- time.Now()
+		}
+	}
+	app, session := h.stream()
+	waitOpen(t, session)
+	echo(t, app, 2<<20, func() {
+		relay := h.relay("relay-a")
+		relay.down.Store(true)
+		relay.cut()
+		// Attempts at 0, ~0.28 and ~0.85 s fail; the next would come at ~2 s.
+		time.Sleep(1100 * time.Millisecond)
+		relay.down.Store(false)
+		woken := time.Now()
+		wake.Fire()
+		select {
+		case at := <-moved:
+			if took := at.Sub(woken); took > 300*time.Millisecond {
+				t.Errorf("moved %v after the wake", took)
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("not moved")
+		}
 	})
 	waitDone(t, session)
 	if session.State() != StateFinished {

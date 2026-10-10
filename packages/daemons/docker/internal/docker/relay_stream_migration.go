@@ -157,6 +157,7 @@ func (p *DockerPlugin) relaySourceConfig(tag relaySourceTag, assignment *pb.Rela
 		},
 		HalfCloseTimeout: time.Duration(assignment.GetStreamResume().GetHalfCloseTimeoutMs()) * time.Millisecond,
 		Dial:             p.relaySourceDialer(tag),
+		Wake:             p.relayPathWake.Wait,
 		Tag:              tag,
 	}
 }

@@ -328,6 +328,9 @@ func (r *relayTunnelRouter) watchTransport(ctx context.Context, conn *grpc.Clien
 		return
 	}
 	state := conn.GetState()
+	if state == connectivity.Ready {
+		r.plugin.relayPathWake.Fire()
+	}
 	for conn.WaitForStateChange(ctx, state) {
 		state = conn.GetState()
 		if state != connectivity.Ready {
@@ -337,6 +340,7 @@ func (r *relayTunnelRouter) watchTransport(ctx context.Context, conn *grpc.Clien
 		close(r.transportReady)
 		r.transportReady = make(chan struct{})
 		r.mu.Unlock()
+		r.plugin.relayPathWake.Fire()
 	}
 }
 

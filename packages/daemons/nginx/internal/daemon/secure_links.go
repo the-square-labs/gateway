@@ -893,6 +893,7 @@ func (p *NginxPlugin) SyncRelayGrants(command *pb.SyncRelayGrantsCommand) (strin
 	if err := p.relayGrants.sync(command); err != nil {
 		return "", err
 	}
+	p.relayPathWake.Fire()
 	if p.secureLinks != nil {
 		for _, assignment := range previous.Grants {
 			if assignment.Role == "connect" && assignment.OwnerKind == proxySecureLinkOwnerKind &&
@@ -1052,6 +1053,7 @@ func (p *NginxPlugin) RunRelayTargetTunnels(ctx context.Context, conn *grpc.Clie
 	p.relayTunnelMu.Lock()
 	p.relayTunnels = append(p.relayTunnels, tunnel)
 	p.relayTunnelMu.Unlock()
+	p.relayPathWake.Fire()
 	p.logger.Debug("proxy secure-link relay lane ready", "data_only", tunnel.dataOnly)
 	if p.availabilityLease != nil && !tunnel.dataOnly {
 		go p.availabilityLease.runForTarget(ctx, conn, relayInstanceID)
