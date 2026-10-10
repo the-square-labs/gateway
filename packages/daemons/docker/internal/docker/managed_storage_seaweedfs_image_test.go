@@ -53,44 +53,46 @@ type fakeImageStore struct {
 func (f *fakeImageStore) client(t *testing.T) *Client {
 	t.Helper()
 	cli, err := client.NewClientWithOpts(client.WithHost("tcp://docker.test:2375"), client.WithAPIVersion("1.47"),
-		client.WithHTTPClient(&http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-			f.mu.Lock()
-			defer f.mu.Unlock()
-			respond := func(status int, body string) (*http.Response, error) {
-				return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
-			}
-			path := strings.TrimPrefix(r.URL.Path, "/v1.47")
-			switch {
-			case path == "/images/json":
-				return respond(http.StatusOK, `[]`)
-			case strings.HasPrefix(path, "/images/") && strings.HasSuffix(path, "/json"):
-				reference := strings.TrimSuffix(strings.TrimPrefix(path, "/images/"), "/json")
-				if f.local[reference] {
-					return respond(http.StatusOK, `{"Id":"sha256:1"}`)
-				}
-				return respond(http.StatusNotFound, `{"message":"No such image"}`)
-			case path == "/images/create":
-				reference := r.URL.Query().Get("fromImage")
-				if tag := r.URL.Query().Get("tag"); tag != "" {
-					if strings.HasPrefix(tag, "sha256:") {
-						reference += "@" + tag
-					} else {
-						reference += ":" + tag
-					}
-				}
-				f.pulls = append(f.pulls, reference)
-				if !f.pullable[reference] {
-					return respond(http.StatusNotFound, `{"message":"manifest unknown"}`)
-				}
-				f.local[reference] = true
-				return respond(http.StatusOK, `{"status":"Downloaded"}`)
-			}
-			return respond(http.StatusNotFound, `{"message":"unexpected `+r.Method+" "+path+`"}`)
-		})}))
+		client.WithHTTPClient(&http.Client{Transport: roundTripFunc(f.serve)}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	return &Client{cli: cli}
+}
+
+func (f *fakeImageStore) serve(r *http.Request) (*http.Response, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	respond := func(status int, body string) (*http.Response, error) {
+		return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}, nil
+	}
+	path := strings.TrimPrefix(r.URL.Path, "/v1.47")
+	switch {
+	case path == "/images/json":
+		return respond(http.StatusOK, `[]`)
+	case strings.HasPrefix(path, "/images/") && strings.HasSuffix(path, "/json"):
+		reference := strings.TrimSuffix(strings.TrimPrefix(path, "/images/"), "/json")
+		if f.local[reference] {
+			return respond(http.StatusOK, `{"Id":"sha256:1"}`)
+		}
+		return respond(http.StatusNotFound, `{"message":"No such image"}`)
+	case path == "/images/create":
+		reference := r.URL.Query().Get("fromImage")
+		if tag := r.URL.Query().Get("tag"); tag != "" {
+			if strings.HasPrefix(tag, "sha256:") {
+				reference += "@" + tag
+			} else {
+				reference += ":" + tag
+			}
+		}
+		f.pulls = append(f.pulls, reference)
+		if !f.pullable[reference] {
+			return respond(http.StatusNotFound, `{"message":"manifest unknown"}`)
+		}
+		f.local[reference] = true
+		return respond(http.StatusOK, `{"status":"Downloaded"}`)
+	}
+	return respond(http.StatusNotFound, `{"message":"unexpected `+r.Method+" "+path+`"}`)
 }
 
 func TestEnsureSeaweedFSImagePrefersTheGatewayBuild(t *testing.T) {

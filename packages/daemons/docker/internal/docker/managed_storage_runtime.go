@@ -453,11 +453,16 @@ func (m *managedStorageManager) records() (records []managedStorageRecord, unrea
 	return records, unreadable, nil
 }
 
+// reconcile runs in every new daemon process (a cold start and the process an
+// update hands over to alike) before it serves Gateway. The SeaweedFS
+// storages it brings up are then moved to the image this daemon pins, in the
+// background (see moveStoragesToPinnedImage).
 func (m *managedStorageManager) reconcile(ctx context.Context) error {
 	entries, err := os.ReadDir(filepath.Join(m.root, "storage", "records"))
 	if err != nil {
 		return err
 	}
+	var started []string
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
@@ -496,6 +501,12 @@ func (m *managedStorageManager) reconcile(ctx context.Context) error {
 		if err := m.saveRecord(record); err != nil {
 			return err
 		}
+		if record.engine() == managedStorageEngineSeaweedFS {
+			started = append(started, id)
+		}
+	}
+	if len(started) > 0 {
+		go m.moveStoragesToPinnedImage(context.WithoutCancel(ctx), started)
 	}
 	return nil
 }
