@@ -29,7 +29,7 @@
     "test:release-metadata": "node --test scripts/verify-continuity-grant.test.mjs",
     "test:release-upgrade": "scripts/release-upgrade-e2e.sh",
     "lint": "pnpm --filter frontend lint && pnpm --filter backend lint && pnpm --filter @sqgateway/logger lint && pnpm --filter @sqgateway/inference lint && pnpm --filter @sqgateway/update-service lint && pnpm run lint:daemon && pnpm run lint:relay",
-    "lint:daemon": "scripts/sync-update-trust-anchor.sh && cd packages/daemons && go vet ./docker/... ./lease-watchdog/... ./monitoring/... ./nginx/... ./relay/... ./shared/... ./secure-link-connector/...",
+    "lint:daemon": "scripts/check-go-modules.sh && cd packages/daemons && go vet ./docker/... ./lease-watchdog/... ./monitoring/... ./nginx/... ./relay/... ./shared/... ./secure-link-connector/...",
     "lint:relay": "cd packages/relay && go vet ./...",
     "typecheck": "nx run-many -t typecheck -p backend frontend status-page logging-sdk gateway-inference update-service",
     "typecheck:logging-sdk": "nx run logging-sdk:typecheck",
