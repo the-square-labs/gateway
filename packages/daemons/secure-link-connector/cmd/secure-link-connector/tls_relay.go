@@ -41,6 +41,12 @@ const (
 	tlsMaxCiphertext = tlsRecordPayload + 256
 	// tlsCloseNotifyWait bounds the close_notify a closing session sends, as crypto/tls does.
 	tlsCloseNotifyWait = 5 * time.Second
+	// tlsReadBuffer is how much ciphertext one read of the relayed stream takes; the records are opened in place or
+	// straight into the reader's buffer.
+	tlsReadBuffer = 256 * 1024
+	// tlsWriteBatch is how many records one write of the relayed stream carries (a pipe writes up to 256 KiB at a
+	// time): one syscall, not one per 16 KiB record.
+	tlsWriteBatch = 16
 )
 
 const (
@@ -150,6 +156,8 @@ type trafficKeys struct {
 	seq    uint64
 	aead   cipher.AEAD
 	iv     []byte
+	// nonceBuf is the per-record nonce (reused: one record at a time per direction).
+	nonceBuf [12]byte
 }
 
 func suiteHash(suite uint16) (func() hash.Hash, int, bool) {
@@ -201,11 +209,10 @@ func newTrafficKeys(suite uint16, secret []byte, seq uint64) (*trafficKeys, erro
 }
 
 func (k *trafficKeys) nonce() []byte {
-	nonce := append([]byte(nil), k.iv...)
-	var seq [8]byte
-	binary.BigEndian.PutUint64(seq[:], k.seq)
-	for i := range seq {
-		nonce[len(nonce)-8+i] ^= seq[i]
+	nonce := k.nonceBuf[:len(k.iv)]
+	copy(nonce, k.iv)
+	for i := range 8 {
+		nonce[len(nonce)-8+i] ^= byte(k.seq >> (56 - 8*i))
 	}
 	return nonce
 }
@@ -226,6 +233,7 @@ type relayTLS struct {
 
 	readMu     sync.Mutex
 	in         *trafficKeys
+	rbuf       []byte // the read buffer raw and plain live in
 	raw        []byte // bytes of the records not read yet
 	plain      []byte // plaintext not delivered yet
 	hand       []byte // a handshake message not complete yet
@@ -233,6 +241,7 @@ type relayTLS struct {
 
 	writeMu         sync.Mutex
 	out             *trafficKeys
+	wbuf            []byte // the records of one write
 	pending         []byte // ciphertext of records written in part
 	closeNotifySent bool
 	// sealedAhead: the first bytes of the next Write are already sealed in pending (a record written in part is not
@@ -268,36 +277,69 @@ func (t *relayTLS) SetWriteDeadline(deadline time.Time) error {
 	return t.conn.SetWriteDeadline(deadline)
 }
 
+// Read delivers the plaintext of as many records as p takes and the stream has; it waits for the stream only with
+// nothing to deliver.
 func (t *relayTLS) Read(p []byte) (int, error) {
 	t.readMu.Lock()
 	defer t.readMu.Unlock()
-	for len(t.plain) == 0 {
+	n := 0
+	for n < len(p) {
+		if len(t.plain) > 0 {
+			copied := copy(p[n:], t.plain)
+			n += copied
+			t.plain = t.plain[copied:]
+			if len(t.plain) == 0 {
+				t.plain = nil
+			}
+			continue
+		}
 		if t.readClosed {
+			if n > 0 {
+				return n, nil
+			}
 			return 0, io.EOF
 		}
 		record, ok, err := t.nextRecord()
 		if err != nil {
+			if n > 0 {
+				return n, nil
+			}
 			return 0, err
 		}
 		if !ok {
-			buffer := make([]byte, 32*1024)
-			n, err := t.conn.Read(buffer)
-			t.raw = append(t.raw, buffer[:n]...)
-			if n == 0 && err != nil {
+			if n > 0 {
+				return n, nil
+			}
+			if err := t.fill(); err != nil {
 				return 0, err
 			}
 			continue
 		}
-		if err := t.openRecord(record); err != nil {
-			return 0, err
+		delivered, err := t.openRecord(record, p[n:])
+		n += delivered
+		if err != nil {
+			return n, err
 		}
 	}
-	n := copy(p, t.plain)
-	t.plain = t.plain[n:]
-	if len(t.plain) == 0 {
-		t.plain = nil
-	}
 	return n, nil
+}
+
+// fill reads more of the stream after the records not read yet (moved to the front of the read buffer; nothing of
+// plain lives there then).
+func (t *relayTLS) fill() error {
+	if size := max(tlsReadBuffer, len(t.raw)+5+tlsMaxCiphertext); len(t.rbuf) < size {
+		t.rbuf = make([]byte, size)
+	}
+	kept := copy(t.rbuf, t.raw)
+	n, err := t.conn.Read(t.rbuf[kept:])
+	t.raw = t.rbuf[:kept+n]
+	if len(t.raw) == 0 {
+		t.raw = nil
+	}
+	if n == 0 && err != nil {
+		return err
+	}
+	return nil
 }
 
 // nextRecord takes the first whole record of raw.
@@ -320,18 +362,25 @@ func (t *relayTLS) nextRecord() ([]byte, bool, error) {
 	return record, true, nil
 }
 
-func (t *relayTLS) openRecord(record []byte) error {
+// openRecord opens one record: its application data straight into dst when it fits there (it returns how much it
+// delivered), else in place into plain.
+func (t *relayTLS) openRecord(record, dst []byte) (int, error) {
 	header, body := record[:5], record[5:]
 	switch header[0] {
 	case recordChangeCipherSpec:
-		return nil
+		return 0, nil
 	case recordApplicationData:
 	default:
-		return fmt.Errorf("tls: unexpected record type %d", header[0])
+		return 0, fmt.Errorf("tls: unexpected record type %d", header[0])
 	}
-	inner, err := t.in.aead.Open(nil, t.in.nonce(), body, header)
+	direct := len(dst) >= len(body)-t.in.aead.Overhead()
+	out := body[:0]
+	if direct {
+		out = dst[:0]
+	}
+	inner, err := t.in.aead.Open(out, t.in.nonce(), body, header)
 	if err != nil {
-		return errors.New("tls: bad record MAC")
+		return 0, errors.New("tls: bad record MAC")
 	}
 	t.in.seq++
 	end := len(inner)
@@ -339,28 +388,31 @@ func (t *relayTLS) openRecord(record []byte) error {
 		end--
 	}
 	if end == 0 {
-		return errors.New("tls: record without a content type")
+		return 0, errors.New("tls: record without a content type")
 	}
 	contentType, data := inner[end-1], inner[:end-1]
 	switch contentType {
 	case recordApplicationData:
-		t.plain = append(t.plain, data...)
+		if direct {
+			return len(data), nil
+		}
+		t.plain = data
 	case recordAlert:
 		if len(data) == 2 && data[1] == 0 {
 			t.readClosed = true
-			return nil
+			return 0, nil
 		}
 		if len(data) == 2 {
-			return fmt.Errorf("tls: remote error: alert %d", data[1])
+			return 0, fmt.Errorf("tls: remote error: alert %d", data[1])
 		}
-		return errors.New("tls: malformed alert")
+		return 0, errors.New("tls: malformed alert")
 	case recordHandshake:
 		t.hand = append(t.hand, data...)
-		return t.handshakeMessages()
+		return 0, t.handshakeMessages()
 	default:
-		return fmt.Errorf("tls: unexpected content type %d", contentType)
+		return 0, fmt.Errorf("tls: unexpected content type %d", contentType)
 	}
-	return nil
+	return 0, nil
 }
 
 // handshakeMessages handles the post-handshake messages: session tickets are not used, a KeyUpdate moves on to the
@@ -416,14 +468,29 @@ func (t *relayTLS) sendKeyUpdate() error {
 
 // seal protects one record with the connector's keys.
 func (t *relayTLS) seal(contentType byte, data []byte) []byte {
-	inner := make([]byte, 0, len(data)+1)
-	inner = append(inner, data...)
-	inner = append(inner, contentType)
-	header := []byte{recordApplicationData, 3, 3, 0, 0}
-	binary.BigEndian.PutUint16(header[3:], uint16(len(inner)+t.out.aead.Overhead()))
-	record := t.out.aead.Seal(header, t.out.nonce(), inner, header)
+	return t.sealAppend(nil, contentType, data)
+}
+
+// sealAppend appends one record protecting data to buf, sealed in place.
+func (t *relayTLS) sealAppend(buf []byte, contentType byte, data []byte) []byte {
+	overhead := t.out.aead.Overhead()
+	need := 5 + len(data) + 1 + overhead
+	if cap(buf)-len(buf) < need {
+		grown := make([]byte, len(buf), 2*cap(buf)+need)
+		copy(grown, buf)
+		buf = grown
+	}
+	start := len(buf)
+	buf = buf[:start+5+len(data)+1]
+	header := buf[start : start+5]
+	header[0], header[1], header[2] = recordApplicationData, 3, 3
+	binary.BigEndian.PutUint16(header[3:], uint16(len(data)+1+overhead))
+	inner := buf[start+5:]
+	copy(inner, data)
+	inner[len(data)] = contentType
+	sealed := t.out.aead.Seal(inner[:0], t.out.nonce(), inner, header)
 	t.out.seq++
-	return record
+	return buf[:start+5+len(sealed)]
 }
 
 // flushLocked writes what records were written in part; what it could not write stays pending.
@@ -453,13 +520,35 @@ func (t *relayTLS) Write(p []byte) (int, error) {
 	written := min(t.sealedAhead, len(p))
 	t.sealedAhead = 0
 	for written < len(p) {
-		chunk := p[written:min(len(p), written+tlsRecordPayload)]
-		t.pending = t.seal(recordApplicationData, chunk)
-		if err := t.flushLocked(); err != nil {
-			t.sealedAhead = len(chunk)
-			return written, err
+		// Up to tlsWriteBatch records in one write; recordEnds[i] is where record i ends in the batch.
+		var recordEnds [tlsWriteBatch]int
+		batch, records, start := t.wbuf[:0], 0, written
+		for written < len(p) && records < tlsWriteBatch {
+			chunk := p[written:min(len(p), written+tlsRecordPayload)]
+			batch = t.sealAppend(batch, recordApplicationData, chunk)
+			written += len(chunk)
+			recordEnds[records] = len(batch)
+			records++
 		}
-		written += len(chunk)
+		t.wbuf = batch
+		n, err := t.conn.Write(batch)
+		if err != nil {
+			// The records written whole count as written; the rest stays pending, sealed, for the writer to write
+			// again.
+			whole := start
+			for i := range records {
+				if recordEnds[i] > n {
+					break
+				}
+				whole = min(start+(i+1)*tlsRecordPayload, written)
+			}
+			t.pending = batch[n:]
+			if len(t.pending) == 0 {
+				t.pending = nil
+			}
+			t.sealedAhead = written - whole
+			return whole, err
+		}
 	}
 	return written, nil
 }

@@ -117,6 +117,10 @@ func (p *Pipe) copy(d side) bool {
 		p.stop.finish(d)
 		return false
 	}
+	// Between two plain sockets the bytes move in the kernel (splice_linux.go); the buffers below then only carry
+	// what a stop left pending.
+	spliced := newSplicer(source, destination)
+	defer spliced.close()
 	for {
 		for len(p.pending[d]) > 0 {
 			n, err := destination.Write(p.pending[d])
@@ -139,20 +143,34 @@ func (p *Pipe) copy(d side) bool {
 			pipeBulkBuffers.Put(bulk)
 			bulk, shrink = nil, false
 		}
-		buffer := small
-		if bulk != nil {
-			buffer = *bulk
-		}
-		n, err := source.Read(buffer)
-		if n > 0 {
-			p.pending[d] = buffer[:n]
-			switch {
-			case bulk == nil && n == len(buffer):
-				bulk = pipeBulkBuffers.Get().(*[]byte)
-			case bulk != nil && n < len(buffer)/4:
-				shrink = true
+		var n int
+		var err error
+		if spliced != nil {
+			err = spliced.run(&p.pending[d])
+			if len(p.pending[d]) > 0 {
+				// The destination stopped with bytes in the splicer's pipe: they are pending now, and a stop parks
+				// at writing them.
+				if park, retry := p.stop.stopped(err); park || retry {
+					continue
+				}
+				return fail()
 			}
-			continue
+		} else {
+			buffer := small
+			if bulk != nil {
+				buffer = *bulk
+			}
+			n, err = source.Read(buffer)
+			if n > 0 {
+				p.pending[d] = buffer[:n]
+				switch {
+				case bulk == nil && n == len(buffer):
+					bulk = pipeBulkBuffers.Get().(*[]byte)
+				case bulk != nil && n < len(buffer)/4:
+					shrink = true
+				}
+				continue
+			}
 		}
 		if err == nil {
 			continue
