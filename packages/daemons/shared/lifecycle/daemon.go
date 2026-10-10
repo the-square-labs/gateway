@@ -168,9 +168,10 @@ func (d *DaemonBase) Run(ctx context.Context) error {
 			// exponentially until a session is accepted again.
 			delay = backoff.next(d.sessionReceivedCommand, time.Since(startedAt))
 			log := d.logger.Warn
-			if connector.PlannedServerStop(err) {
+			if connector.PlannedDisconnect(err) {
 				// The relay or Gateway on the way stopped on purpose (its
-				// update or restart): the session moves, nothing failed.
+				// update or restart), or this daemon reconnects on purpose:
+				// the session moves, nothing failed.
 				log = d.logger.Info
 			}
 			log("session ended, reconnecting", "error", err, "retry_in", delay)

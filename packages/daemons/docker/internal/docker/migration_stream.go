@@ -56,9 +56,14 @@ func (p *DockerPlugin) RunMigrationStream(ctx context.Context, conn *grpc.Client
 	}
 	for ctx.Err() == nil {
 		if err := p.runMigrationStream(ctx, conn, nodeID); err != nil && ctx.Err() == nil {
-			if errors.Is(err, errMigrationStreamClosed) {
+			switch {
+			case errors.Is(err, errMigrationStreamClosed):
 				p.logger.Info("migration transfer stream closed by Gateway, opening it again")
-			} else {
+			case !errors.Is(err, io.EOF) && connector.PlannedDisconnect(err):
+				// Gateway or the relay on the way stopped gracefully (an
+				// update or restart). An EOF during a transfer stays a warning.
+				p.logger.Info("migration transfer stream disconnected", "error", err)
+			default:
 				p.logger.Warn("migration transfer stream disconnected", "error", err)
 			}
 		}

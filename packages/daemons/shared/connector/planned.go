@@ -1,0 +1,32 @@
+package connector
+
+import (
+	"strings"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
+
+// PlannedDisconnect reports a stream that ended because its peer or this
+// process closed it on purpose: the peer stopped gracefully or drained the
+// connection (a relay or Gateway restarting for an update sends GOAWAY
+// "graceful_stop" first), the stream ended cleanly (EOF), or this process
+// closed the connection (a planned control reconnect after a launcher
+// update). Such an end is logged as information, not as a warning (stand
+// rc.10 O-2).
+func PlannedDisconnect(err error) bool {
+	if err == nil || PlannedServerStop(err) {
+		return true
+	}
+	current, ok := status.FromError(err)
+	if !ok {
+		return false
+	}
+	switch current.Code() {
+	case codes.Canceled:
+		return strings.Contains(current.Message(), "client connection is closing")
+	case codes.Unavailable:
+		return strings.Contains(current.Message(), "graceful_stop")
+	}
+	return false
+}

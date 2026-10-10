@@ -498,14 +498,16 @@ func (r *relayTunnelRouter) runRegistration(ctx context.Context, update relayReg
 		}
 		delay := nextRegistrationRetry(err, failures, mismatchFor, rand.Float64)
 		log := r.plugin.logger.Warn
-		if failures > 1 {
+		switch {
+		case failures > 1:
 			// The first failure is news; the retries of a relay that stays
 			// down or keeps refusing are not (838 lines in 2 min, stand run c).
 			log = r.plugin.logger.Debug
-		} else if relayRegistrationPlannedEnd(err) {
+		case relayRegistrationPlannedEnd(err):
 			// A relay that stops for its update, or a registration Gateway's
-			// policy moved (an update of this daemon or of the relay pool),
-			// registers again at once: no failure (rc.10 upgrade run, F-4).
+			// policy moved (an update of this daemon or a Relay Pool update
+			// moving the endpoint to another generation), registers again at
+			// once: no failure (rc.10 upgrade run F-4, stand rc.10 O-2).
 			log = r.plugin.logger.Info
 		}
 		log("relay endpoint registration disconnected", "relay_instance_id", r.targetID, "endpoint_id", current.EndpointId, "error", err, "retry_in", delay.Round(time.Millisecond).String(), "failures", failures)
