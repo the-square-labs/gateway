@@ -253,17 +253,26 @@ func (t *Tracker) Settle() {
 	}
 	deadline := time.Now().Add(settleLimit)
 	var settledAt time.Time
+	// endedAt: when a look first saw a stream end before it resumed.
+	endedAt := map[*relayresume.Session]time.Time{}
 	for {
 		t.mu.Lock()
 		sessions := slices.Clone(t.sessions)
 		t.mu.Unlock()
 		open := 0
+		now := time.Now()
 		for _, session := range sessions {
-			if _, resumed, ended := session.HandoverPause(); !resumed && !ended {
+			_, resumed, ended := session.HandoverPause()
+			switch {
+			case resumed:
+			case ended:
+				if _, seen := endedAt[session]; !seen {
+					endedAt[session] = now
+				}
+			default:
 				open++
 			}
 		}
-		now := time.Now()
 		if open > 0 {
 			settledAt = time.Time{}
 		} else if settledAt.IsZero() {
@@ -272,22 +281,27 @@ func (t *Tracker) Settle() {
 			settledAt = now
 		}
 		if (open == 0 && (len(sessions) == 0 || now.Sub(settledAt) >= settleProof)) || now.After(deadline) {
-			t.finish(pending, sessions)
+			t.finish(pending, sessions, endedAt)
 			return
 		}
 		time.Sleep(settleTick)
 	}
 }
 
-func (t *Tracker) finish(pending *Report, sessions []*relayresume.Session) {
+func (t *Tracker) finish(pending *Report, sessions []*relayresume.Session, endedAt map[*relayresume.Session]time.Time) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	var pauses []time.Duration
 	lost, failed, peerEnded := 0, 0, 0
+	now := time.Now()
 	for _, session := range sessions {
 		pause, resumed, ended := session.HandoverPause()
+		at, seen := endedAt[session]
+		if !seen {
+			at = now
+		}
 		switch {
-		case !resumed && ended && endedByPeer(session):
+		case !resumed && ended && endedByPeer(session.State(), session.Err(), at.Sub(pending.StartedAt)):
 			// The far end ended it (its own update cut it, in the same batch):
 			// that node's report counts it, not this one's (stand rc.11 O-1).
 			peerEnded++
@@ -335,21 +349,27 @@ func (t *Tracker) finish(pending *Report, sessions []*relayresume.Session) {
 }
 
 // endedByPeer reports a stream taken over that its far end ended before it
-// resumed: it finished, the peer reset it, or the peer refused its resume
-// because it had reset or finished it there (a connection the peer's own
-// update cut). A refusal for any other reason, or a peer that gave up waiting
-// for this side (suspend timeout), stays this update's cut.
-func endedByPeer(session *relayresume.Session) bool {
-	if session.State() == relayresume.StateFinished {
+// resumed (state and err: how it ended; after: how long after the update
+// started it ended): it finished, the peer reset it, or the peer refused its
+// resume because it had reset or finished it there (a connection the peer's
+// own update cut). A refusal for any other reason, or a peer that gave up
+// waiting for this side (suspend timeout), stays this update's cut. A refusal
+// for a reset carries no reason: once the peer could have given up waiting
+// (relayresume.TargetSuspendTimeout after the update started, before the
+// streams froze), it is this update's cut too.
+func endedByPeer(state relayresume.State, err error, after time.Duration) bool {
+	if state == relayresume.StateFinished {
 		return true
 	}
 	var reset *relayresume.ResetError
-	if !errors.As(session.Err(), &reset) {
+	if !errors.As(err, &reset) {
 		return false
 	}
 	switch reset.Reject {
-	case relayresume.RejectReset, relayresume.RejectFinished:
+	case relayresume.RejectFinished:
 		return true
+	case relayresume.RejectReset:
+		return after < relayresume.TargetSuspendTimeout
 	case 0:
 		return reset.Remote && reset.Code != relayresume.RstSuspendTimeout && reset.Code != relayresume.RstProtocol &&
 			reset.Code != relayresume.RstLegacyPeer && reset.Code != relayresume.RstWindowViolation

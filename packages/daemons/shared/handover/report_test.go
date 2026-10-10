@@ -4,6 +4,8 @@ import (
 	"maps"
 	"testing"
 	"time"
+
+	"github.com/wiolett-industries/gateway/daemon-shared/relayresume"
 )
 
 // Sessions a replaced Secure Link connector still carried when it was removed, an hour after the update that
@@ -98,5 +100,35 @@ func TestTrackerMarksAnOlderUncountedCutAsAll(t *testing.T) {
 				t.Fatalf("last report = %+v, want cut %v", last, tc.want)
 			}
 		})
+	}
+}
+
+// A stream taken over that its far end ended is that node's cut; a refusal for
+// a reset that came once the peer could have given up waiting for this side
+// (its suspend timeout) is this update's cut and stays in the record.
+func TestEndedByPeerKeepsALateResetRefusalAsThisUpdatesCut(t *testing.T) {
+	refused := func(code byte) error {
+		return &relayresume.ResetError{Code: relayresume.RstResumeRejected, Reject: code, Err: relayresume.ErrProtocol}
+	}
+	early, late := 5*time.Second, relayresume.TargetSuspendTimeout
+	for _, tc := range []struct {
+		name  string
+		state relayresume.State
+		err   error
+		after time.Duration
+		peer  bool
+	}{
+		{"finished", relayresume.StateFinished, nil, late, true},
+		{"refused finished", relayresume.StateReset, refused(relayresume.RejectFinished), late, true},
+		{"refused reset early", relayresume.StateReset, refused(relayresume.RejectReset), early, true},
+		{"refused reset after the peer's suspend timeout", relayresume.StateReset, refused(relayresume.RejectReset), late, false},
+		{"refused unknown", relayresume.StateReset, refused(relayresume.RejectUnknown), early, false},
+		{"peer reset", relayresume.StateReset, &relayresume.ResetError{Code: relayresume.RstAborted, Remote: true}, late, true},
+		{"peer suspend timeout", relayresume.StateReset, &relayresume.ResetError{Code: relayresume.RstSuspendTimeout, Remote: true}, early, false},
+		{"local reset", relayresume.StateReset, &relayresume.ResetError{Code: relayresume.RstAborted}, early, false},
+	} {
+		if got := endedByPeer(tc.state, tc.err, tc.after); got != tc.peer {
+			t.Errorf("%s: endedByPeer = %v, want %v", tc.name, got, tc.peer)
+		}
 	}
 }
