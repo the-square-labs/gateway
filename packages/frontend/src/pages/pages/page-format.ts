@@ -1,6 +1,10 @@
 import { formatDateTime } from "@/lib/utils";
 import type { PageDeploymentStatus } from "@/types";
 
+/** The hint under a Page Project's home node. */
+export const PAGE_HOME_NODE_HINT =
+  "Builds, deployments and preview links live on this node. To serve the site from an ingress group, create a Pages Route on that group: every member gets a copy of the artifacts.";
+
 export function formatPageBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 1024) return `${Math.max(0, bytes)} B`;
   const units = ["KiB", "MiB", "GiB", "TiB"];

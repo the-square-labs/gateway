@@ -7,13 +7,14 @@ import {
   GitBranch,
   Hammer,
   KeyRound,
+  Network,
   PackageOpen,
   Settings,
   Tags,
   Trash2,
   UploadCloud,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -26,6 +27,8 @@ import {
   HEADER_ACTION_PRIORITY,
   ResponsiveHeaderActions,
 } from "@/components/common/ResponsiveHeaderActions";
+import { CreateProxyHostDialog } from "@/components/proxy/CreateProxyHostDialog";
+import { DEFAULT_PROXY_UPSTREAM } from "@/components/proxy/ProxyUpstreamEditor";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -46,8 +49,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useUrlTab } from "@/hooks/use-url-tab";
 import { loadPageDeployments } from "@/lib/page-deployments";
+import { proxyHostRoute } from "@/lib/resource-routes";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
+import { hasLicenseFeature } from "@/stores/license-paywall";
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type { PageProject, PageProjectPlacementOption } from "@/types";
 import { DockerResourceGitTabs } from "../docker-detail/DockerResourceGitTabs";
 import { PageDeploymentsTab } from "./PageDeploymentsTab";
@@ -56,6 +62,7 @@ import { PageProjectSettingsDialog } from "./PageProjectSettingsTab";
 import { PageRuntimeConfigTab } from "./PageRuntimeConfigTab";
 import { PageTagsTab } from "./PageTagsTab";
 import { PageTokensTab } from "./PageTokensTab";
+import { PAGE_HOME_NODE_HINT } from "./page-format";
 
 const PROJECT_TABS = [
   "deployments",
@@ -71,11 +78,14 @@ function MigrateProjectDialog({
   onOpenChange,
   project,
   onMigrated,
+  onCreateGroupRoute,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   project: PageProject;
   onMigrated: (project: PageProject) => void;
+  /** Opens the Pages Route create flow for this project, when the caller can use an ingress group. */
+  onCreateGroupRoute?: () => void;
 }) {
   const [nodes, setNodes] = useState<PageProjectPlacementOption[]>([]);
   const [targetNodeId, setTargetNodeId] = useState("");
@@ -126,7 +136,7 @@ function MigrateProjectDialog({
         </DialogHeader>
         <div className="space-y-1.5">
           <label htmlFor="page-project-migration-node" className="text-sm font-medium">
-            Target node
+            New home node
           </label>
           <Select value={targetNodeId} onValueChange={setTargetNodeId} disabled={loading || saving}>
             <SelectTrigger id="page-project-migration-node">
@@ -146,6 +156,21 @@ function MigrateProjectDialog({
                 ))}
             </SelectContent>
           </Select>
+          <p className="text-xs text-muted-foreground">{PAGE_HOME_NODE_HINT}</p>
+          {onCreateGroupRoute && (
+            <Button
+              variant="link"
+              className="h-auto px-0"
+              onClick={() => {
+                onOpenChange(false);
+                onCreateGroupRoute();
+              }}
+              disabled={saving}
+            >
+              <Network className="h-4 w-4" />
+              Create route on a group
+            </Button>
+          )}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
@@ -265,6 +290,14 @@ export function PageProjectDetail({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [migrateOpen, setMigrateOpen] = useState(false);
   const [migrationAvailable, setMigrationAvailable] = useState(false);
+  const [homeNodeName, setHomeNodeName] = useState<string | null>(null);
+  const [groupRouteAvailable, setGroupRouteAvailable] = useState(false);
+  const [groupRouteOpen, setGroupRouteOpen] = useState(false);
+  const canCreateRoute = useAuthStore((state) => state.hasScopedAccess("proxy:create"));
+  // Ingress groups need their license feature; the bootstrap license makes the check reactive.
+  const ingressGroupsLicensed = useUIBootstrapStore(
+    (state) => !!state.snapshot?.license && hasLicenseFeature("multi-node-availability") === true
+  );
   const [latestPreviewHostname, setLatestPreviewHostname] = useState<string | null>(null);
   const deletingRef = useRef(false);
   const latestPreviewRequestRef = useRef(0);
@@ -340,6 +373,8 @@ export function PageProjectDetail({
             (node) => node.id !== projectNodeId && node.status === "online" && node.pagesCapable
           )
         );
+        const homeNode = nodes.find((node) => node.id === projectNodeId);
+        setHomeNodeName(homeNode ? homeNode.displayName || homeNode.hostname : null);
       })
       .catch(() => {
         if (active) setMigrationAvailable(false);
@@ -349,6 +384,38 @@ export function PageProjectDetail({
       active = false;
     };
   }, [canEdit, hasProject, projectNodeId]);
+
+  // "Create route on a group" shows only when the user can place a route on at least one ingress group.
+  useEffect(() => {
+    if (!canCreateRoute || !ingressGroupsLicensed) {
+      setGroupRouteAvailable(false);
+      return;
+    }
+    let active = true;
+    void api
+      .listRouteIngressGroups()
+      .then((groups) => {
+        if (active) setGroupRouteAvailable(groups.length > 0);
+      })
+      .catch(() => {
+        if (active) setGroupRouteAvailable(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [canCreateRoute, ingressGroupsLicensed]);
+
+  const projectName = project?.name ?? "";
+  const groupRouteUpstream = useMemo(
+    () => ({
+      ...DEFAULT_PROXY_UPSTREAM,
+      kind: "pages" as const,
+      pageProjectId: projectId,
+      pageProjectLabel: projectName,
+    }),
+    [projectId, projectName]
+  );
+  const openGroupRoute = groupRouteAvailable ? () => setGroupRouteOpen(true) : undefined;
 
   const previewsEnabled = project?.previewsEnabled ?? true;
   const publicHostname = project?.primaryDomain ?? (previewsEnabled ? latestPreviewHostname : null);
@@ -619,13 +686,26 @@ export function PageProjectDetail({
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
         onProjectChange={setProject}
+        homeNodeName={homeNodeName}
+        onCreateGroupRoute={openGroupRoute}
       />
       <MigrateProjectDialog
         project={project}
         open={migrateOpen}
         onOpenChange={setMigrateOpen}
         onMigrated={setProject}
+        onCreateGroupRoute={openGroupRoute}
       />
+      {groupRouteAvailable && (
+        <CreateProxyHostDialog
+          open={groupRouteOpen}
+          onOpenChange={setGroupRouteOpen}
+          initialUpstream={groupRouteUpstream}
+          onSuccess={(_, host) => {
+            if (host) navigate(proxyHostRoute(host.slug));
+          }}
+        />
+      )}
     </PageTransition>
   );
 }

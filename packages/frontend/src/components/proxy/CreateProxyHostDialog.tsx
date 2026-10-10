@@ -71,6 +71,8 @@ interface CreateProxyHostDialogProps {
   initialNodeId?: string;
   /** Create the route on this ingress group (a domain served by the group). */
   initialIngressGroupId?: string;
+  /** Create the route to this upstream, e.g. a Pages project. */
+  initialUpstream?: ProxyUpstreamSelection;
   /** Called on successful create/update with the host ID and returned host payload when available. */
   onSuccess?: (hostId: string, host?: ProxyHost) => void;
 }
@@ -127,6 +129,7 @@ export function CreateProxyHostDialog({
   initialDomainName,
   initialNodeId,
   initialIngressGroupId,
+  initialUpstream,
   onSuccess,
 }: CreateProxyHostDialogProps) {
   const isEditing = !!existingHost;
@@ -248,7 +251,19 @@ export function CreateProxyHostDialog({
     setNodeId(initialNodeId ?? "");
     setIngressGroupId(initialIngressGroupId ?? "");
     setDomainNames(initialDomainName ? [initialDomainName] : [""]);
-  }, [existingHost, initialDomainName, initialIngressGroupId, initialNodeId, open]);
+    if (initialUpstream) {
+      setType("proxy");
+      setUpstream(initialUpstream);
+      upstreamTouchedRef.current = true;
+    }
+  }, [
+    existingHost,
+    initialDomainName,
+    initialIngressGroupId,
+    initialNodeId,
+    initialUpstream,
+    open,
+  ]);
 
   useLayoutEffect(() => {
     if (!open) return;

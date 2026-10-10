@@ -1,4 +1,4 @@
-import { Settings } from "lucide-react";
+import { Network, Settings } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
@@ -20,17 +20,24 @@ import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import type { NodeAppearanceColor, PageProject } from "@/types";
 import { PagePreviewLinksPanel } from "./PagePreviewLinksPanel";
+import { PAGE_HOME_NODE_HINT } from "./page-format";
 
 export function PageProjectSettingsDialog({
   project,
   open,
   onOpenChange,
   onProjectChange,
+  homeNodeName,
+  onCreateGroupRoute,
 }: {
   project: PageProject;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onProjectChange: (project: PageProject) => void;
+  /** The project's home node; null while unknown. */
+  homeNodeName?: string | null;
+  /** Opens the Pages Route create flow for this project, when the caller can use an ingress group. */
+  onCreateGroupRoute?: () => void;
 }) {
   const [name, setName] = useState(project.name);
   const [description, setDescription] = useState(project.description ?? "");
@@ -148,6 +155,24 @@ export function PageProjectSettingsDialog({
               onChange={(event) => setDescription(event.target.value)}
               placeholder="Static site deployed from GitLab"
             />
+          </SettingsControlRow>
+          <SettingsControlRow title="Home node" description={PAGE_HOME_NODE_HINT}>
+            <div className="flex flex-col items-start gap-1 sm:items-end">
+              <span className="text-sm">{homeNodeName ?? "Unknown"}</span>
+              {onCreateGroupRoute && (
+                <Button
+                  variant="link"
+                  className="h-auto px-0"
+                  onClick={() => {
+                    onOpenChange(false);
+                    onCreateGroupRoute();
+                  }}
+                >
+                  <Network className="h-4 w-4" />
+                  Create route on a group
+                </Button>
+              )}
+            </div>
           </SettingsControlRow>
           <SettingsControlRow
             title="Color"

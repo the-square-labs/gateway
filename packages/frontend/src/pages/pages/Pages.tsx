@@ -39,7 +39,7 @@ import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useResourceFolderStore } from "@/stores/resource-folders";
 import type { PageProject, PageProjectPlacementOption } from "@/types";
-import { formatPageBytes } from "./page-format";
+import { formatPageBytes, PAGE_HOME_NODE_HINT } from "./page-format";
 
 function CreateProjectDialog({
   open,
@@ -144,7 +144,7 @@ function CreateProjectDialog({
           </div>
           <div className="space-y-1.5">
             <label htmlFor="page-project-node" className="text-sm font-medium">
-              Node
+              Home node
             </label>
             <Select value={nodeId} onValueChange={setNodeId} disabled={nodesLoading}>
               <SelectTrigger id="page-project-node">
@@ -162,6 +162,7 @@ function CreateProjectDialog({
                 ))}
               </SelectContent>
             </Select>
+            <p className="text-xs text-muted-foreground">{PAGE_HOME_NODE_HINT}</p>
           </div>
           <div className="space-y-1.5">
             <label htmlFor="page-project-description" className="text-sm font-medium">
