@@ -185,15 +185,17 @@ func (c *handshakenConn) Close() error {
 }
 
 // laneCollapsed reports a connection (by its remote address) whose sending
-// side's congestion state collapsed (slowstart.State.Collapsed): a lane the
-// node had better replace, since only a new connection starts afresh.
+// side's congestion state is stale (slowstart.State.Stale: collapsed, or a
+// threshold learned on a shorter path that holds a transfer below
+// slowstart.SlowRate): a lane the node had better replace, since only a new
+// connection starts afresh.
 func (l *splitListener) laneCollapsed(remote string) bool {
 	value, ok := l.sockets.Load(remote)
 	if !ok {
 		return false
 	}
 	state, ok := slowstart.ReadState(value.(*tlsbatch.Conn))
-	return ok && state.Collapsed()
+	return ok && state.Stale()
 }
 
 // handshakenCredentials gives gRPC the identity of a handshaken connection in
