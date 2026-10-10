@@ -328,7 +328,7 @@ func (p *DockerPlugin) targetRouteResume(owner relayTargetTag) *pb.RelayRouteRes
 // a raw tunnel, answer HELLO_ACK, and bridge the backend over the session on
 // its own goroutine. The session outlives this tunnel (and the registration
 // it came through); the tunnel lives until the session gives it up.
-func (r *relayTunnelRouter) serveResumableTunnel(ctx context.Context, assignment *pb.RelayGrantAssignment, accepted *relayresume.Accepted, stream relayv1.TunnelBroker_AcceptTunnelClient) {
+func (r *relayTunnelRouter) serveResumableTunnel(ctx context.Context, assignment *pb.RelayGrantAssignment, accepted *relayresume.Accepted, stream relayv1.TunnelBroker_AcceptTunnelClient, setup func()) {
 	dialed, err := r.dialEndpoint(ctx, assignment)
 	if err != nil {
 		if !errors.Is(err, errEndpointNotServed) {
@@ -345,12 +345,14 @@ func (r *relayTunnelRouter) serveResumableTunnel(ctx context.Context, assignment
 		return
 	}
 	r.plugin.relayTunnelOutcomes.Succeeded(r.plugin.logger, relayTunnelOutcome(assignment))
-	go r.plugin.bridgeTargetSession(assignment, session, dialed)
+	go r.plugin.bridgeTargetSession(assignment, session, dialed, setup)
 	<-accepted.PathDone
 }
 
-// bridgeTargetSession carries a resumable target stream until it ends.
-func (p *DockerPlugin) bridgeTargetSession(assignment *pb.RelayGrantAssignment, session *relayresume.Session, dialed dialedEndpoint) {
+// bridgeTargetSession carries a resumable target stream until it ends. setup
+// ends its setup for a handover once the bridge is registered.
+func (p *DockerPlugin) bridgeTargetSession(assignment *pb.RelayGrantAssignment, session *relayresume.Session, dialed dialedEndpoint, setup func()) {
+	defer setup()
 	connection := dialed.conn
 	if dialed.postgres != nil {
 		linked, err := p.databaseManager.prepareLinkConnection(context.Background(), connection, *dialed.postgres, session, session.Cancel)
@@ -361,13 +363,14 @@ func (p *DockerPlugin) bridgeTargetSession(assignment *pb.RelayGrantAssignment, 
 		}
 		connection = linked
 	}
-	p.bridgeTargetConnection(assignment.GetOwnerKind(), assignment.GetOwnerId(), session, connection, dialed.ingress)
+	p.bridgeTargetConnection(assignment.GetOwnerKind(), assignment.GetOwnerId(), session, connection, dialed.ingress, setup)
 }
 
 // bridgeTargetConnection carries the backend connection of a resumable target
 // stream of an endpoint of ownerKind until the stream ends or the daemon hands
-// it to its next process.
-func (p *DockerPlugin) bridgeTargetConnection(ownerKind, ownerID string, session *relayresume.Session, connection net.Conn, ingress bool) {
+// it to its next process. started, if set, is called once the bridge is
+// registered (handover.BridgeConfig.Started).
+func (p *DockerPlugin) bridgeTargetConnection(ownerKind, ownerID string, session *relayresume.Session, connection net.Conn, ingress bool, started func()) {
 	labels := handover.Labels{handoverRole: handoverRoleTarget, handoverOwnerKind: ownerKind, handoverOwnerID: ownerID,
 		handoverConnector: connectionConnector(connection)}
 	cutClass := ""
@@ -392,7 +395,7 @@ func (p *DockerPlugin) bridgeTargetConnection(ownerKind, ownerID string, session
 	defer connection.Close()
 	// No idle limit of its own, as acceptIncoming: the relay ends the idle tunnels of a route that has one.
 	_ = p.handover.Bridge(connection, session, handover.BridgeConfig{ReadChunk: p.relayReadChunkFor(ownerKind, session), Labels: labels,
-		CutClass: cutClass})
+		CutClass: cutClass, Started: started})
 	session.Cancel()
 }
 

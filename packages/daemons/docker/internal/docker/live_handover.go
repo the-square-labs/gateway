@@ -297,7 +297,7 @@ func (p *DockerPlugin) resumeTargetStream(item *handover.RestoredSession) {
 	if connector := labels[handoverConnector]; connector != "" {
 		connection = &connectorConn{Conn: connection, connectorID: connector}
 	}
-	go p.bridgeTargetConnection(owner.ownerKind, owner.ownerID, session, connection, isConnectorIngressOwnerKind(owner.ownerKind))
+	go p.bridgeTargetConnection(owner.ownerKind, owner.ownerID, session, connection, isConnectorIngressOwnerKind(owner.ownerKind), nil)
 }
 
 // carryLocalPipe carries a node-local link connection on (carryLocalEgress).

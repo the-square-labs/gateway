@@ -476,7 +476,9 @@ func (r *relayTunnelRouter) runRegistration(ctx context.Context, update relayReg
 						// Bind accepted streams to the endpoint registration, not the
 						// process. Revoking the assignment therefore cancels existing
 						// streams without disturbing unrelated node links.
-						go r.acceptIncoming(ctx, current, incoming)
+						// Its setup counts from here, before a restart announcement this loop confirms
+						// later: a handover waits for it (handover.Registry.Setup).
+						go r.acceptIncoming(ctx, current, incoming, r.plugin.handover.Setup())
 					}
 				case err = <-receiveErr:
 				}
@@ -527,7 +529,11 @@ func (r *relayTunnelRouter) runRegistration(ctx context.Context, update relayReg
 	}
 }
 
-func (r *relayTunnelRouter) acceptIncoming(ctx context.Context, assignment *pb.RelayGrantAssignment, incoming *relayv1.IncomingTunnel) {
+// setup ends the tunnel's setup for a handover (handover.Registry.Setup): once a
+// resumable stream's bridge is registered, or as soon as the tunnel turns out
+// to be anything else.
+func (r *relayTunnelRouter) acceptIncoming(ctx context.Context, assignment *pb.RelayGrantAssignment, incoming *relayv1.IncomingTunnel, setup func()) {
+	defer setup()
 	// Accepted on the least busy lane of the relay, like source tunnels: the
 	// relay matches the accept by certificate, not by connection, and every
 	// download from this node rode the primary lane (one TCP connection, one
@@ -572,15 +578,18 @@ func (r *relayTunnelRouter) acceptIncoming(ctx context.Context, assignment *pb.R
 			// A raw source during version skew: served exactly as before.
 			tunnel = accepted.Stream
 		case relayresume.AcceptHello:
-			r.serveResumableTunnel(ctx, assignment, accepted, stream)
+			r.serveResumableTunnel(ctx, assignment, accepted, stream, setup)
 			return
 		default:
 			// A stream that moved onto this tunnel (no dial), or a refused
 			// resume: the tunnel lives until the session gives it up.
+			setup()
 			<-accepted.PathDone
 			return
 		}
 	}
+	// A raw stream lives in this process: a handover does not take it.
+	setup()
 	dialed, err := r.dialEndpoint(ctx, assignment)
 	if err == nil && dialed.postgres != nil {
 		// Links and the Gateway's database tools: TLS-enabled PostgreSQL gets

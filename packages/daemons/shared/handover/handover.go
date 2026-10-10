@@ -137,6 +137,52 @@ type Registry struct {
 	// tracker hears of the local connections of handed over streams that
 	// ended (Observe).
 	tracker *Tracker
+	// setups counts the connections being set up for the registry (Setup).
+	setups int
+}
+
+// setupWait bounds how long a handover waits for the connections being set
+// up (a variable for tests).
+var setupWait = time.Second
+
+// Setup marks a connection that is being set up and will be carried by the
+// registry (a stream a peer opened, accepted and not bridged yet): a handover
+// first waits for it, at most setupWait, so it goes along instead of starting
+// in a process that is exiting, where the exit cuts it (stand rc.13 O-a: a
+// peer updated in the same batch opened streams to this node as it handed
+// over). The connections keep moving meanwhile; the freeze comes after. The
+// returned func ends the setup: call it once the connection is registered
+// (BridgeConfig.Started) or its setup failed. Calls after the first do
+// nothing.
+func (r *Registry) Setup() func() {
+	if r == nil {
+		return func() {}
+	}
+	r.mu.Lock()
+	r.setups++
+	r.mu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			r.mu.Lock()
+			r.setups--
+			r.mu.Unlock()
+		})
+	}
+}
+
+// waitSetups waits, at most timeout, until no connection is being set up.
+func (r *Registry) waitSetups(timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for {
+		r.mu.Lock()
+		setups := r.setups
+		r.mu.Unlock()
+		if setups == 0 || time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 // Observe tells tracker when the local connection of a stream it follows ends
@@ -303,6 +349,8 @@ func (r *Registry) HandOver(opts Options) Result {
 		result.Err = errNoKeeper
 		return result
 	}
+	r.waitSetups(setupWait)
+	result.StartedAt = time.Now()
 	r.mu.Lock()
 	if r.state != stateRunning {
 		r.mu.Unlock()
