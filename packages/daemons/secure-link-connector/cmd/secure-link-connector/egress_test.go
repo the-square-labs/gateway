@@ -178,7 +178,7 @@ func TestSyncRequestVersionsAndPerBindingEgressFailures(t *testing.T) {
 		t.Fatal("the egress listener still accepts after a v1 request")
 	}
 
-	future := handleSyncRequest(securelink.SyncRequest{Version: 3}, manager, egress)
+	future := handleSyncRequest(securelink.SyncRequest{Version: 4}, manager, egress)
 	if future.Error != securelink.UnsupportedVersionError {
 		t.Fatalf("unknown version answered %+v", future)
 	}

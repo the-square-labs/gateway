@@ -10,6 +10,19 @@ import (
 // PipeConfig configures a pipe between two local connections.
 type PipeConfig struct {
 	Labels Labels
+	// EndWithRight ends the pipe when its right connection ends: once that
+	// end of stream was passed on, both connections close (the secure-link
+	// connector's sessions: a target that finished its answer ends the
+	// session). Without it a half-close is passed on and the other direction
+	// carries on.
+	EndWithRight bool
+	// Started, if set, is called once the pipe is registered: a handover
+	// from then on stops it and passes it on.
+	Started func()
+	// SnapshotLabels, if set, adds labels a handover takes once the pipe
+	// stopped (state a connection wrapper keeps, which the next process
+	// restores it with).
+	SnapshotLabels func() Labels
 }
 
 // Pipe is a node-local link connection the daemon carries between two local
@@ -53,6 +66,9 @@ func (r *Registry) pipe(left, right net.Conn, cfg PipeConfig, pending [2][]byte,
 	p := &Pipe{conns: [2]net.Conn{left, right}, cfg: cfg, stop: newStopper(0, left, right), pending: pending}
 	if r != nil {
 		defer r.add(p)()
+	}
+	if cfg.Started != nil {
+		cfg.Started()
 	}
 	results := make(chan bool, 2)
 	running := 0
@@ -155,6 +171,9 @@ func (p *Pipe) copy(d side) bool {
 		if closer, ok := destination.(interface{ CloseWrite() error }); ok {
 			_ = closer.CloseWrite()
 		} else {
+			return fail()
+		}
+		if d == sideRemote && p.cfg.EndWithRight {
 			return fail()
 		}
 		p.stop.finish(d)

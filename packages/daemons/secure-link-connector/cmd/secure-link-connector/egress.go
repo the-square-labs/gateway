@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wiolett-industries/gateway/daemon-shared/handover"
 	"github.com/wiolett-industries/gateway/daemon-shared/netaccept"
 	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
 )
@@ -38,6 +39,11 @@ type egressManager struct {
 	mu        sync.Mutex
 	listeners map[string]*egressListener
 	closed    bool
+	// sessions carries every session (sessions.go), shared with the ingress bindings of the same connector.
+	sessions *sessionSet
+	// orphans are sessions handed over from a replaced connector whose listener this one does not hold: they go on
+	// until they end, and close with the connector.
+	orphans map[net.Conn]struct{}
 }
 
 type egressListener struct {
@@ -58,6 +64,8 @@ func newEgressManager(socketPath string) *egressManager {
 		openRelay:  openRelayStream,
 		failures:   &storageRelayFailureLog{now: time.Now, logf: log.Printf, subject: "link connection"},
 		listeners:  map[string]*egressListener{},
+		sessions:   newSessionSet(),
+		orphans:    map[net.Conn]struct{}{},
 	}
 }
 
@@ -192,9 +200,22 @@ func (m *egressManager) drain() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.closed = true
-	active := 0
 	for _, listener := range m.listeners {
 		_ = listener.listener.Close()
+	}
+	return m.activeLocked()
+}
+
+// active counts the egress sessions the connector carries.
+func (m *egressManager) active() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.activeLocked()
+}
+
+func (m *egressManager) activeLocked() int {
+	active := len(m.orphans) / 2
+	for _, listener := range m.listeners {
 		listener.mu.Lock()
 		active += listener.sessions
 		listener.mu.Unlock()
@@ -210,6 +231,62 @@ func (m *egressManager) close() {
 		listener.close()
 		delete(m.listeners, id)
 	}
+	for connection := range m.orphans {
+		_ = connection.Close()
+	}
+}
+
+// adopt carries on an egress session a replaced connector handed over, in its listener (counted, and closed with it),
+// or on its own when this connector does not hold the listener.
+func (m *egressManager) adopt(pipe *handover.RestoredPipe) {
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		pipe.Cut()
+		return
+	}
+	listener := m.listeners[pipe.Labels[sessionLabelID]]
+	if listener != nil && !listener.adopt(pipe.Conns) {
+		listener = nil
+	}
+	if listener == nil {
+		for _, connection := range pipe.Conns {
+			m.orphans[connection] = struct{}{}
+		}
+	}
+	m.mu.Unlock()
+	go func() {
+		relayed := pipe.Conns[1]
+		defer func() {
+			if listener != nil {
+				listener.release(pipe.Conns[0])
+				listener.track(relayed, false)
+			} else {
+				m.mu.Lock()
+				delete(m.orphans, pipe.Conns[0])
+				delete(m.orphans, relayed)
+				m.mu.Unlock()
+			}
+			for _, connection := range pipe.Conns {
+				_ = connection.Close()
+			}
+		}()
+		if encoded := pipe.Labels[sessionLabelTLS]; encoded != "" {
+			// A TLS session the replaced connector carried itself: its records go on from its state, the ones it wrote
+			// in part first.
+			session, err := restoreRelayTLS(relayed, encoded)
+			if err == nil {
+				err = session.flushHandedOver(30 * time.Second)
+			}
+			if err != nil {
+				log.Printf("a handed over TLS session could not be carried on: %v", err)
+				pipe.Cut()
+				return
+			}
+			pipe.Conns[1] = session
+		}
+		m.sessions.resume(pipe)
+	}()
 }
 
 func (l *egressListener) currentConfig() securelink.EgressConfig {
@@ -265,6 +342,20 @@ func (l *egressListener) acquire(connection net.Conn) (securelink.EgressConfig, 
 	return l.config, l.tls, true, nil
 }
 
+// adopt counts a session handed over from a replaced connector (its workload's connection and its relayed side), past
+// the session limit if need be: it was admitted already.
+func (l *egressListener) adopt(connections [2]net.Conn) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.closed {
+		return false
+	}
+	l.sessions++
+	l.active[connections[0]] = struct{}{}
+	l.active[connections[1]] = struct{}{}
+	return true
+}
+
 func (l *egressListener) release(connection net.Conn) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -291,6 +382,8 @@ func (l *egressListener) track(connection net.Conn, add bool) bool {
 
 func (l *egressListener) serve(local net.Conn) {
 	defer local.Close()
+	started := l.manager.sessions.begin()
+	defer started()
 	config, tlsConfig, admitted, refusal := l.acquire(local)
 	if !admitted {
 		// Logged like a relay refusal, once per reason and interval: the connection never reaches the daemon.
@@ -312,12 +405,14 @@ func (l *egressListener) serve(local net.Conn) {
 		return
 	}
 	defer l.track(remote, false)
-	remote, err = clientTLS(context.Background(), remote, tlsConfig)
+	remote, err = clientTLS(context.Background(), remote, tlsConfig, true)
 	if err != nil {
 		l.manager.failures.record(fmt.Errorf("link %s: TLS: %w", config.ID, err))
 		return
 	}
-	bridge(local, remote)
+	// A session whose TLS the connector originates moves with its record state (tls_relay.go), unless crypto/tls
+	// carries it (TLS 1.2, ChaCha20): a handover leaves that one out.
+	l.manager.sessions.pipe(local, remote, egressLabels(config.ID), started)
 }
 
 func (l *egressListener) close() {

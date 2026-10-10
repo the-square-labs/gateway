@@ -37,6 +37,7 @@ func TestBindingListenerAcceptsAfterATransientError(t *testing.T) {
 		listener: &failingOnceListener{Listener: listener},
 		active:   map[net.Conn]struct{}{},
 		done:     make(chan struct{}),
+		carrier:  newSessionSet(),
 	}
 	t.Cleanup(binding.close)
 	go binding.accept(nil)

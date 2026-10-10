@@ -85,21 +85,6 @@ func relayTLSConfig(caPEM, serverName string) (*tls.Config, error) {
 	return &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool, ServerName: serverName}, nil
 }
 
-// clientTLS runs the TLS client handshake over remote and returns the TLS connection (remote itself without
-// tlsConfig).
-func clientTLS(ctx context.Context, remote net.Conn, tlsConfig *tls.Config) (net.Conn, error) {
-	if tlsConfig == nil {
-		return remote, nil
-	}
-	tlsRemote := tls.Client(remote, tlsConfig)
-	handshakeCtx, cancel := context.WithTimeout(ctx, targetDialTimeout)
-	defer cancel()
-	if err := tlsRemote.HandshakeContext(handshakeCtx); err != nil {
-		return nil, err
-	}
-	return tlsRemote, nil
-}
-
 func runStorageConnector(ctx context.Context, config storageConnectorConfig) error {
 	tlsConfig, err := storageConnectorTLSConfig(config)
 	if err != nil {
@@ -132,7 +117,7 @@ func proxyStorageConnectorConnection(ctx context.Context, local net.Conn, config
 		return
 	}
 	defer remote.Close()
-	remote, err = clientTLS(ctx, remote, tlsConfig)
+	remote, err = clientTLS(ctx, remote, tlsConfig, false)
 	if err != nil {
 		return
 	}

@@ -24,6 +24,21 @@ type Keeper interface {
 	EnvBytes(names []string) int
 }
 
+// Names a handover keeps under: KeptConnPrefix and a number for each socket,
+// KeptSnapshotName for the snapshot, which a keeper takes last (the commit
+// point: the handover commits when Keep of it succeeds).
+const (
+	KeptConnPrefix   = connPrefix
+	KeptSnapshotName = stateName
+)
+
+// UnboundedKeeper is a keeper that passes on any number of descriptors (not
+// through one environment variable, as the launcher's does): EnvBytes does not
+// bound a handover through it.
+type UnboundedKeeper interface {
+	Unbounded() bool
+}
+
 // LauncherKeeper is the daemon launcher's keeper.
 var LauncherKeeper Keeper = launcherKeeper{}
 

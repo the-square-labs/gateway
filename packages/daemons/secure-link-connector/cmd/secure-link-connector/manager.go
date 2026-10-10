@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wiolett-industries/gateway/daemon-shared/handover"
 	"github.com/wiolett-industries/gateway/daemon-shared/netaccept"
 	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
 )
@@ -28,6 +29,11 @@ type bindingManager struct {
 	// peer is the address the ingress listeners accept connections from (ingress_peer.go).
 	peer   ingressPeer
 	closed bool
+	// sessions carries every session (sessions.go); the egress manager of the same connector shares it.
+	sessions *sessionSet
+	// orphans are sessions handed over from a replaced connector whose binding this one does not hold: they go on
+	// until they end, and close with the connector.
+	orphans map[net.Conn]struct{}
 }
 
 type bindingListener struct {
@@ -40,6 +46,8 @@ type bindingListener struct {
 	done      chan struct{}
 	closeOnce sync.Once
 	peer      *ingressPeer
+	// carrier carries the binding's sessions (the connector's sessionSet).
+	carrier *sessionSet
 }
 
 func newBindingManager(globalLimit, perBindingLimit int) *bindingManager {
@@ -51,6 +59,8 @@ func newBindingManager(globalLimit, perBindingLimit int) *bindingManager {
 		bindings:        map[string]*bindingListener{},
 		globalSessions:  globalSessions,
 		perBindingLimit: perBindingLimit,
+		sessions:        newSessionSet(),
+		orphans:         map[net.Conn]struct{}{},
 	}
 }
 
@@ -83,7 +93,7 @@ func (m *bindingManager) sync(configs []securelink.BindingConfig) ([]securelink.
 		if m.bindings[id] != nil {
 			continue
 		}
-		created, err := newBindingListener(config, m.globalSessions, m.perBindingLimit, &m.peer)
+		created, err := newBindingListener(config, m.globalSessions, m.perBindingLimit, &m.peer, m.sessions)
 		if err != nil {
 			for _, binding := range staged {
 				binding.close()
@@ -142,6 +152,63 @@ func (m *bindingManager) close() {
 		binding.close()
 		delete(m.bindings, id)
 	}
+	for connection := range m.orphans {
+		_ = connection.Close()
+	}
+}
+
+// active counts the connections of the ingress sessions the connector carries (two per session).
+func (m *bindingManager) active() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	active := len(m.orphans)
+	for _, binding := range m.bindings {
+		binding.activeMu.Lock()
+		active += len(binding.active)
+		binding.activeMu.Unlock()
+	}
+	return active
+}
+
+// adopt carries on an ingress session a replaced connector handed over, in its binding (closed with it), or on its
+// own when this connector does not hold the binding.
+func (m *bindingManager) adopt(pipe *handover.RestoredPipe) {
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		pipe.Cut()
+		return
+	}
+	binding := m.bindings[pipe.Labels[sessionLabelID]]
+	if binding == nil {
+		for _, connection := range pipe.Conns {
+			m.orphans[connection] = struct{}{}
+		}
+	} else {
+		for _, connection := range pipe.Conns {
+			binding.track(connection, true)
+		}
+	}
+	m.mu.Unlock()
+	go func() {
+		defer func() {
+			if binding != nil {
+				for _, connection := range pipe.Conns {
+					binding.track(connection, false)
+				}
+			} else {
+				m.mu.Lock()
+				for _, connection := range pipe.Conns {
+					delete(m.orphans, connection)
+				}
+				m.mu.Unlock()
+			}
+			for _, connection := range pipe.Conns {
+				_ = connection.Close()
+			}
+		}()
+		m.sessions.resume(pipe)
+	}()
 }
 
 func validateBindingConfig(config securelink.BindingConfig) error {
@@ -162,7 +229,7 @@ func validateBindingConfig(config securelink.BindingConfig) error {
 	return nil
 }
 
-func newBindingListener(config securelink.BindingConfig, globalSessions chan struct{}, perBindingLimit int, peer *ingressPeer) (*bindingListener, error) {
+func newBindingListener(config securelink.BindingConfig, globalSessions chan struct{}, perBindingLimit int, peer *ingressPeer, carrier *sessionSet) (*bindingListener, error) {
 	listener, err := net.Listen("tcp", net.JoinHostPort(config.ListenHost, "0"))
 	if err != nil {
 		return nil, fmt.Errorf("listen for secure-link binding: %w", err)
@@ -178,6 +245,7 @@ func newBindingListener(config securelink.BindingConfig, globalSessions chan str
 		active:   map[net.Conn]struct{}{},
 		done:     make(chan struct{}),
 		peer:     peer,
+		carrier:  carrier,
 	}
 	go binding.accept(globalSessions)
 	return binding, nil
@@ -236,13 +304,15 @@ func (b *bindingListener) accept(globalSessions chan struct{}) {
 			continue
 		}
 		b.track(connection, true)
+		started := b.carrier.begin()
 		go func() {
 			defer func() {
+				started()
 				b.track(connection, false)
 				releaseSession(b.sessions)
 				releaseSession(globalSessions)
 			}()
-			b.proxy(connection)
+			b.proxy(connection, started)
 		}()
 	}
 }
@@ -265,10 +335,12 @@ func releaseSession(sessions chan struct{}) {
 	}
 }
 
-func (b *bindingListener) proxy(source net.Conn) {
+// proxy carries a session to the binding's target until it ends or a handover passed it on.
+func (b *bindingListener) proxy(source net.Conn, started func()) {
 	defer source.Close()
 	b.mu.RLock()
 	targetAddress := net.JoinHostPort(b.config.TargetHost, fmt.Sprintf("%d", b.config.TargetPort))
+	id := b.config.ID
 	b.mu.RUnlock()
 	ctx, cancel := context.WithTimeout(context.Background(), targetDialTimeout)
 	defer cancel()
@@ -279,7 +351,7 @@ func (b *bindingListener) proxy(source net.Conn) {
 	defer target.Close()
 	b.track(target, true)
 	defer b.track(target, false)
-	bridge(source, target)
+	b.carrier.pipe(source, target, ingressLabels(id, source), started)
 }
 
 func bridge(left, right net.Conn) {

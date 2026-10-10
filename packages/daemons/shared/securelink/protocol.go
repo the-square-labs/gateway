@@ -19,6 +19,11 @@ const (
 	// ProtocolVersionIngressOnly is the first control protocol: ingress
 	// bindings only.
 	ProtocolVersionIngressOnly = 1
+	// ProtocolVersionHandover is the request that hands a replaced connector's
+	// sessions to its replacement (Handover). Only that request uses it: a
+	// connector of an earlier release answers it UnsupportedVersionError and
+	// changes nothing, and is retired the way it was before.
+	ProtocolVersionHandover = 3
 	// RelayProtocolVersion is the version of RelayRequest and RelayResponse on
 	// the daemon's connector sockets (storage-relay.sock, egress.sock). It did
 	// not change with the control protocol: daemons and storage connectors of
@@ -81,7 +86,48 @@ type SyncRequest struct {
 	// Drain (v2) stops a connector that a replacement took over from accepting: it closes every listener, keeps the
 	// sessions it carries, and answers how many are still open (Active). Bindings and Egress are ignored.
 	Drain bool `json:"drain,omitempty"`
+	// Handover (v3 only) drains the connector like Drain and passes the sessions it carries to its replacement.
+	Handover *HandoverRequest `json:"handover,omitempty"`
 }
+
+// HandoverRequest names the replacement a replaced connector hands its sessions to: the base name of the
+// replacement's control socket, in the control directory both connectors share.
+type HandoverRequest struct {
+	To string `json:"to"`
+}
+
+// HandoverResult is what a handover did. The connector carries on the sessions it could not pass on (Left) until
+// they end, as a drained connector does.
+type HandoverResult struct {
+	HandedOver int `json:"handedOver"`
+	// Left counts the sessions the connector still carries, by why they stayed (HandoverLeft*).
+	Left map[string]int `json:"left,omitempty"`
+	// Peers name the ingress sessions handed over by the connection the daemon dialed: the daemon counts those
+	// tunnels as the replacement's from now on.
+	Peers []HandoverPeer `json:"peers,omitempty"`
+	// Error says why nothing was handed over (the replacement cannot take sessions, or was not reached).
+	Error string `json:"error,omitempty"`
+}
+
+// HandoverPeer is the connection of an ingress session the daemon dialed: its address on the daemon's side and on the
+// connector's ("ip:port", IPv4 unmapped).
+type HandoverPeer struct {
+	Daemon    string `json:"daemon"`
+	Connector string `json:"connector"`
+}
+
+// Why a handover left a session with the replaced connector.
+const (
+	// HandoverLeftTLS: the connector originates TLS over the session's relayed stream; that state cannot move to
+	// another process.
+	HandoverLeftTLS = "tls"
+	// HandoverLeftBusy: the session did not stop at a safe point in time.
+	HandoverLeftBusy = "busy"
+	// HandoverLeftStarting: the session was still being set up (its target dialed, its stream opened).
+	HandoverLeftStarting = "starting"
+	// HandoverLeftFailed: the replacement was not reached or did not take the sessions.
+	HandoverLeftFailed = "failed"
+)
 
 type BindingStatus struct {
 	ID         string `json:"id"`
@@ -111,8 +157,10 @@ type SyncResponse struct {
 	// Error refuses the ingress bindings of the request (or the whole request
 	// when it is malformed); the egress statuses stand on their own.
 	Error string `json:"error,omitempty"`
-	// Active answers a Drain request: the sessions the connector still carries.
+	// Active answers a Drain or Handover request: the sessions the connector still carries.
 	Active int `json:"active,omitempty"`
+	// Handover answers a Handover request.
+	Handover *HandoverResult `json:"handover,omitempty"`
 }
 
 // Drain tells a connector that a replacement took over to stop accepting and
@@ -127,6 +175,32 @@ func Drain(ctx context.Context, socketPath string) (int, error) {
 		return 0, fmt.Errorf("secure-link connector cannot drain: %s", response.Error)
 	}
 	return response.Active, nil
+}
+
+// ErrHandoverUnsupported: the connector is of a release that cannot hand its sessions over. It changed nothing.
+var ErrHandoverUnsupported = errors.New("secure-link connector cannot hand its sessions over")
+
+// Handover tells a connector that a replacement took over to stop accepting (as Drain does) and to pass the sessions
+// it carries to the replacement whose control socket is named to (a base name in the connector's own control
+// directory). It returns what the handover did and the sessions the connector still carries.
+func Handover(ctx context.Context, socketPath, to string) (*HandoverResult, int, error) {
+	response, err := exchange(ctx, socketPath, SyncRequest{Version: ProtocolVersionHandover, Handover: &HandoverRequest{To: to}})
+	if err != nil {
+		return nil, 0, err
+	}
+	if response.Version != ProtocolVersionHandover {
+		if response.Error == UnsupportedVersionError {
+			return nil, 0, ErrHandoverUnsupported
+		}
+		return nil, 0, fmt.Errorf("secure-link connector cannot hand over: %s", response.Error)
+	}
+	if response.Error != "" {
+		return nil, 0, errors.New(response.Error)
+	}
+	if response.Handover == nil {
+		return nil, 0, errors.New("secure-link connector answered a handover without its result")
+	}
+	return response.Handover, response.Active, nil
 }
 
 // RelayRequest switches a connector into a single server-authorized raw TCP

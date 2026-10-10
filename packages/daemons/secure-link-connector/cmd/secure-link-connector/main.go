@@ -67,9 +67,21 @@ func main() {
 	// Egress listeners reach the daemon through its egress socket in the same directory: both connector slots
 	// mount it, whatever their control socket is named.
 	egress := newEgressManager(filepath.Join(filepath.Dir(socketPath), egressSocketName))
+	// One set of sessions: a handover passes the ingress and egress sessions together.
+	egress.sessions = manager.sessions
+	// A connector this one replaces hands its sessions over on the takeover socket (takeover.go).
+	takeover, err := listenTakeover(socketPath)
+	if err != nil {
+		log.Printf("sessions of a replaced connector cannot be taken over: %v", err)
+	} else {
+		go serveTakeover(takeover, manager, egress)
+	}
 	go func() {
 		<-ctx.Done()
 		listener.Close()
+		if takeover != nil {
+			takeover.Close()
+		}
 		manager.close()
 		egress.close()
 	}()
@@ -114,9 +126,12 @@ func handleControlConnection(connection net.Conn, manager *bindingManager, egres
 // handleSyncRequest applies one control request. A version 1 request comes from a daemon that knows no egress (one
 // rolled back to an older release): it sets the ingress bindings, no egress listener stays, and the answer is
 // version 1 as that daemon expects. A version 2 request sets both; its egress listeners stand on their own, so
-// ingress bindings the connector refuses (response Error) leave the egress statuses in the answer.
+// ingress bindings the connector refuses (response Error) leave the egress statuses in the answer. A version 3
+// request is a handover (takeover.go) and nothing else.
 func handleSyncRequest(request securelink.SyncRequest, manager *bindingManager, egress *egressManager) securelink.SyncResponse {
 	switch request.Version {
+	case securelink.ProtocolVersionHandover:
+		return handOver(request.Handover, manager, egress)
 	case securelink.ProtocolVersionIngressOnly:
 		_ = manager.peer.set("")
 		if _, err := egress.sync(nil); err != nil {

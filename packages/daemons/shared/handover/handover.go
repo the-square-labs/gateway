@@ -34,6 +34,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"sort"
 	"strconv"
@@ -206,6 +207,10 @@ type Options struct {
 	Logger     *slog.Logger
 	// Keeper: LauncherKeeper when nil.
 	Keeper Keeper
+	// Repeatable lets a later handover take what this one left, or all of it
+	// when it did not commit (the secure-link connector, which carries on what
+	// it could not pass on). A daemon hands over once, as it exits.
+	Repeatable bool
 }
 
 // Result is what a handover did.
@@ -387,6 +392,9 @@ func (r *Registry) HandOver(opts Options) Result {
 	}
 	r.mu.Lock()
 	r.state = stateHandedOver
+	if opts.Repeatable {
+		r.state = stateRunning
+	}
 	r.mu.Unlock()
 	// Everything not handed over carries on here for the daemon's drain,
 	// including what started meanwhile.
@@ -491,7 +499,17 @@ func (r *Registry) collect(frozenAt time.Time, cut map[string]int) ([]candidate,
 				Labels: current.cfg.Labels, Session: relayresume.AppendSessionState(nil, state)}})
 		case *Pipe:
 			done := current.stop.ended()
-			snapshot := SnapshotItem{Kind: KindPipe, Labels: current.cfg.Labels, Done: done}
+			labels := current.cfg.Labels
+			if current.cfg.SnapshotLabels != nil {
+				labels = Labels{}
+				for key, value := range current.cfg.Labels {
+					labels[key] = value
+				}
+				for key, value := range current.cfg.SnapshotLabels() {
+					labels[key] = value
+				}
+			}
+			snapshot := SnapshotItem{Kind: KindPipe, Labels: labels, Done: done}
 			for d := range current.pending {
 				snapshot.Pending[d] = append([]byte(nil), current.pending[d]...)
 			}
@@ -508,6 +526,9 @@ func (r *Registry) collect(frozenAt time.Time, cut map[string]int) ([]candidate,
 func keepSockets(keeper Keeper, candidates []candidate, cut map[string]int, opts Options, frozenAt time.Time) ([]candidate, *Snapshot) {
 	snapshot := &Snapshot{DaemonType: opts.DaemonType, FromVersion: opts.Version, CreatedAt: frozenAt}
 	budget := listenerkeep.MaxEnvBytes - keeper.EnvBytes([]string{stateName})
+	if unbounded, ok := keeper.(UnboundedKeeper); ok && unbounded.Unbounded() {
+		budget = math.MaxInt
+	}
 	bytes := snapshotItemBytes
 	var kept []candidate
 	next := 1
