@@ -83,6 +83,8 @@ func (b *sourceLinkBinding) closeUnixForLease() {
 	defer b.leaseMu.Unlock()
 	b.leaseOpen = false
 	b.adoptedAt = time.Time{}
+	// A closed loopback endpoint refuses at once too (a reset to the SYN).
+	b.closeLoopbackLocked(false)
 	if b.unix == nil {
 		return
 	}
@@ -98,15 +100,16 @@ func (b *sourceLinkBinding) closeUnixForLease() {
 	b.unix = nil
 }
 
-// refuseNewConnections makes a listening Unix socket refuse every new
+// refuseNewConnections makes a listening Unix or TCP socket refuse every new
 // connection at once (shutdown(SHUT_RD): the kernel answers connect() with
-// ECONNREFUSED), whatever process still holds a copy of it.
+// ECONNREFUSED, a TCP one stops listening), whatever process still holds a
+// copy of it.
 func refuseNewConnections(listener net.Listener) {
-	unixListener, ok := listener.(*net.UnixListener)
+	conn, ok := listener.(syscall.Conn)
 	if !ok {
 		return
 	}
-	raw, err := unixListener.SyscallConn()
+	raw, err := conn.SyscallConn()
 	if err != nil {
 		return
 	}
@@ -121,26 +124,25 @@ func (b *sourceLinkBinding) openUnixForLease(m *sourceLinkManager, id string) er
 	b.leaseMu.Lock()
 	defer b.leaseMu.Unlock()
 	b.leaseOpen = true
-	if b.unix != nil {
-		return nil
-	}
 	select {
 	case <-b.done:
 		// The binding was removed entirely; there is nothing left to open.
 		return nil
 	default:
 	}
-	listener, keptName, err := m.listenUnixSocket(b.socketPath)
-	if err != nil {
-		return err
+	if b.unix == nil {
+		listener, keptName, err := m.listenUnixSocket(b.socketPath)
+		if err != nil {
+			return err
+		}
+		b.unix = listener
+		m.accept(id, b, listener, true)
+		if keptName == "" {
+			keptName = keepUnixListener(listener, b.socketPath)
+		}
+		b.keptName = keptName
 	}
-	b.unix = listener
-	m.accept(id, b, listener, true)
-	if keptName == "" {
-		keptName = keepUnixListener(listener, b.socketPath)
-	}
-	b.keptName = keptName
-	return nil
+	return b.openLoopbackLocked(m, id)
 }
 
 // adoptedWithin reports whether this binding's listener was taken over from
@@ -236,6 +238,33 @@ func (m *sourceLinkManager) ensureReferencedListeners(config string) []string {
 			absent = append(absent, socketPath)
 		}
 	}
+	for _, match := range secureLinkLoopbackReference.FindAllStringSubmatch(config, -1) {
+		address := match[1]
+		if seen[address] {
+			continue
+		}
+		seen[address] = true
+		m.mu.Lock()
+		var id string
+		var binding *sourceLinkBinding
+		for candidateID, candidate := range m.bindings {
+			candidate.leaseMu.Lock()
+			owns := candidate.loopAddr == address
+			candidate.leaseMu.Unlock()
+			if owns {
+				id, binding = candidateID, candidate
+				break
+			}
+		}
+		m.mu.Unlock()
+		if binding == nil {
+			// Not a Secure Link endpoint of this daemon (another upstream on a loopback address).
+			continue
+		}
+		if err := binding.ensureUnixListening(m, id); err != nil {
+			absent = append(absent, address)
+		}
+	}
 	return absent
 }
 
@@ -259,7 +288,7 @@ func (b *sourceLinkBinding) ensureUnixListening(m *sourceLinkManager, id string)
 	}
 	if b.unix != nil {
 		if _, err := os.Stat(b.socketPath); err == nil {
-			return nil
+			return b.openLoopbackLocked(m, id)
 		}
 		if b.keptName != "" {
 			_ = listenerkeep.Drop(b.keptName)
@@ -278,5 +307,5 @@ func (b *sourceLinkBinding) ensureUnixListening(m *sourceLinkManager, id string)
 		keptName = keepUnixListener(listener, b.socketPath)
 	}
 	b.keptName = keptName
-	return nil
+	return b.openLoopbackLocked(m, id)
 }

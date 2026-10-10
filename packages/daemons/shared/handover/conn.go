@@ -136,6 +136,15 @@ func (c *restoredConn) Close() error {
 	return c.Conn.Close()
 }
 
+// SyscallConn reaches the socket itself: the nginx daemon resets a cut
+// loopback stream through it.
+func (c *restoredConn) SyscallConn() (syscall.RawConn, error) {
+	if conn, ok := c.Conn.(syscall.Conn); ok {
+		return conn.SyscallConn()
+	}
+	return nil, errNoSocket
+}
+
 // CloseWrite passes a half-close on to the socket.
 func (c *restoredConn) CloseWrite() error {
 	if closer, ok := c.Conn.(interface{ CloseWrite() error }); ok {

@@ -30,6 +30,7 @@ import {
   availabilityMemberSyncContext,
   syncableAvailabilityMember,
 } from './proxy-secure-link-availability.js';
+import { secureLinkLoopbackAddress } from './secure-link-loopback.js';
 
 type ProxyHostRow = typeof proxyHosts.$inferSelect;
 export type ProxyAdditionalSecureLinkRow = typeof proxyAdditionalSecureLinks.$inferSelect;
@@ -2712,6 +2713,7 @@ export class ProxySecureLinkService {
           // loopback listener. Generated configs and additional links use the
           // Unix socket and can safely drop TCP.
           socketOnly: sourceConfigManaged,
+          loopbackAddress: secureLinkLoopbackAddress(host.secureLinkLoopbackSlot),
         };
       }),
       ...additional
@@ -2724,6 +2726,7 @@ export class ProxySecureLinkService {
           sourceConfigManaged: false,
           rotateListener: binding.id === rotateLinkId,
           socketOnly: true,
+          loopbackAddress: secureLinkLoopbackAddress(binding.loopbackSlot),
           ...availabilityMemberBindingFields(binding, members),
         })),
     ]);

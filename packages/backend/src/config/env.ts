@@ -84,6 +84,10 @@ const envSchema = z.object({
     .default('false')
     .transform((v) => v === 'true' || v === '1'),
 
+  // The port of every Route Secure Link loopback endpoint on nginx nodes (127.64.0.0 onwards, one address per link).
+  // Move it when another service on the nginx nodes listens on this port on all addresses.
+  SECURE_LINK_LOOPBACK_PORT: z.coerce.number().int().min(1).max(65535).default(17613),
+
   // gRPC server for daemon communication
   GRPC_PORT: z.coerce.number().default(9443),
   GRPC_TLS_CERT: optionalNonEmptyString,

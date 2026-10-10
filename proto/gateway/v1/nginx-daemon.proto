@@ -914,6 +914,13 @@ message ProxySecureLinkBinding {
   // docker node id) whose lease opens this member (D8).
   string availability_policy_id = 15;
   string availability_candidate_id = 16;
+  // Source-only. The loopback TCP endpoint ("127.a.b.c:port") the daemon
+  // serves this link on next to its Unix socket, for nginx peers only. Unlike
+  // a Unix socket, a cut stream ends with a TCP reset there, so nginx reports
+  // an upstream error instead of a clean end. Gateway allocates it uniquely
+  // per link and renders it only for nodes reporting
+  // nginx_secure_link_loopback_tcp_v1. Empty: Unix socket only.
+  string loopback_address = 17;
 }
 
 message ProbeProxySecureLinkCommand {

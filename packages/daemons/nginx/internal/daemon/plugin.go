@@ -220,6 +220,11 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 		p.mgr.CachedPID,
 	)
 	p.secureLinks.shedLog = p.secureLinkShedLog("proxy secure-link")
+	p.secureLinks.loopbackFailed = func(linkID, address string, err error) {
+		// The Unix socket serves on; a config that uses the endpoint gets refused connections (another local
+		// service holds the port: Gateway's SECURE_LINK_LOOPBACK_PORT moves every endpoint).
+		logger.Warn("proxy secure-link loopback endpoint cannot listen", "link_id", linkID, "address", address, "error", err)
+	}
 	p.registryLinks.shedLog = p.secureLinkShedLog("registry ingress")
 	p.secureLinkState, err = securelink.NewStateStore(baseCfg.StateDir)
 	if err != nil {
@@ -538,7 +543,7 @@ func (p *NginxPlugin) CollectStats() *pb.StatsReport {
 }
 
 func (p *NginxPlugin) capabilities() []string {
-	capabilities := []string{"nginx_certificate_distribution_v2", "generic_relay_tunnel_v1", "relay_pool_v1", "proxy_secure_links_v1", "nginx_secure_link_socket_only_v1", "nginx_registry_ingress_v1"}
+	capabilities := []string{"nginx_certificate_distribution_v2", "generic_relay_tunnel_v1", "relay_pool_v1", "proxy_secure_links_v1", "nginx_secure_link_socket_only_v1", "nginx_registry_ingress_v1", NginxSecureLinkLoopbackCapability}
 	if p.relayStreams != nil {
 		capabilities = append(capabilities, relayresume.Capability, handover.Capability)
 	}

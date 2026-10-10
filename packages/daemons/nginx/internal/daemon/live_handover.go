@@ -201,8 +201,12 @@ func (p *NginxPlugin) resumeSecureLinkStream(item *handover.RestoredSession) {
 	tracked := newTrackedConn(item.Conn).(*trackedConn)
 	tracked.opened.Store(true)
 	tracked.resumable.Store(true)
+	// A loopback connection keeps the reset-on-cut it had (SO_LINGER belongs to the socket): only its normal end
+	// clears it, here as in the previous process.
+	loopback := binding.isLoopbackConn(item.Conn)
+	tracked.loopback.Store(loopback)
 	binding.activeMu.Lock()
-	binding.active[tracked] = item.Conn.LocalAddr().Network() == "unix"
+	binding.active[tracked] = item.Conn.LocalAddr().Network() == "unix" || loopback
 	binding.activeMu.Unlock()
 	go func() {
 		defer func() {

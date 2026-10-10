@@ -104,6 +104,10 @@ type trackedConn struct {
 	// nothing here ends it (live_handover.go).
 	resumable  atomic.Bool
 	handedOver atomic.Bool
+	// loopback: accepted on a loopback TCP endpoint, so closing it resets it
+	// unless graceful says it ended normally (secure_link_loopback.go).
+	loopback atomic.Bool
+	graceful atomic.Bool
 }
 
 func newTrackedConn(connection net.Conn) net.Conn {
@@ -120,6 +124,9 @@ func (c *trackedConn) Read(buffer []byte) (int, error) {
 	if n > 0 {
 		c.lastRead.Store(time.Now().UnixNano())
 	}
+	if err != nil {
+		c.readEnded(err)
+	}
 	return n, err
 }
 
@@ -133,6 +140,8 @@ func (c *trackedConn) Write(buffer []byte) (int, error) {
 
 // CloseWrite passes a relay half-close on to nginx.
 func (c *trackedConn) CloseWrite() error {
+	// The response ended normally: nginx reads its end, never a reset.
+	c.markGraceful()
 	if closer, ok := c.Conn.(interface{ CloseWrite() error }); ok {
 		return closer.CloseWrite()
 	}
@@ -146,6 +155,8 @@ func (c *trackedConn) end() {
 	if c.handedOver.Load() {
 		return
 	}
+	// An idle keep-alive connection let go: a normal end.
+	c.markGraceful()
 	if connection, ok := c.Conn.(interface {
 		CloseRead() error
 		CloseWrite() error
@@ -187,6 +198,9 @@ func (m *sourceLinkManager) keptListeners() int {
 		if binding.unix != nil && binding.keptName != "" {
 			kept++
 		}
+		if binding.loop != nil && binding.loopKept != "" {
+			kept++
+		}
 		binding.leaseMu.Unlock()
 	}
 	return kept
@@ -219,6 +233,11 @@ func (m *sourceLinkManager) suspendForHandover() int {
 			// the socket, and its backlog, alive for the successor.
 			_ = binding.unix.Close()
 			binding.unix = nil
+			handed++
+		}
+		if binding.loop != nil && binding.loopKept != "" {
+			// Same for the loopback endpoint: the keeper's copy listens on.
+			binding.closeLoopbackLocked(true)
 			handed++
 		}
 		binding.leaseMu.Unlock()

@@ -802,6 +802,7 @@ export class NodeDispatchService {
       dormant?: boolean;
       availabilityPolicyId?: string;
       availabilityCandidateId?: string;
+      loopbackAddress?: string;
     }>,
     timeoutMs = 60_000
   ): Promise<CommandResult> {

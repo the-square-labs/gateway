@@ -6,6 +6,7 @@ import {
   integer,
   jsonb,
   pgEnum,
+  pgSequence,
   pgTable,
   primaryKey,
   text,
@@ -68,6 +69,14 @@ export interface RewriteRule {
   type: 'permanent' | 'temporary';
 }
 
+/** Loopback TCP address slots of Secure Links (proxy hosts and additional links share it, so slots never repeat). */
+export const secureLinkLoopbackSlotSeq = pgSequence('secure_link_loopback_slot_seq', {
+  startWith: 1,
+  minValue: 1,
+  maxValue: 12000000,
+  cycle: false,
+});
+
 export const proxyHosts = pgTable(
   'proxy_hosts',
   {
@@ -112,6 +121,10 @@ export const proxyHosts = pgTable(
     secureLinkTargetContainer: varchar('secure_link_target_container', { length: 255 }),
     secureLinkTargetHost: varchar('secure_link_target_host', { length: 255 }),
     secureLinkListenerPort: integer('secure_link_listener_port'),
+    // The link's loopback TCP address on its nginx nodes (secureLinkLoopbackAddress); unique across both link tables.
+    secureLinkLoopbackSlot: integer('secure_link_loopback_slot')
+      .notNull()
+      .default(sql`nextval('secure_link_loopback_slot_seq')`),
     secureLinkConnectorPort: integer('secure_link_connector_port'),
     secureLinkMigratedAt: timestamp('secure_link_migrated_at', { withTimezone: true }),
 
@@ -191,6 +204,9 @@ export const proxyHosts = pgTable(
   },
   (table) => ({
     enabledIdx: index('proxy_host_enabled_idx').on(table.enabled),
+    secureLinkLoopbackSlotUnique: uniqueIndex('proxy_hosts_secure_link_loopback_slot_unique').on(
+      table.secureLinkLoopbackSlot
+    ),
     typeIdx: index('proxy_host_type_idx').on(table.type),
     folderIdx: index('proxy_host_folder_idx').on(table.folderId),
     createdByIdx: index('proxy_host_created_by_idx').on(table.createdById),

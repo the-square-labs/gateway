@@ -6,6 +6,11 @@ import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { INGRESS_GROUP_CAPABILITY, nodeReportsCapability } from '@/modules/ingress-groups/ingress-group-routing.js';
+import {
+  NGINX_SECURE_LINK_LOOPBACK_CAPABILITY,
+  secureLinkLoopbackAddresses,
+  withSecureLinkLoopbackUpstreams,
+} from './secure-link-loopback.js';
 import { withIngressHealthLocation } from '@/modules/ingress-groups/ingress-health.js';
 import type { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
 import type { PageRouteService } from '@/modules/pages/routes/page-route.service.js';
@@ -813,6 +818,12 @@ export abstract class ProxyServiceCore {
           ? { hostId: host.id, secret: this.maintenanceAccess.secretForHost(host.id) }
           : undefined;
       result = this.nginxTemplateService.applyMaintenanceGuard(rendered, access, hideExternalBranding);
+    }
+    // A node whose daemon serves the links on loopback TCP gets them there: a cut stream then ends with a reset,
+    // which nginx reports, instead of the clean end a Unix socket gives (secure-link-loopback.ts). Rendered per node:
+    // an older daemon serves the Unix sockets only.
+    if (await this.nodeReports(host.nodeId, NGINX_SECURE_LINK_LOOPBACK_CAPABILITY)) {
+      result = withSecureLinkLoopbackUpstreams(result, await secureLinkLoopbackAddresses(this.db, result));
     }
     // Every server block on a node with the ingress health responder answers the reserved health path (rendered
     // per node: an older daemon lacks the generation variable the location uses).

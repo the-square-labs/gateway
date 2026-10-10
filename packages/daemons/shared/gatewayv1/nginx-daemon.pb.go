@@ -6578,8 +6578,15 @@ type ProxySecureLinkBinding struct {
 	// docker node id) whose lease opens this member (D8).
 	AvailabilityPolicyId    string `protobuf:"bytes,15,opt,name=availability_policy_id,json=availabilityPolicyId,proto3" json:"availability_policy_id,omitempty"`
 	AvailabilityCandidateId string `protobuf:"bytes,16,opt,name=availability_candidate_id,json=availabilityCandidateId,proto3" json:"availability_candidate_id,omitempty"`
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
+	// Source-only. The loopback TCP endpoint ("127.a.b.c:port") the daemon
+	// serves this link on next to its Unix socket, for nginx peers only. Unlike
+	// a Unix socket, a cut stream ends with a TCP reset there, so nginx reports
+	// an upstream error instead of a clean end. Gateway allocates it uniquely
+	// per link and renders it only for nodes reporting
+	// nginx_secure_link_loopback_tcp_v1. Empty: Unix socket only.
+	LoopbackAddress string `protobuf:"bytes,17,opt,name=loopback_address,json=loopbackAddress,proto3" json:"loopback_address,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ProxySecureLinkBinding) Reset() {
@@ -6720,6 +6727,13 @@ func (x *ProxySecureLinkBinding) GetAvailabilityPolicyId() string {
 func (x *ProxySecureLinkBinding) GetAvailabilityCandidateId() string {
 	if x != nil {
 		return x.AvailabilityCandidateId
+	}
+	return ""
+}
+
+func (x *ProxySecureLinkBinding) GetLoopbackAddress() string {
+	if x != nil {
+		return x.LoopbackAddress
 	}
 	return ""
 }
@@ -13849,7 +13863,7 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\x15assignment_generation\x18\x05 \x01(\x04R\x14assignmentGeneration\x12<\n" +
 	"\tcandidate\x18\x06 \x01(\v2\x1e.gateway.v1.RelayDataCandidateR\tcandidate\"]\n" +
 	"\x1bSyncProxySecureLinksCommand\x12>\n" +
-	"\bbindings\x18\x01 \x03(\v2\".gateway.v1.ProxySecureLinkBindingR\bbindings\"\x8d\x05\n" +
+	"\bbindings\x18\x01 \x03(\v2\".gateway.v1.ProxySecureLinkBindingR\bbindings\"\xb8\x05\n" +
 	"\x16ProxySecureLinkBinding\x12\x17\n" +
 	"\alink_id\x18\x01 \x01(\tR\x06linkId\x12\x12\n" +
 	"\x04role\x18\x02 \x01(\tR\x04role\x12\x1e\n" +
@@ -13872,7 +13886,8 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"socketOnly\x12\x18\n" +
 	"\adormant\x18\x0e \x01(\bR\adormant\x124\n" +
 	"\x16availability_policy_id\x18\x0f \x01(\tR\x14availabilityPolicyId\x12:\n" +
-	"\x19availability_candidate_id\x18\x10 \x01(\tR\x17availabilityCandidateId\"\x81\x02\n" +
+	"\x19availability_candidate_id\x18\x10 \x01(\tR\x17availabilityCandidateId\x12)\n" +
+	"\x10loopback_address\x18\x11 \x01(\tR\x0floopbackAddress\"\x81\x02\n" +
 	"\x1bProbeProxySecureLinkCommand\x12\x17\n" +
 	"\alink_id\x18\x01 \x01(\tR\x06linkId\x12\x16\n" +
 	"\x06scheme\x18\x02 \x01(\tR\x06scheme\x12\x12\n" +

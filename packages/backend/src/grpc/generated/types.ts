@@ -1090,6 +1090,8 @@ export interface ProxySecureLinkBinding {
   dormant?: boolean;
   availabilityPolicyId?: string;
   availabilityCandidateId?: string;
+  /** Source-only: the loopback TCP endpoint ("127.a.b.c:port") the daemon serves the link on next to its socket. */
+  loopbackAddress?: string;
 }
 
 export interface ProbeProxySecureLinkCommand {

@@ -55,6 +55,9 @@ func newNginxPeerAuthority(binary string, masterPID func() (int, error)) *nginxP
 // authorize reports whether a connection comes from this daemon or from a
 // process of the managed nginx.
 func (a *nginxPeerAuthority) authorize(connection net.Conn) bool {
+	if _, ok := connection.(*net.TCPConn); ok {
+		return a.authorizeLoopback(connection)
+	}
 	peer, err := unixPeerCredentials(connection)
 	if err != nil {
 		return false
@@ -96,6 +99,21 @@ func (a *nginxPeerAuthority) authorizePeer(peer unixPeerIdentity, now time.Time)
 	a.known[peer.pid] = knownNginxPeer{uid: peer.uid, master: master, until: now.Add(peerAuthorizationTTL)}
 	a.mu.Unlock()
 	return true
+}
+
+// authorizeLoopback reports whether a loopback TCP connection comes from the
+// managed nginx workers: its peer socket is owned by their uid. A loopback
+// port carries no process credentials, so this is the uid check alone: any
+// process of that user passes (root when nginx runs its workers as root).
+var loopbackPeerUID = secureLinkLoopbackPeerUID
+
+func (a *nginxPeerAuthority) authorizeLoopback(connection net.Conn) bool {
+	uid, err := loopbackPeerUID(connection)
+	if err != nil {
+		return false
+	}
+	owner, err := a.socketOwnerUID()
+	return err == nil && uid == owner
 }
 
 // socketOwnerUID is the uid of the managed nginx workers, which own the

@@ -97,6 +97,9 @@ type sourceLinkManager struct {
 	// the next one (a restart or update): no socket is created or re-created
 	// at a path any more, the successor adopts the kept ones.
 	suspended atomic.Bool
+	// loopbackFailed reports a loopback endpoint that could not listen (nil:
+	// not reported); the link's Unix socket serves on.
+	loopbackFailed func(linkID, address string, err error)
 }
 
 type sourceLinkBinding struct {
@@ -128,6 +131,13 @@ type sourceLinkBinding struct {
 	// previous one. Both are guarded by leaseMu.
 	keptName  string
 	adoptedAt time.Time
+
+	// loopAddr is the loopback TCP endpoint Gateway gave the link ("": Unix
+	// socket only); loop listens on it while unix does, and loopKept is its
+	// keeper name (secure_link_loopback.go). Guarded by leaseMu.
+	loopAddr string
+	loop     net.Listener
+	loopKept string
 }
 
 type sourceLinkStatus struct {
@@ -135,6 +145,8 @@ type sourceLinkStatus struct {
 	Generation uint64 `json:"generation"`
 	Port       int    `json:"port"`
 	SocketPath string `json:"socketPath"`
+	// LoopbackAddress is set while the link's loopback endpoint listens.
+	LoopbackAddress string `json:"loopbackAddress,omitempty"`
 }
 
 func proxySecureLinkSetupContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc, func() bool) {
@@ -184,6 +196,8 @@ func (m *sourceLinkManager) sync(command *pb.SyncProxySecureLinksCommand) ([]sou
 		return nil, errors.New("proxy secure-link bindings are required")
 	}
 	desired := make(map[string]*pb.ProxySecureLinkBinding, len(command.Bindings))
+	loopbackAddresses := make(map[string]string, len(command.Bindings))
+	loopbackOwners := make(map[string]string, len(command.Bindings))
 	for _, binding := range command.Bindings {
 		if binding.Role != "source" || !secureLinkIDPattern.MatchString(binding.LinkId) || binding.ListenerPort > 65535 {
 			return nil, errors.New("invalid proxy secure-link source binding")
@@ -191,6 +205,18 @@ func (m *sourceLinkManager) sync(command *pb.SyncProxySecureLinksCommand) ([]sou
 		if _, exists := desired[binding.LinkId]; exists {
 			return nil, fmt.Errorf("duplicate proxy secure-link binding %s", binding.LinkId)
 		}
+		loopback, err := parseSecureLinkLoopbackAddress(binding.GetLoopbackAddress())
+		if err != nil {
+			return nil, err
+		}
+		if loopback != "" {
+			// Two links on one endpoint would serve one link's traffic to the other.
+			if owner, taken := loopbackOwners[loopback]; taken {
+				return nil, fmt.Errorf("proxy secure-links %s and %s share loopback address %s", owner, binding.LinkId, loopback)
+			}
+			loopbackOwners[loopback] = binding.LinkId
+		}
+		loopbackAddresses[binding.LinkId] = loopback
 		desired[binding.LinkId] = binding
 	}
 	desiredIDs := make([]string, 0, len(desired))
@@ -265,6 +291,7 @@ func (m *sourceLinkManager) sync(command *pb.SyncProxySecureLinksCommand) ([]sou
 			created.listener = listener
 			created.socketOnly = false
 		}
+		created.loopAddr = loopbackAddresses[id]
 		applyLeaseMetadata(created, binding)
 		staged[id] = created
 	}
@@ -387,6 +414,11 @@ func (m *sourceLinkManager) sync(command *pb.SyncProxySecureLinksCommand) ([]sou
 			// The staged listener now owns the canonical path. Closing the retired
 			// binding must not unlink it; the old path was retained as a rollback
 			// backup until every rotation was published.
+			// The successor serves the same loopback endpoint: it takes the
+			// listening socket over before the retired binding closes.
+			if err := staged[id].takeLoopbackFrom(m, id, current); err != nil && m.loopbackFailed != nil {
+				m.loopbackFailed(id, staged[id].loopAddr, err)
+			}
 			current.closePreservingSocketPath()
 			if backup := rotationBackups[id]; backup != "" {
 				_ = os.Remove(backup)
@@ -403,6 +435,9 @@ func (m *sourceLinkManager) sync(command *pb.SyncProxySecureLinksCommand) ([]sou
 			if err := m.refreshLeaseMetadata(id, current, binding); err != nil && leaseErr == nil {
 				leaseErr = fmt.Errorf("reopen proxy secure-link socket %s: %w", id, err)
 			}
+			if err := current.setLoopbackAddress(m, id, loopbackAddresses[id]); err != nil && m.loopbackFailed != nil {
+				m.loopbackFailed(id, loopbackAddresses[id], err)
+			}
 			continue
 		}
 		m.bindings[id] = staged[id]
@@ -418,7 +453,13 @@ func (m *sourceLinkManager) sync(command *pb.SyncProxySecureLinksCommand) ([]sou
 		if binding.listener != nil {
 			port = binding.listener.Addr().(*net.TCPAddr).Port
 		}
-		statuses = append(statuses, sourceLinkStatus{LinkID: id, Generation: binding.generation, Port: port, SocketPath: binding.socketPath})
+		binding.leaseMu.Lock()
+		loopback := ""
+		if binding.loop != nil {
+			loopback = binding.loopAddr
+		}
+		binding.leaseMu.Unlock()
+		statuses = append(statuses, sourceLinkStatus{LinkID: id, Generation: binding.generation, Port: port, SocketPath: binding.socketPath, LoopbackAddress: loopback})
 	}
 	sort.Slice(statuses, func(i, j int) bool { return statuses[i].LinkID < statuses[j].LinkID })
 	return statuses, nil
@@ -698,6 +739,9 @@ func (m *sourceLinkManager) start(id string, binding *sourceLinkBinding) {
 			binding.keptName = keepUnixListener(binding.unix, binding.socketPath)
 		}
 	}
+	if err := binding.openLoopbackLocked(m, id); err != nil && m.loopbackFailed != nil {
+		m.loopbackFailed(id, binding.loopAddr, err)
+	}
 }
 
 // accept serves a listener for the life of the binding (B-22). The loop only
@@ -738,6 +782,12 @@ func (m *sourceLinkManager) accept(id string, binding *sourceLinkBinding, listen
 // away, and hands it to the opener.
 func (m *sourceLinkManager) serve(id string, binding *sourceLinkBinding, connection net.Conn, authorizePeer bool) {
 	tracked := newTrackedConn(connection).(*trackedConn)
+	if _, isTCP := connection.(*net.TCPConn); isTCP && authorizePeer {
+		// Reset on every close from here on, the process dying included,
+		// until the connection ends normally (secure_link_loopback.go).
+		_ = setSocketLinger(connection, 0)
+		tracked.loopback.Store(true)
+	}
 	releaseNode, releaseLink := m.setup.releaseOnce(), binding.setup.releaseOnce()
 	releaseSetup := func() {
 		releaseNode()
@@ -825,6 +875,7 @@ func (b *sourceLinkBinding) closeBinding(removeSocketPath bool) {
 		if b.unix != nil {
 			_ = b.unix.Close()
 		}
+		b.closeLoopbackLocked(false)
 		b.leaseMu.Unlock()
 		if removeSocketPath {
 			_ = os.Remove(b.socketPath)
