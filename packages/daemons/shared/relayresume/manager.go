@@ -632,7 +632,9 @@ func (m *Manager) Repath(s *Session, trigger Trigger, at time.Time) {
 func (m *Manager) MoveOffLane(s *Session) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.source == nil || s.core.Current() == nil {
+	// A stream still opening (its HELLO not answered) stays where it is, like the lane's raw tunnels: the old lane
+	// carries it until it ends.
+	if s.source == nil || s.core.Current() == nil || s.core.State() != StateOpen {
 		return
 	}
 	s.source.requestLocked(s, plannedMove{trigger: TriggerLane, from: s.core.Current(), at: time.Now(), newPath: true})
