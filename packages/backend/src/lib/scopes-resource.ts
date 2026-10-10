@@ -17,6 +17,25 @@ export const FOLDER_CREATION_SCOPES = [
   'docker:images:pull',
 ] as const;
 
+/**
+ * Folder-tree management scopes that take a folder qualifier: `<scope>:folder/<id>` manages the folder's
+ * subfolders and the placement of items in them, never the folder itself or the top level. Not listed (broad
+ * only): Docker folders; databases, storage, Pages and logging folders, whose folder routes do not check
+ * per-folder grants yet; hosting snapshot folders, which are qualified by their hosting resource.
+ */
+export const FOLDER_MANAGE_SCOPES = [
+  'domains:folders:manage',
+  'proxy:folders:manage',
+  'ssl:cert:folders:manage',
+  'pki:ca:folders:manage',
+  'pki:cert:folders:manage',
+  'pki:templates:folders:manage',
+  'proxy:templates:folders:manage',
+  'nodes:folders:manage',
+  'admin:users:folders:manage',
+  'admin:groups:folders:manage',
+] as const;
+
 export const RESOURCE_SCOPABLE: readonly string[] = [
   'admin:users',
   'admin:groups',
@@ -171,12 +190,13 @@ export const RESOURCE_SCOPABLE: readonly string[] = [
   'logs:schemas:edit',
   'logs:schemas:delete',
   'logs:read',
+  ...FOLDER_MANAGE_SCOPES,
 ];
 
 /**
  * Resource-scopable permissions that may target a resource folder.
  * Creation targets the destination folder; other actions target its contents.
- * Folder-management permissions remain separate from resource actions.
+ * Folder-management permissions remain separate from resource actions: their folder grants cover subfolders only.
  */
 export const FOLDER_SCOPABLE: readonly string[] = [
   'admin:users',
@@ -301,7 +321,12 @@ export const FOLDER_SCOPABLE: readonly string[] = [
   'logs:schemas:edit',
   'logs:schemas:delete',
   'logs:read',
+  ...FOLDER_MANAGE_SCOPES,
 ];
 
 /** Folder-scopable permissions that accept only a folder qualifier (`folder/<id>`), never one resource or node. */
-export const FOLDER_ONLY_SCOPABLE: readonly string[] = ['ingress:groups:view', 'ingress:groups:manage'];
+export const FOLDER_ONLY_SCOPABLE: readonly string[] = [
+  'ingress:groups:view',
+  'ingress:groups:manage',
+  ...FOLDER_MANAGE_SCOPES,
+];

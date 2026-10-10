@@ -10,6 +10,7 @@ import {
   canonicalizeScopes,
   DEMO_ADMIN_SCOPES,
   extractBaseScope,
+  FOLDER_MANAGE_SCOPES,
   FOLDER_SCOPABLE,
   GUEST_SCOPES,
   getBootstrapBuiltinGroups,
@@ -708,5 +709,29 @@ describe('canonical scope definitions', () => {
         'unknown:scope',
       ])
     ).toEqual(['proxy:advanced:bypasser', 'proxy:advanced:host-1', 'proxy:raw:write:host-1', 'proxy:view']);
+  });
+});
+
+describe('folder management scopes', () => {
+  const FOLDER_ID = '22222222-2222-4222-8222-222222222222';
+
+  it('accept a folder qualifier only where the folder routes check it', async () => {
+    const { delegatedScopeIssue } = await import('./scopes-schemas.js');
+    for (const scope of FOLDER_MANAGE_SCOPES) {
+      expect(delegatedScopeIssue(`${scope}:folder/${FOLDER_ID}`), scope).toBeNull();
+      expect(delegatedScopeIssue(`${scope}:${FOLDER_ID}`), scope).toContain('can only be restricted to a folder');
+      expect(extractBaseScope(`${scope}:folder/${FOLDER_ID}`)).toBe(scope);
+    }
+    for (const scope of [
+      'docker:folders:manage',
+      'databases:folders:manage',
+      'storage:folders:manage',
+      'pages:folders:manage',
+      'logs:environments:folders:manage',
+      'logs:schemas:folders:manage',
+    ]) {
+      expect(FOLDER_MANAGE_SCOPES as readonly string[]).not.toContain(scope);
+      expect(delegatedScopeIssue(`${scope}:folder/${FOLDER_ID}`), scope).not.toBeNull();
+    }
   });
 });

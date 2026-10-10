@@ -32,6 +32,11 @@ interface DockerFolderState {
     resourceType?: DockerFolderResourceType
   ) => Promise<void>;
   deleteFolder: (id: string, resourceType?: DockerFolderResourceType) => Promise<void>;
+  moveFolder: (
+    id: string,
+    parentId: string | null,
+    resourceType?: DockerFolderResourceType
+  ) => Promise<void>;
   reorderFolders: (
     items: { id: string; sortOrder: number }[],
     resourceType?: DockerFolderResourceType
@@ -288,6 +293,11 @@ export const useDockerFolderStore = create<DockerFolderState>()((set, get) => {
 
     renameFolder: async (id, name, resourceType = "container") => {
       await api.updateDockerFolder(id, { name });
+      await get().fetchFolders(resourceType);
+    },
+
+    moveFolder: async (id, parentId, resourceType = "container") => {
+      await api.moveDockerFolder(id, parentId);
       await get().fetchFolders(resourceType);
     },
 

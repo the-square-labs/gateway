@@ -18,7 +18,7 @@ export interface CreationFolderChoices {
   allowRoot: boolean;
   /** Folders the caller may create in, in tree order. */
   folders: CreationFolderOption[];
-  /** Initial picker value: root when allowed, the only allowed folder otherwise, else unset. */
+  /** Initial picker value: root when allowed, else the only top-most allowed folder, else unset. */
   defaultFolderId: string;
 }
 
@@ -46,10 +46,19 @@ export function creationFolderChoices(
   const allowed = folders.filter((folder) =>
     canCreateInFolder(scopes, baseScope, folder.id, nodeId || undefined)
   );
+  // Without the root, the picker starts at the caller's top-most folder (as their lists do).
+  const topDepth = allowRoot ? 0 : Math.min(...allowed.map((folder) => folder.depth));
+  // One top-most folder (the caller's root, with its subfolders below) is the default destination.
+  const topFolderIds = allowed
+    .filter((folder) => folder.depth === topDepth)
+    .map((folder) => folder.id);
   return {
     allowRoot,
-    folders: allowed,
-    defaultFolderId: !allowRoot && allowed.length === 1 ? allowed[0]!.id : "",
+    folders:
+      topDepth > 0 && Number.isFinite(topDepth)
+        ? allowed.map((folder) => ({ ...folder, depth: folder.depth - topDepth }))
+        : allowed,
+    defaultFolderId: !allowRoot && topFolderIds.length === 1 ? topFolderIds[0]! : "",
   };
 }
 

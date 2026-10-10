@@ -2,7 +2,7 @@ import type { OpenAPIHono } from '@hono/zod-openapi';
 import { getFolderScopedIds } from '@/lib/folder-scopes.js';
 import { getResourceScopedIds, hasScope, hasScopeForCreation, hasScopeForResource } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { requireAnyScopeBase, requireScope } from '@/modules/auth/auth.middleware.js';
+import { requireAnyScopeBase, requireScopeBase } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
 import type { ResourceFolderRouteDocs } from './resource-folder.docs.js';
 import {
@@ -14,11 +14,20 @@ import {
   UpdateResourceFolderSchema,
 } from './resource-folder.schemas.js';
 import type { FolderedResourceService } from './resource-folder.service.js';
+import {
+  assertFolderManage,
+  assertFolderManageForFolder,
+  assertFolderManageForFolders,
+  assertFolderManageForResources,
+} from './resource-folder-access.js';
 
 export interface ResourceFolderRouteConfig {
   docs: ResourceFolderRouteDocs;
   service: () => FolderedResourceService;
-  /** Folder create, rename, move and delete, and every placement change. */
+  /**
+   * Folder create, rename, move and delete, and every placement change. Held broadly, or on a folder: a grant on
+   * folder X manages X's subfolders and the placement of resources in them (see resource-folder-access.ts).
+   */
   manageScope: string;
   /** The family's view scope: held broadly it lists every folder. */
   viewScope: string;
@@ -47,7 +56,8 @@ export function registerResourceFolderRoutes(routes: OpenAPIHono<AppEnv>, config
   const { docs, manageScope, viewScope, placementScope } = config;
   const listScopes = config.listScopes ?? [];
   const folderGrantScopes = config.folderGrantScopes ?? [];
-  const manage = requireScope(manageScope);
+  // Folder grants pass the gate; each handler then checks the exact place it changes.
+  const manage = requireScopeBase(manageScope);
 
   const authorizeItems = async (scopes: readonly string[], ids: readonly string[]) => {
     if (config.authorizePlacement) return config.authorizePlacement(scopes, ids);
@@ -72,7 +82,7 @@ export function registerResourceFolderRoutes(routes: OpenAPIHono<AppEnv>, config
                   (config.visibleResourceScopes ?? [viewScope]).flatMap((scope) => getResourceScopedIds(scopes, scope))
                 ),
               ],
-              allowedFolderIds: getFolderScopedIds(scopes, folderGrantScopes),
+              allowedFolderIds: getFolderScopedIds(scopes, [...folderGrantScopes, manageScope]),
             }
       );
       return c.json({ data });
@@ -80,20 +90,28 @@ export function registerResourceFolderRoutes(routes: OpenAPIHono<AppEnv>, config
   );
 
   routes.openapi({ ...docs.create, middleware: manage }, async (c) => {
-    const data = await config
-      .service()
-      .createFolder(CreateResourceFolderSchema.parse(await c.req.json()), c.get('user')!.id);
+    const input = CreateResourceFolderSchema.parse(await c.req.json());
+    assertFolderManage(c.get('effectiveScopes') ?? [], manageScope, input.parentId ?? null);
+    const data = await config.service().createFolder(input, c.get('user')!.id);
     return c.json({ data }, 201);
   });
 
   routes.openapi({ ...docs.reorderFolders, middleware: manage }, async (c) => {
-    await config.service().reorderFolders(ReorderResourceFoldersSchema.parse(await c.req.json()));
+    const input = ReorderResourceFoldersSchema.parse(await c.req.json());
+    await assertFolderManageForFolders(
+      config.service(),
+      c.get('effectiveScopes') ?? [],
+      manageScope,
+      input.items.map((item) => item.id)
+    );
+    await config.service().reorderFolders(input);
     return c.json({ success: true });
   });
 
   routes.openapi({ ...docs.moveResources, middleware: manage }, async (c) => {
     const input = MoveResourcesToFolderSchema.parse(await c.req.json());
     const scopes = c.get('effectiveScopes') ?? [];
+    await assertFolderManageForResources(config.service(), scopes, manageScope, input.ids, input.folderId);
     await authorizeItems(scopes, input.ids);
     if (config.checkDestination !== false && !hasScopeForCreation(scopes, placementScope, input.folderId)) {
       throw new AppError(403, 'FORBIDDEN', `Missing ${placementScope} for the move destination`);
@@ -104,32 +122,46 @@ export function registerResourceFolderRoutes(routes: OpenAPIHono<AppEnv>, config
 
   routes.openapi({ ...docs.reorderResources, middleware: manage }, async (c) => {
     const input = ReorderResourcesSchema.parse(await c.req.json());
-    await authorizeItems(
-      c.get('effectiveScopes') ?? [],
-      input.items.map((item) => item.id)
-    );
+    const ids = input.items.map((item) => item.id);
+    await assertFolderManageForResources(config.service(), c.get('effectiveScopes') ?? [], manageScope, ids, undefined);
+    await authorizeItems(c.get('effectiveScopes') ?? [], ids);
     await config.service().reorderResources(input);
     return c.json({ success: true });
   });
 
   routes.openapi({ ...docs.update, middleware: manage }, async (c) => {
-    const data = await config
-      .service()
-      .updateFolder(c.req.param('id')!, UpdateResourceFolderSchema.parse(await c.req.json()), c.get('user')!.id);
+    const input = UpdateResourceFolderSchema.parse(await c.req.json());
+    await assertFolderManageForFolder(
+      config.service(),
+      c.get('effectiveScopes') ?? [],
+      manageScope,
+      c.req.param('id')!
+    );
+    const data = await config.service().updateFolder(c.req.param('id')!, input, c.get('user')!.id);
     return c.json({ data });
   });
 
   routes.openapi({ ...docs.moveFolder, middleware: manage }, async (c) => {
+    const scopes = c.get('effectiveScopes') ?? [];
     const data = await config
       .service()
-      .moveFolder(c.req.param('id')!, MoveResourceFolderSchema.parse(await c.req.json()), c.get('user')!.id, {
-        scopes: c.get('effectiveScopes') ?? [],
-        editScope: placementScope,
-      });
+      .moveFolder(
+        c.req.param('id')!,
+        MoveResourceFolderSchema.parse(await c.req.json()),
+        c.get('user')!.id,
+        { scopes, editScope: placementScope },
+        { scopes, manageScope }
+      );
     return c.json({ data });
   });
 
   routes.openapi({ ...docs.delete, middleware: manage }, async (c) => {
+    await assertFolderManageForFolder(
+      config.service(),
+      c.get('effectiveScopes') ?? [],
+      manageScope,
+      c.req.param('id')!
+    );
     await config.service().deleteFolder(c.req.param('id')!, c.get('user')!.id);
     return c.json({ success: true });
   });

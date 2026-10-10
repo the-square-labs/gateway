@@ -52,6 +52,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useCanManageSomeFolders } from "@/hooks/use-folder-access";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 import { canCreateInFolder, scopeMatches } from "@/lib/scope-utils";
@@ -102,7 +103,7 @@ function AdminUsersContent({
   onOpenDeletedUsersRef,
 }: AdminUsersProps) {
   const navigate = useNavigate();
-  const { user: currentUser, hasAnyScope, hasScope, hasScopedAccess } = useAuthStore();
+  const { user: currentUser, hasScope, hasScopedAccess } = useAuthStore();
   const cachedUsers = api.getCached<User[]>("admin:users");
   const cachedGroups = api.getCached<PermissionGroup[]>("admin:groups");
   const [users, setUsers] = useState<User[]>(cachedUsers ?? []);
@@ -412,7 +413,7 @@ function AdminUsersContent({
     openCreateDialog();
   }, [createRequest, embedded, openCreateDialog]);
 
-  const canManageFolders = hasAnyScope("admin:users:folders:manage", "admin:system");
+  const canManageFolders = useCanManageSomeFolders("admin:users:folders:manage", "admin:system");
   const canImpersonateUsers = hasScope("admin:users:impersonate");
   const hasActiveFilters = search.trim() !== "";
   const filteredUsers = useMemo(() => {

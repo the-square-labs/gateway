@@ -51,6 +51,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useCanManageSomeFolders } from "@/hooks/use-folder-access";
 import { useRealtime } from "@/hooks/use-realtime";
 import {
   canCreateInFolder,
@@ -99,7 +100,7 @@ function AdminGroupsContent({
   onCreateFolderRef,
 }: AdminGroupsProps) {
   const navigate = useNavigate();
-  const { user, hasAnyScope, hasScope, hasScopedAccess } = useAuthStore();
+  const { user, hasScope, hasScopedAccess } = useAuthStore();
   const { cas, fetchCAs } = useCAStore();
   const [nodesList, setNodesList] = useState<Node[]>(
     () => api.getCached<Node[]>("admin:scope-nodes") ?? []
@@ -453,7 +454,7 @@ function AdminGroupsContent({
     );
     return [...assignableScopes, ...selectedScopes];
   }, [access.scopes, assignableScopes, groupDialogReadOnly, inheritedScopes]);
-  const canManageFolders = hasAnyScope("admin:groups:folders:manage", "admin:system");
+  const canManageFolders = useCanManageSomeFolders("admin:groups:folders:manage", "admin:system");
   const hasActiveFilters = listSearch.trim() !== "";
   const filteredGroups = useMemo(() => {
     const query = listSearch.trim().toLowerCase();

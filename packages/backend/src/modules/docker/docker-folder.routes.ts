@@ -13,6 +13,7 @@ import {
   getDockerFolderPlacementsRoute,
   listDockerFoldersRoute,
   moveDockerContainersRoute,
+  moveDockerFolderRoute,
   moveDockerResourcesRoute,
   reorderDockerContainersRoute,
   reorderDockerFoldersRoute,
@@ -26,13 +27,14 @@ import {
   type DockerFolderResourceType,
   DockerFolderResourceTypeSchema,
   MoveDockerContainersToFolderSchema,
+  MoveDockerFolderSchema,
   MoveDockerResourcesToFolderSchema,
   ReorderDockerContainersSchema,
   ReorderDockerFoldersSchema,
   ReorderDockerResourcesSchema,
   UpdateDockerFolderSchema,
 } from './docker-folder.schemas.js';
-import { DockerFolderService } from './docker-folder.service.js';
+import { type DockerFolderMoveAuthorizer, DockerFolderService } from './docker-folder.service.js';
 import { DockerNetworkAccessResourceService } from './docker-network-access-resource.service.js';
 
 const VIEW_SCOPE_BY_RESOURCE_TYPE = {
@@ -178,6 +180,32 @@ async function networkFolderVisibility(scopes: string[], viewScope: string) {
   return { allowedNodeIds, allowedResourceRefs };
 }
 
+/**
+ * Moving a folder re-homes every resource inside it and its subfolders, so the caller needs what moving each of them
+ * to the destination needs: the per-resource edit scope plus the destination rule of the move-resources routes.
+ * Shared by PUT /folders/:id/move and the AI/MCP folder tool.
+ */
+export async function assertDockerFolderMoveAccess(
+  scopes: string[],
+  { resourceType, resources, destinationFolderId }: Parameters<DockerFolderMoveAuthorizer>[0]
+): Promise<void> {
+  // An empty folder re-homes nothing: docker:folders:manage (checked by the caller) is all it needs.
+  if (resources.length === 0) return;
+  if (resourceType === 'container') {
+    await assertContainerScopes(
+      scopes,
+      MOVE_SCOPE_BY_RESOURCE_TYPE.container,
+      resources.map((item) => ({ nodeId: item.nodeId, containerName: item.resourceKey }))
+    );
+  } else if (resourceType === 'network') {
+    await assertNetworkScopes(scopes, MOVE_SCOPE_BY_RESOURCE_TYPE.network, resources);
+  } else {
+    assertResourceScopes(scopes, MOVE_SCOPE_BY_RESOURCE_TYPE[resourceType], resources);
+  }
+  const moveScope = MOVE_SCOPE_BY_RESOURCE_TYPE[resourceType];
+  for (const item of resources) assertNetworkDestinationScope(scopes, moveScope, item.nodeId, destinationFolderId);
+}
+
 /** Who may list Docker folders of a resource type and which folders they see; shared with the AI/MCP folder tools. */
 export async function dockerFolderTreeOptions(scopes: string[], resourceType: DockerFolderResourceType) {
   const viewScope = VIEW_SCOPE_BY_RESOURCE_TYPE[resourceType];
@@ -295,6 +323,18 @@ export function registerDockerFolderRoutes(router: OpenAPIHono<AppEnv>) {
     const input = UpdateDockerFolderSchema.parse(body);
     const service = container.resolve(DockerFolderService);
     const data = await service.updateFolder(c.req.param('id')!, input, user.id);
+    return c.json({ data });
+  });
+
+  router.openapi(moveDockerFolderRoute, async (c) => {
+    const scopes = c.get('effectiveScopes') || [];
+    requireAnyDockerScope(scopes, 'docker:folders:manage', 'Moving Docker folders requires docker:folders:manage');
+    const user = c.get('user')!;
+    const input = MoveDockerFolderSchema.parse(await c.req.json());
+    const service = container.resolve(DockerFolderService);
+    const data = await service.moveFolder(c.req.param('id')!, input, user.id, (context) =>
+      assertDockerFolderMoveAccess(scopes, context)
+    );
     return c.json({ data });
   });
 

@@ -7,17 +7,18 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { FolderCreateDialog } from "@/components/common/FolderCreateDialog";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
+import { MoveToFolderDialog } from "@/components/common/MoveToFolderDialog";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResourceListForm } from "@/components/common/ResourceListForm";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import {
-  applySingleFolderView,
+  applyRootFolderView,
+  canMoveFolderInto,
   defaultOpenFolderId,
 } from "@/components/common/resource-list/folder-view";
 import { CreateProxyHostDialog } from "@/components/proxy/CreateProxyHostDialog";
-import { MoveToFolderDialog } from "@/components/proxy/MoveToFolderDialog";
 import { ProxyUpstreamTarget } from "@/components/proxy/ProxyUpstreamTarget";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -43,9 +44,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { useFolderAccess } from "@/hooks/use-folder-access";
 import { useIsMobile } from "@/hooks/use-is-mobile";
-import { useLimitedToFolders } from "@/hooks/use-limited-to-folders";
 import { useRealtime } from "@/hooks/use-realtime";
+import { findFolderTreeNode } from "@/lib/folder-tree";
 import { nodeBadgeClassName } from "@/lib/node-appearance";
 import { isGatewayPublicRoute } from "@/lib/proxy-route-protection";
 import { proxyHostRoute } from "@/lib/resource-routes";
@@ -106,6 +108,7 @@ export function ProxyHosts({
     renameFolder,
     deleteFolder,
     moveHostsToFolder,
+    moveFolder,
     reorderFolders,
     reorderHosts,
     toggleFolder,
@@ -122,7 +125,15 @@ export function ProxyHosts({
   const [checkingCreateNodes, setCheckingCreateNodes] = useState(false);
   const initialCreateHandledRef = useRef(false);
   const isMobile = useIsMobile();
-  const canManageFolders = hasScope("proxy:folders:manage");
+  // Visible only through folder grants: one top-most granted folder works as the root. Folder
+  // management may be limited to some folders' subfolders.
+  const {
+    limitedToFolders,
+    isGrantedFolder,
+    canManageSomeFolders: canManageFolders,
+    canManageFolderAt,
+  } = useFolderAccess("proxy:view", "proxy:folders:manage");
+  const [moveFolderId, setMoveFolderId] = useState<string | null>(null);
   const isSearchFiltering = filters.search.trim() !== "";
   const canReorderFolders = canManageFolders && !isMobile && !isSearchFiltering;
   const canCreateProxyHost = hasScopedAccess("proxy:create");
@@ -178,19 +189,18 @@ export function ProxyHosts({
 
   const hasActiveFilters =
     filters.type !== "all" || filters.healthStatus !== "all" || filters.search !== "";
-  // Visible only through folder grants: one granted folder is shown on its own.
-  const limitedToFolders = useLimitedToFolders("proxy:view");
   const shown = useMemo(
     () =>
-      isSearchFiltering
-        ? { folders: pruneEmptyFolders(folders), ungrouped: ungroupedHosts }
-        : applySingleFolderView(folders, ungroupedHosts, (folder) => folder.hosts, {
-            limitedToFolders,
-            canManageFolders,
-          }),
-    [canManageFolders, folders, isSearchFiltering, limitedToFolders, ungroupedHosts]
+      applyRootFolderView(
+        isSearchFiltering ? pruneEmptyFolders(folders) : folders,
+        ungroupedHosts,
+        (folder) => folder.hosts,
+        { limitedToFolders, isGrantedFolder }
+      ),
+    [folders, isGrantedFolder, isSearchFiltering, limitedToFolders, ungroupedHosts]
   );
-  // The single folder starts open, as in the other lists, until the user folds a folder.
+  const rootFolderId = shown.root?.id ?? null;
+  // The first folder starts open, as in the other lists, until the user folds a folder.
   const defaultOpenId =
     limitedToFolders && !isSearchFiltering
       ? defaultOpenFolderId(shown.folders, shown.ungrouped.length, hasSavedProxyFolderExpansion())
@@ -245,7 +255,7 @@ export function ProxyHosts({
 
   const handleCreateFolder = async (name: string) => {
     try {
-      await createFolder(name, createFolderParentId ?? undefined);
+      await createFolder(name, createFolderParentId ?? rootFolderId ?? undefined);
       toast.success("Folder created");
       setCreateFolderOpen(false);
       setCreateFolderParentId(null);
@@ -318,6 +328,7 @@ export function ProxyHosts({
       const activeGroup = findFolderSiblings(folders, activeData.folderId as string);
       const overGroup = findFolderSiblings(folders, overData.folderId as string);
       if (!activeGroup || !overGroup || activeGroup.parentId !== overGroup.parentId) return;
+      if (!canManageFolderAt(activeGroup.parentId)) return;
 
       const oldIndex = activeGroup.siblings.findIndex(
         (folder) => folder.id === activeData.folderId
@@ -344,11 +355,12 @@ export function ProxyHosts({
     const hostId = active.id as string;
     const host = activeData.host;
     const dropData = overData;
+    if (!canManageFolderAt(host.folderId ?? null)) return;
 
     // Dropped on a folder header → move to folder
     if (dropData?.type === "folder") {
       const targetFolderId = dropData.folderId as string | null;
-      if (host.folderId === targetFolderId) return;
+      if (host.folderId === targetFolderId || !canManageFolderAt(targetFolderId)) return;
       try {
         await moveHostsToFolder([hostId], targetFolderId);
         toast.success("Host moved");
@@ -363,6 +375,7 @@ export function ProxyHosts({
       const overHost = dropData.host;
       // Only reorder if same folder
       if (host.folderId !== overHost.folderId) {
+        if (!canManageFolderAt(overHost.folderId ?? null)) return;
         // Different folders: move to that folder
         try {
           await moveHostsToFolder([hostId], overHost.folderId);
@@ -429,9 +442,20 @@ export function ProxyHosts({
     hasScope("proxy:edit") || hasScope(`proxy:edit:${host.id}`);
   // Same checks as POST /proxy-host-folders/move-hosts: folder management plus
   // edit access on the route and on the destination.
-  const canMoveHost = (host: ProxyHost) => canManageFolders && canEditHost(host);
+  const canMoveHost = (host: ProxyHost) =>
+    canManageFolders && canEditHost(host) && canManageFolderAt(host.folderId ?? null);
   const canMoveHostTo = (folderId: string | null) =>
-    canCreateInFolder(user?.scopes ?? [], "proxy:edit", folderId);
+    canCreateInFolder(user?.scopes ?? [], "proxy:edit", folderId) && canManageFolderAt(folderId);
+  const canManageFolder = (folder: FolderTreeNode) => canManageFolderAt(folder.parentId ?? null);
+
+  const handleMoveFolder = async (id: string, parentId: string | null) => {
+    try {
+      await moveFolder(id, parentId);
+      toast.success("Folder moved");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to move folder");
+    }
+  };
 
   const columns: ResourceListColumn<ProxyHost>[] = [
     {
@@ -730,8 +754,8 @@ export function ProxyHosts({
             }),
             isFolderExpanded: (folder) =>
               expandedFolderIds.has(folder.id) || folder.id === defaultOpenId,
-            canManageFolder: () => canManageFolders,
-            canReorderFolder: () => canReorderFolders,
+            canManageFolder,
+            canReorderFolder: (folder) => canReorderFolders && canManageFolder(folder),
             canCreateSubfolder: (folder) => folder.depth < 2,
             onToggleFolder: (id) => {
               // The first fold saves the folder that started open, so it stays as the user saw it.
@@ -740,14 +764,15 @@ export function ProxyHosts({
             },
             onRenameFolder: handleRenameFolder,
             onDeleteFolder: handleDeleteFolder,
+            onRequestMoveFolder: setMoveFolderId,
             onRequestCreateSubfolder: (parentId) => {
               setCreateFolderParentId(parentId);
               setCreateFolderOpen(true);
             },
             ungroupedDroppable: {
               id: "folder-ungrouped",
-              data: { type: "folder", folderId: null },
-              disabled: !canReorderFolders,
+              data: { type: "folder", folderId: rootFolderId },
+              disabled: !canReorderFolders || !canManageFolderAt(rootFolderId),
             },
           }}
           items={{
@@ -755,7 +780,8 @@ export function ProxyHosts({
             getItemSortableId: (host) => host.id,
             getItemSortableData: (host) => ({ type: "host", host }),
             canViewItem: canViewHost,
-            isItemDragDisabled: (host) => !canReorderFolders || !canEditHost(host),
+            isItemDragDisabled: (host) =>
+              !canReorderFolders || !canEditHost(host) || !canManageFolderAt(host.folderId ?? null),
             onItemClick: (host) => navigate(proxyHostRoute(host.slug)),
           }}
         />
@@ -767,10 +793,39 @@ export function ProxyHosts({
         onOpenChange={(open) => {
           if (!open) setMoveDialogHostId(null);
         }}
-        folders={folders}
+        folders={shown.root ? shown.folders : folders}
+        {...(shown.root ? { root: { id: shown.root.id, label: shown.root.name } } : {})}
         currentFolderId={moveDialogHostId ? findHostFolderId(moveDialogHostId) : null}
         onMove={handleMoveHost}
         canMoveTo={canMoveHostTo}
+        describeFolder={(folder) => `${folder.hosts.length} hosts`}
+      />
+
+      <MoveToFolderDialog
+        open={moveFolderId !== null}
+        onOpenChange={(open) => {
+          if (!open) setMoveFolderId(null);
+        }}
+        title="Move Folder"
+        description="Select where to move the folder. Its subfolders and routes move with it."
+        folders={shown.folders}
+        root={
+          shown.root
+            ? { id: shown.root.id, label: shown.root.name }
+            : { id: null, label: "Top level" }
+        }
+        currentFolderId={
+          (moveFolderId ? findFolderTreeNode(folders, moveFolderId)?.parentId : null) ?? null
+        }
+        canMoveTo={(parentId) =>
+          !!moveFolderId &&
+          canMoveFolderInto(folders, moveFolderId, parentId) &&
+          canManageFolderAt(parentId)
+        }
+        onMove={(parentId) => {
+          if (moveFolderId) void handleMoveFolder(moveFolderId, parentId);
+        }}
+        describeFolder={(folder) => `${folder.hosts.length} hosts`}
       />
 
       <FolderCreateDialog

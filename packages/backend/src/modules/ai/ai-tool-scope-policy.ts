@@ -324,6 +324,10 @@ export const AI_TOOL_ANY_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly st
     'hosting:billing:view',
     'nodes:details',
   ],
+  // Folder grants of proxy:folders:manage pass the gate; the handlers check the exact folders touched.
+  create_route_folder: ['proxy:folders:manage'],
+  move_routes_to_folder: ['proxy:folders:manage'],
+  delete_route_folder: ['proxy:folders:manage'],
   list_resource_folders: [...FOLDER_TOOL_REQUIREMENT_SCOPES],
   manage_resource_folder: [...FOLDER_TOOL_REQUIREMENT_SCOPES],
   manage_node_config: ['nodes:config:view', 'nodes:manage'],

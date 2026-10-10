@@ -13,6 +13,7 @@ import type {
   ReorderResourcesInput,
   UpdateResourceFolderInput,
 } from './resource-folder.schemas.js';
+import { assertFolderManage, type FolderManageAccess } from './resource-folder-access.js';
 
 const MAX_DEPTH = 2;
 
@@ -46,6 +47,11 @@ export function assertFolderMoveAccess(
   if (!hasScopeForCreation(scopes, access.editScope, destinationFolderId)) {
     throw new AppError(403, 'FORBIDDEN', `Missing ${access.editScope} for the move destination`);
   }
+}
+
+/** Folder names compare trimmed and case-insensitively, so `Prod` and ` prod ` cannot sit side by side. */
+export function folderNameKey(name: string): string {
+  return name.trim().toLocaleLowerCase();
 }
 
 type FolderRow = {
@@ -195,12 +201,24 @@ export class FolderedResourceService {
 
   /**
    * `access` is required so no caller can forget the source and destination check; `null` only for a subclass that
-   * authorizes the moved resources itself.
+   * authorizes the moved resources itself. `manage`, when given, is checked against the folder's current parent and
+   * the destination inside the tree lock, so a folder-scoped manager cannot move a folder out of (or into) a place it
+   * does not manage.
    */
-  async moveFolder(id: string, input: MoveResourceFolderInput, userId: string, access: FolderMoveAccess | null) {
+  async moveFolder(
+    id: string,
+    input: MoveResourceFolderInput,
+    userId: string,
+    access: FolderMoveAccess | null,
+    manage?: FolderManageAccess
+  ) {
     const result = await this.withTreeLock(async (tx) => {
       const folder = await this.getFolderOrThrow(id, tx);
       if (folder.parentId === input.parentId) return { folder, moved: false as const };
+      if (manage) {
+        assertFolderManage(manage.scopes, manage.manageScope, folder.parentId);
+        assertFolderManage(manage.scopes, manage.manageScope, input.parentId);
+      }
 
       // Read inside the lock: a concurrent move has either committed or not started.
       const descendants = await this.getDescendantIds(id, tx);
@@ -212,6 +230,8 @@ export class FolderedResourceService {
         }
         newDepth = parent.depth + 1;
       }
+
+      await this.assertNameFree(folder.name, input.parentId, id, tx);
 
       const subtreeHeight = (await this.getMaxSubtreeDepth(id, tx)) - folder.depth;
       if (newDepth + subtreeHeight > MAX_DEPTH) {
@@ -270,6 +290,61 @@ export class FolderedResourceService {
     });
     this.emitLayoutChanged('folder_updated', id);
     return result.updated;
+  }
+
+  /** 409 when `parentId` (null: the top level) already holds another folder with the same name. */
+  private async assertNameFree(
+    name: string,
+    parentId: string | null,
+    exceptId: string,
+    db: DrizzleExecutor = this.db
+  ): Promise<void> {
+    const siblings = (await db
+      .select({ id: this.config.folderTable.id, name: this.config.folderTable.name })
+      .from(this.config.folderTable)
+      .where(
+        and(
+          this.config.folderScope,
+          parentId ? eq(this.config.folderTable.parentId, parentId) : isNull(this.config.folderTable.parentId)
+        )
+      )) as Array<{ id: string; name: string }>;
+    const key = folderNameKey(name);
+    if (siblings.some((sibling) => sibling.id !== exceptId && folderNameKey(sibling.name ?? '') === key)) {
+      throw new AppError(
+        409,
+        'FOLDER_NAME_CONFLICT',
+        `A folder named "${name.trim()}" already exists in the destination`
+      );
+    }
+  }
+
+  /** Parent of each folder (null: top level); 404 when one does not exist in this tree. */
+  async getFolderParentIds(ids: readonly string[]): Promise<Map<string, string | null>> {
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return new Map();
+    const rows = (await this.db
+      .select({ id: this.config.folderTable.id, parentId: this.config.folderTable.parentId })
+      .from(this.config.folderTable)
+      .where(and(this.config.folderScope, inArray(this.config.folderTable.id, unique)))) as Array<{
+      id: string;
+      parentId: string | null;
+    }>;
+    if (rows.length !== unique.length) throw new AppError(404, 'FOLDER_NOT_FOUND', 'Folder not found');
+    return new Map(rows.map((row) => [row.id, row.parentId ?? null]));
+  }
+
+  /** Current folder of each resource (null: ungrouped). Unknown IDs are left out. */
+  async getResourceFolderIds(ids: readonly string[]): Promise<Map<string, string | null>> {
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return new Map();
+    const rows = (await this.db
+      .select({ id: this.config.resourceTable.id, folderId: this.config.resourceTable.folderId })
+      .from(this.config.resourceTable)
+      .where(and(this.config.resourceScope, inArray(this.config.resourceTable.id, unique)))) as Array<{
+      id: string;
+      folderId: string | null;
+    }>;
+    return new Map(rows.map((row) => [row.id, row.folderId ?? null]));
   }
 
   async deleteFolder(id: string, userId: string) {

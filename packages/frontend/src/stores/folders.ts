@@ -43,6 +43,8 @@ interface FolderState {
 
   // Host movement
   moveHostsToFolder: (hostIds: string[], folderId: string | null) => Promise<void>;
+  /** Moves a folder with its subfolders and routes under `parentId` (null = top level). */
+  moveFolder: (id: string, parentId: string | null) => Promise<void>;
   reorderHosts: (items: { id: string; sortOrder: number }[]) => Promise<void>;
 
   // Expansion
@@ -292,6 +294,11 @@ export const useFolderStore = create<FolderState>()((set, get) => ({
       set({ folders: previousFolders });
       throw err;
     }
+  },
+
+  moveFolder: async (id, parentId) => {
+    await api.moveFolder(id, parentId);
+    await get().fetchGroupedHosts();
   },
 
   moveHostsToFolder: async (hostIds, folderId) => {

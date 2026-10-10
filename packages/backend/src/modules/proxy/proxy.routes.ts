@@ -7,6 +7,7 @@ import { authMiddleware, requireScopeBase, requireScopeForResource } from '@/mod
 import { assertRoutePlacementOnGroup } from '@/modules/ingress-groups/ingress-group-operations.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { PageProfileService } from '@/modules/pages/profile/page-profile.service.js';
+import { assertFolderManage } from '@/modules/resource-folders/resource-folder-access.js';
 import type { AppEnv } from '@/types.js';
 import {
   createAdditionalRouteRoute,
@@ -396,11 +397,9 @@ proxyRoutes.openapi(updateProxyHostRoute, async (c) => {
     if ((input.folderId ?? null) === ((existing as { folderId?: string | null }).folderId ?? null)) {
       delete input.folderId;
     } else {
-      if (!hasScope(scopes, 'proxy:folders:manage')) {
-        throw new AppError(403, 'FORBIDDEN', 'Moving a route requires proxy:folders:manage scope', {
-          requiredScope: 'proxy:folders:manage',
-        });
-      }
+      // Folder management is needed where the route leaves and where it lands (broadly or on those folders).
+      assertFolderManage(scopes, 'proxy:folders:manage', (existing as { folderId?: string | null }).folderId ?? null);
+      assertFolderManage(scopes, 'proxy:folders:manage', input.folderId ?? null);
       if (!hasScope(scopes, `proxy:edit:${id}`) || !hasScopeForCreation(scopes, 'proxy:edit', input.folderId)) {
         throw new AppError(403, 'FORBIDDEN', 'Missing route edit access for the move destination');
       }

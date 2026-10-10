@@ -51,6 +51,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useCanManageSomeFolders } from "@/hooks/use-folder-access";
 import { useRealtime } from "@/hooks/use-realtime";
 import { refreshDynamicScopes } from "@/lib/live-scopes";
 import { listManagedDatabaseCandidateNodes } from "@/lib/managed-database-nodes";
@@ -888,7 +889,8 @@ function DatabasesContent({
   });
 
   const canCreate = !embedded && hasScopedAccess("databases:create");
-  const canManageFolders = !embedded && hasScope("databases:folders:manage");
+  const canManageSomeFolders = useCanManageSomeFolders("databases:folders:manage");
+  const canManageFolders = !embedded && canManageSomeFolders;
 
   // The server already filters the list by view grants, including folder grants that cover
   // resources created after the cached scopes were loaded; row actions keep their own checks.

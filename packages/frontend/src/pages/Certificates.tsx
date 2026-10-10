@@ -21,6 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useCanManageSomeFolders } from "@/hooks/use-folder-access";
 import { useRealtime } from "@/hooks/use-realtime";
 import { cn, daysUntil, formatDate } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth";
@@ -120,7 +121,7 @@ export function Certificates() {
     filters.type !== "all" ||
     filters.caId !== "all" ||
     filters.search !== "";
-  const canManageFolders = hasScope("pki:cert:folders:manage");
+  const canManageFolders = useCanManageSomeFolders("pki:cert:folders:manage");
   const casById = useMemo(() => new Map((cas || []).map((ca) => [ca.id, ca])), [cas]);
   const certificateColumns: ResourceListColumn<Certificate>[] = [
     {

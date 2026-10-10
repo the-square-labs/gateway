@@ -49,6 +49,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useCanManageSomeFolders } from "@/hooks/use-folder-access";
 import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 import { refreshDynamicScopes } from "@/lib/live-scopes";
 import {
@@ -624,7 +625,7 @@ function StorageContent() {
   }, [load]);
 
   const canCreate = hasScopedAccess("storage:create");
-  const canManageFolders = hasScope("storage:folders:manage");
+  const canManageFolders = useCanManageSomeFolders("storage:folders:manage");
 
   // The server already filters the list by view grants, including folder grants that cover
   // resources created after the cached scopes were loaded; row actions keep their own checks.

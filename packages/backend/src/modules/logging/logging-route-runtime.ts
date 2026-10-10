@@ -15,6 +15,12 @@ import {
   ReorderResourcesSchema,
   UpdateResourceFolderSchema,
 } from '@/modules/resource-folders/resource-folder.schemas.js';
+import {
+  assertFolderManage,
+  assertFolderManageForFolder,
+  assertFolderManageForFolders,
+  assertFolderManageForResources,
+} from '@/modules/resource-folders/resource-folder-access.js';
 import { TokensService } from '@/modules/tokens/tokens.service.js';
 import {
   createLoggingEnvironmentFolderRoute,
@@ -172,6 +178,11 @@ export const loggingRouteRuntime = {
   LoggingRateLimitService,
   LoggingSchemaService,
   LoggingSchemaFolderService,
+  // Folder-scoped folder management: check the exact place a folder change touches.
+  assertFolderManage,
+  assertFolderManageForFolder,
+  assertFolderManageForFolders,
+  assertFolderManageForResources,
   LoggingSearchService,
   LoggingTokenService,
 };

@@ -32,6 +32,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useCanManageSomeFolders } from "@/hooks/use-folder-access";
 import { useRealtime } from "@/hooks/use-realtime";
 import { nodeIconClassNames } from "@/lib/node-appearance";
 import { api } from "@/services/api";
@@ -248,7 +249,7 @@ export function Pages() {
   const canView = hasScopedAccess("pages:view");
   const canCreate = hasScopedAccess("pages:create");
   const canViewSettings = hasScope("pages:settings:view") || hasScope("pages:settings:edit");
-  const canManageFolders = hasScope("pages:folders:manage");
+  const canManageFolders = useCanManageSomeFolders("pages:folders:manage");
   const canEdit = hasScopedAccess("pages:edit");
   const [projects, setProjects] = useState<PageProject[]>(() => {
     const cached = api.getCached<{ data: PageProject[] }>("pages:projects");

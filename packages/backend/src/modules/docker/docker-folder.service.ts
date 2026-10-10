@@ -1,5 +1,5 @@
-import { and, asc, desc, eq, inArray, isNull, or } from 'drizzle-orm';
-import type { DrizzleClient } from '@/db/client.js';
+import { and, asc, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
+import type { DrizzleClient, DrizzleExecutor, DrizzleTransaction } from '@/db/client.js';
 import { dockerContainerFolderAssignments, dockerContainerFolders } from '@/db/schema/index.js';
 import { transactionWithScopeCleanup } from '@/lib/resource-scope-cleanup.js';
 import { AppError } from '@/middleware/error-handler.js';
@@ -10,6 +10,7 @@ import type {
   DockerFolderResourceRef,
   DockerFolderResourceType,
   MoveDockerContainersToFolderInput,
+  MoveDockerFolderInput,
   MoveDockerResourcesToFolderInput,
   ReorderDockerContainersInput,
   ReorderDockerFoldersInput,
@@ -32,6 +33,17 @@ type DockerContainerLike = {
   Labels?: Record<string, string>;
   [key: string]: unknown;
 };
+
+/**
+ * Caller authorization for moving a whole folder. A folder move re-homes every resource inside the folder and its
+ * subfolders, so the caller must be allowed to move each of them to the destination, exactly as for moving the
+ * resources one by one. Receives the resources found inside the tree lock; throws to refuse.
+ */
+export type DockerFolderMoveAuthorizer = (context: {
+  resourceType: DockerFolderResourceType;
+  resources: DockerFolderResourceRef[];
+  destinationFolderId: string | null;
+}) => void | Promise<void>;
 
 export interface DockerFolderTreeNode extends FolderRow {
   children: DockerFolderTreeNode[];
@@ -93,8 +105,12 @@ export class DockerFolderService {
     this.eventBus?.publish('docker.folder.changed', { action, folderId, nodeIds });
   }
 
-  private async getNextSortOrder(resourceType: DockerFolderResourceType, parentId: string | null): Promise<number> {
-    const siblings = await this.db
+  private async getNextSortOrder(
+    resourceType: DockerFolderResourceType,
+    parentId: string | null,
+    db: DrizzleExecutor = this.db
+  ): Promise<number> {
+    const siblings = await db
       .select({ sortOrder: dockerContainerFolders.sortOrder })
       .from(dockerContainerFolders)
       .where(
@@ -109,10 +125,12 @@ export class DockerFolderService {
     return siblings.length > 0 ? siblings[0].sortOrder + 1 : 0;
   }
 
-  private async getFolderOrThrow(id: string, resourceType?: DockerFolderResourceType): Promise<FolderRow> {
-    const folder = await this.db.query.dockerContainerFolders.findFirst({
-      where: eq(dockerContainerFolders.id, id),
-    });
+  private async getFolderOrThrow(
+    id: string,
+    resourceType?: DockerFolderResourceType,
+    db: DrizzleExecutor = this.db
+  ): Promise<FolderRow> {
+    const [folder] = await db.select().from(dockerContainerFolders).where(eq(dockerContainerFolders.id, id)).limit(1);
     if (!folder) throw new AppError(404, 'FOLDER_NOT_FOUND', 'Folder not found');
     if (resourceType && folder.resourceType !== resourceType) {
       throw new AppError(400, 'FOLDER_RESOURCE_TYPE_MISMATCH', 'Folder belongs to a different Docker resource type');
@@ -183,6 +201,137 @@ export class DockerFolderService {
 
     this.emitLayoutChanged('folder_updated', id, await this.getAffectedNodeIdsForFolders([id]));
     return updated;
+  }
+
+  /**
+   * Folder moves run one at a time per resource-type tree, in one transaction under an advisory lock. Two concurrent
+   * moves (A under B, B under A) would otherwise both pass the descendant check and commit a parent cycle.
+   */
+  private withTreeLock<T>(
+    resourceType: DockerFolderResourceType,
+    fn: (tx: DrizzleTransaction) => Promise<T>
+  ): Promise<T> {
+    return this.db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`docker-folders:${resourceType}`}))`);
+      return fn(tx);
+    });
+  }
+
+  /**
+   * Move a folder (with its subfolders and the resources inside) under another folder of the same resource type, or to
+   * the root. `authorize` is required so no caller can skip the per-resource and destination checks.
+   */
+  async moveFolder(id: string, input: MoveDockerFolderInput, userId: string, authorize: DockerFolderMoveAuthorizer) {
+    const resourceType = (await this.getFolderOrThrow(id)).resourceType as DockerFolderResourceType;
+    const newParentId = input.parentId;
+
+    const result = await this.withTreeLock(resourceType, async (tx) => {
+      // Read inside the lock: a concurrent move has either committed or not started.
+      const folder = await this.getFolderOrThrow(id, resourceType, tx);
+      this.assertFolderMutable(folder);
+      if ((folder.parentId ?? null) === newParentId) return { folder, moved: false as const };
+
+      const treeFolders = await tx
+        .select()
+        .from(dockerContainerFolders)
+        .where(eq(dockerContainerFolders.resourceType, resourceType));
+      const childrenByParent = new Map<string, FolderRow[]>();
+      for (const row of treeFolders) {
+        if (!row.parentId) continue;
+        childrenByParent.set(row.parentId, [...(childrenByParent.get(row.parentId) ?? []), row]);
+      }
+      const descendants: FolderRow[] = [];
+      const queue = [folder];
+      while (queue.length > 0) {
+        for (const child of childrenByParent.get(queue.shift()!.id) ?? []) {
+          descendants.push(child);
+          queue.push(child);
+        }
+      }
+      if (descendants.some((descendant) => descendant.isSystem)) {
+        throw new AppError(400, 'SYSTEM_FOLDER_LOCKED', 'Protected compose deployment folders cannot be modified');
+      }
+
+      let newDepth = 0;
+      if (newParentId) {
+        if (newParentId === id || descendants.some((descendant) => descendant.id === newParentId)) {
+          throw new AppError(400, 'CIRCULAR_REFERENCE', 'Cannot move folder into its own descendant');
+        }
+        const parent = await this.getFolderOrThrow(newParentId, resourceType, tx);
+        this.assertFolderMutable(parent);
+        newDepth = parent.depth + 1;
+      }
+
+      const subtreeHeight = Math.max(folder.depth, ...descendants.map((descendant) => descendant.depth)) - folder.depth;
+      if (newDepth + subtreeHeight > MAX_DEPTH) {
+        throw new AppError(
+          400,
+          'MAX_DEPTH_EXCEEDED',
+          `Moving this folder would exceed the maximum nesting depth of ${MAX_DEPTH + 1} levels`
+        );
+      }
+
+      const normalizedName = folder.name.trim().toLowerCase();
+      const conflict = treeFolders.some(
+        (sibling) =>
+          sibling.id !== id &&
+          (sibling.parentId ?? null) === newParentId &&
+          sibling.name.trim().toLowerCase() === normalizedName
+      );
+      if (conflict) {
+        throw new AppError(409, 'FOLDER_NAME_CONFLICT', 'A folder with this name already exists in the destination');
+      }
+
+      const resources = await tx
+        .select({
+          nodeId: dockerContainerFolderAssignments.nodeId,
+          resourceKey: dockerContainerFolderAssignments.resourceKey,
+        })
+        .from(dockerContainerFolderAssignments)
+        .where(
+          and(
+            eq(dockerContainerFolderAssignments.resourceType, resourceType),
+            inArray(dockerContainerFolderAssignments.folderId, [id, ...descendants.map((descendant) => descendant.id)])
+          )
+        );
+      await authorize({ resourceType, resources, destinationFolderId: newParentId });
+
+      const [updated] = await tx
+        .update(dockerContainerFolders)
+        .set({
+          parentId: newParentId,
+          depth: newDepth,
+          sortOrder: await this.getNextSortOrder(resourceType, newParentId, tx),
+          updatedAt: new Date(),
+        })
+        .where(eq(dockerContainerFolders.id, id))
+        .returning();
+
+      const depthDelta = newDepth - folder.depth;
+      if (depthDelta !== 0 && descendants.length > 0) {
+        await tx
+          .update(dockerContainerFolders)
+          .set({ depth: sql`${dockerContainerFolders.depth} + ${depthDelta}`, updatedAt: new Date() })
+          .where(
+            inArray(
+              dockerContainerFolders.id,
+              descendants.map((descendant) => descendant.id)
+            )
+          );
+      }
+      return { folder, moved: true as const, updated, nodeIds: [...new Set(resources.map((row) => row.nodeId))] };
+    });
+    if (!result.moved) return result.folder;
+
+    await this.auditService.log({
+      userId,
+      action: 'docker_folder.move',
+      resourceType: 'docker_folder',
+      resourceId: id,
+      details: { oldParentId: result.folder.parentId, newParentId, name: result.folder.name },
+    });
+    this.emitLayoutChanged('folder_updated', id, result.nodeIds);
+    return result.updated;
   }
 
   async deleteFolder(id: string, userId: string) {

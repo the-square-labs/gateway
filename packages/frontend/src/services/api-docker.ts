@@ -265,6 +265,14 @@ export function withDockerApi<TBase extends ApiClientBaseConstructor>(Base: TBas
       );
     }
 
+    /** Moves a Docker folder (with its subfolders and resources) under `parentId` (null = top level). */
+    async moveDockerFolder(id: string, parentId: string | null): Promise<void> {
+      await this.request(`/docker/folders/${id}/move`, {
+        method: "PUT",
+        body: JSON.stringify({ parentId }),
+      });
+    }
+
     async deleteDockerFolder(id: string): Promise<void> {
       return this.request<void>(`/docker/folders/${id}`, { method: "DELETE" });
     }

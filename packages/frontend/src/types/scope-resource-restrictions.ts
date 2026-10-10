@@ -46,6 +46,20 @@ export const GIT_CONNECTOR_SCOPES = [
   "integrations:git:manage",
 ] as const;
 
+/** Folder-tree management scopes; restricted to a folder they manage its subfolders (folder qualifier only). */
+export const FOLDER_MANAGE_SCOPES = [
+  "domains:folders:manage",
+  "proxy:folders:manage",
+  "ssl:cert:folders:manage",
+  "pki:ca:folders:manage",
+  "pki:cert:folders:manage",
+  "pki:templates:folders:manage",
+  "proxy:templates:folders:manage",
+  "nodes:folders:manage",
+  "admin:users:folders:manage",
+  "admin:groups:folders:manage",
+] as const;
+
 export const RESOURCE_SCOPABLE_SCOPES = [
   "admin:users",
   "admin:groups",
@@ -181,6 +195,7 @@ export const RESOURCE_SCOPABLE_SCOPES = [
   "logs:schemas:edit",
   "logs:schemas:delete",
   "logs:read",
+  ...FOLDER_MANAGE_SCOPES,
 ] as const;
 
 export const FOLDER_SCOPABLE_SCOPES = [
@@ -292,4 +307,5 @@ export const FOLDER_SCOPABLE_SCOPES = [
   "logs:schemas:edit",
   "logs:schemas:delete",
   "logs:read",
+  ...FOLDER_MANAGE_SCOPES,
 ] as const;

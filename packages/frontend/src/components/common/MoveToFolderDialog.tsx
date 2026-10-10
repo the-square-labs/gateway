@@ -11,32 +11,47 @@ import {
 } from "@/components/ui/dialog";
 import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 import { cn } from "@/lib/utils";
-import type { FolderTreeNode } from "@/types";
 
-interface MoveToFolderDialogProps {
+/** Any folder tree the picker shows. */
+export interface MoveToFolderNode {
+  id: string;
+  name: string;
+  children: MoveToFolderNode[];
+}
+
+interface MoveToFolderDialogProps<TFolder extends MoveToFolderNode> {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  folders: FolderTreeNode[];
+  folders: TFolder[];
   currentFolderId: string | null;
   onMove: (folderId: string | null) => void;
-  /** Destinations the caller may move routes into (defaults to every folder and the root). */
+  /** Destinations the caller may move into (defaults to every folder and the root). */
   canMoveTo?: (folderId: string | null) => boolean;
+  /** Hint after the folder name, for example "3 routes". */
+  describeFolder?: (folder: TFolder) => string;
+  title?: string;
+  description?: string;
+  /** The top destination: the root (null), or the folder that works as the caller's root. */
+  root?: { id: string | null; label: string };
 }
 
 const allowEveryDestination = () => true;
+const TOP_LEVEL = { id: null, label: "Root (ungrouped)" };
 
-function FolderOption({
+function FolderOption<TFolder extends MoveToFolderNode>({
   folder,
   depth,
   selected,
   onSelect,
   canMoveTo,
+  describeFolder,
 }: {
-  folder: FolderTreeNode;
+  folder: TFolder;
   depth: number;
   selected: string | null;
   onSelect: (id: string | null) => void;
   canMoveTo: (folderId: string | null) => boolean;
+  describeFolder?: (folder: TFolder) => string;
 }) {
   const allowed = canMoveTo(folder.id);
   return (
@@ -55,30 +70,37 @@ function FolderOption({
         {folder.children.length > 0 && <ChevronRight className="h-3 w-3 text-muted-foreground" />}
         <Folder className="h-4 w-4 text-muted-foreground" />
         <span>{folder.name}</span>
-        <span className="text-xs text-muted-foreground ml-auto">{folder.hosts.length} hosts</span>
+        {describeFolder && (
+          <span className="text-xs text-muted-foreground ml-auto">{describeFolder(folder)}</span>
+        )}
       </button>
       {folder.children.map((child) => (
         <FolderOption
           key={child.id}
-          folder={child}
+          folder={child as TFolder}
           depth={depth + 1}
           selected={selected}
           onSelect={onSelect}
           canMoveTo={canMoveTo}
+          describeFolder={describeFolder}
         />
       ))}
     </>
   );
 }
 
-export function MoveToFolderDialog({
+export function MoveToFolderDialog<TFolder extends MoveToFolderNode>({
   open,
   onOpenChange,
   folders,
   currentFolderId,
   onMove,
   canMoveTo = allowEveryDestination,
-}: MoveToFolderDialogProps) {
+  describeFolder,
+  title = "Move to Folder",
+  description = "Select a destination folder or move to root (ungrouped).",
+  root = TOP_LEVEL,
+}: MoveToFolderDialogProps<TFolder>) {
   const [selected, setSelected] = useState<string | null>(currentFolderId);
   const displayedCurrentFolderId = useRetainedDialogValue(currentFolderId, open);
 
@@ -95,23 +117,21 @@ export function MoveToFolderDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Move to Folder</DialogTitle>
-          <DialogDescription>
-            Select a destination folder or move to root (ungrouped).
-          </DialogDescription>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
         <div className="border border-border">
           <button
             type="button"
             className={cn(
               "w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-accent transition-colors",
-              selected === null && "bg-accent",
+              selected === root.id && "bg-accent",
               "disabled:pointer-events-none disabled:opacity-50"
             )}
-            disabled={!canMoveTo(null)}
-            onClick={() => setSelected(null)}
+            disabled={!canMoveTo(root.id)}
+            onClick={() => setSelected(root.id)}
           >
-            <span className="font-medium">Root (ungrouped)</span>
+            <span className="font-medium">{root.label}</span>
           </button>
           {folders.map((folder) => (
             <FolderOption
@@ -121,6 +141,7 @@ export function MoveToFolderDialog({
               selected={selected}
               onSelect={setSelected}
               canMoveTo={canMoveTo}
+              describeFolder={describeFolder}
             />
           ))}
         </div>

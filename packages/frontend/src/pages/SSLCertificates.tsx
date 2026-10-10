@@ -42,6 +42,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
+import { useCanManageSomeFolders } from "@/hooks/use-folder-access";
 import { useRealtime } from "@/hooks/use-realtime";
 import { hasCreationDestination } from "@/lib/creation-folders";
 import { cn, daysUntil, formatDate, hoursUntil } from "@/lib/utils";
@@ -350,7 +351,7 @@ export function SSLCertificates() {
 
   const hasActiveFilters =
     filters.type !== "all" || filters.status !== "active" || filters.search !== "";
-  const canManageFolders = hasScope("ssl:cert:folders:manage");
+  const canManageFolders = useCanManageSomeFolders("ssl:cert:folders:manage");
 
   const handleRenew = async (cert: SSLCertificate) => {
     setRenewingCert({

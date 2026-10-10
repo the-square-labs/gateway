@@ -9,6 +9,7 @@ import type {
   ReorderResourcesInput,
 } from '@/modules/resource-folders/resource-folder.schemas.js';
 import { FolderedResourceService, type FolderMoveAccess } from '@/modules/resource-folders/resource-folder.service.js';
+import type { FolderManageAccess } from '@/modules/resource-folders/resource-folder-access.js';
 
 export class SSLCertificateFolderService extends FolderedResourceService {
   constructor(
@@ -39,10 +40,11 @@ export class SSLCertificateFolderService extends FolderedResourceService {
     id: string,
     input: MoveResourceFolderInput,
     userId: string,
-    access: FolderMoveAccess | null
+    access: FolderMoveAccess | null,
+    manage?: FolderManageAccess
   ) {
     await this.assertFolderTreeMovable(id);
-    return super.moveFolder(id, input, userId, access);
+    return super.moveFolder(id, input, userId, access, manage);
   }
 
   override async deleteFolder(id: string, userId: string) {

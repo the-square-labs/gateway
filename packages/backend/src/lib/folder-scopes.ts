@@ -4,6 +4,7 @@ import {
   adminUserFolders,
   certificateAuthorities,
   certificates,
+  certificateTemplates,
   databaseConnectionFolders,
   databaseConnections,
   dockerAccessResources,
@@ -34,18 +35,27 @@ import {
   permissionGroups,
   pkiCaFolders,
   pkiCertificateFolders,
+  pkiTemplateFolders,
   proxyHostFolders,
   proxyHosts,
   sslCertificateFolders,
   sslCertificates,
   users,
 } from '@/db/schema/index.js';
-import { canonicalizeScopes, extractBaseScope, FOLDER_CREATION_SCOPES, FOLDER_SCOPABLE } from './scopes.js';
+import {
+  canonicalizeScopes,
+  extractBaseScope,
+  FOLDER_CREATION_SCOPES,
+  FOLDER_MANAGE_SCOPES,
+  FOLDER_SCOPABLE,
+} from './scopes.js';
 
 export const FOLDER_SCOPE_TARGET_PREFIX = 'folder/';
 
 const FOLDER_SCOPABLE_SET = new Set(FOLDER_SCOPABLE);
 const CREATION_SCOPES = new Set<string>(FOLDER_CREATION_SCOPES);
+/** Folder management grants cover the folder's subfolders, never the resources in them. */
+const FOLDER_MANAGE_SCOPE_SET = new Set<string>(FOLDER_MANAGE_SCOPES);
 
 export interface FolderScopedGrant {
   scope: string;
@@ -127,7 +137,8 @@ async function expandSimpleFamily(
     const folderIds = descendantsByGrant.get(grant.scope)!;
     return [
       ...[...folderIds].map((folderId) => folderScopedScope(grant.baseScope, folderId)),
-      ...(CREATION_SCOPES.has(grant.baseScope) && grant.baseScope !== 'ssl:cert:issue'
+      ...(FOLDER_MANAGE_SCOPE_SET.has(grant.baseScope) ||
+      (CREATION_SCOPES.has(grant.baseScope) && grant.baseScope !== 'ssl:cert:issue')
         ? []
         : resourceRows
             .filter((resource) => resource.folderId && folderIds.has(resource.folderId))
@@ -320,8 +331,14 @@ function dockerFolderType(baseScope: string): string {
 }
 
 function familyForBaseScope(baseScope: string) {
-  if (baseScope === 'admin:groups') return 'groups';
-  if (baseScope === 'admin:users' || baseScope === 'admin:users:impersonate') return 'users';
+  if (baseScope === 'admin:groups' || baseScope === 'admin:groups:folders:manage') return 'groups';
+  if (
+    baseScope === 'admin:users' ||
+    baseScope === 'admin:users:impersonate' ||
+    baseScope === 'admin:users:folders:manage'
+  )
+    return 'users';
+  if (baseScope === 'pki:templates:folders:manage') return 'pki-templates';
   if (baseScope.startsWith('domains:')) return 'domains';
   if (baseScope.startsWith('proxy:templates:')) return 'nginx-templates';
   if (baseScope.startsWith('proxy:')) return 'proxy';
@@ -479,6 +496,7 @@ export async function expandFolderScopes(db: DrizzleClient, scopes: readonly str
     expandSimpleFamily(db, byFamily.get('ssl') ?? [], sslCertificateFolders, sslCertificates),
     expandPkiCaFamily(db, byFamily.get('pki-cas') ?? []),
     expandSimpleFamily(db, byFamily.get('pki-certificates') ?? [], pkiCertificateFolders, certificates),
+    expandSimpleFamily(db, byFamily.get('pki-templates') ?? [], pkiTemplateFolders, certificateTemplates),
     expandSimpleFamily(db, byFamily.get('nginx-templates') ?? [], nginxTemplateFolders, nginxTemplates),
     expandSimpleFamily(db, byFamily.get('nodes') ?? [], nodeFolders, nodes),
     expandIngressGroupFamily(db, byFamily.get('ingress-groups') ?? []),

@@ -12,6 +12,10 @@ export const UpdateDockerFolderSchema = z.object({
   name: z.string().min(1).max(255),
 });
 
+export const MoveDockerFolderSchema = z.object({
+  parentId: z.string().uuid().nullable(),
+});
+
 export const DockerFolderContainerRefSchema = z.object({
   nodeId: z.string().uuid(),
   containerName: z.string().min(1).max(255),
@@ -73,6 +77,7 @@ export const ReorderDockerFoldersSchema = z.object({
 
 export type CreateDockerFolderInput = z.infer<typeof CreateDockerFolderSchema>;
 export type UpdateDockerFolderInput = z.infer<typeof UpdateDockerFolderSchema>;
+export type MoveDockerFolderInput = z.infer<typeof MoveDockerFolderSchema>;
 export type DockerFolderResourceType = z.infer<typeof DockerFolderResourceTypeSchema>;
 export type DockerFolderContainerRef = z.infer<typeof DockerFolderContainerRefSchema>;
 export type DockerFolderResourceRef = z.infer<typeof DockerFolderResourceRefSchema>;

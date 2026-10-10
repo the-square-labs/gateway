@@ -25,6 +25,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useCanManageSomeFolders } from "@/hooks/use-folder-access";
 import { useRealtime } from "@/hooks/use-realtime";
 import { flattenCreationFolders, placementFolderChoices } from "@/lib/creation-folders";
 import { api } from "@/services/api";
@@ -69,7 +70,7 @@ export function PkiTemplatesTab({
   const canCreateTemplates = hasScope("pki:templates:create");
   const canEditTemplates = hasScope("pki:templates:edit");
   const canDeleteTemplates = hasScope("pki:templates:delete");
-  const canManageFolders = hasScope("pki:templates:folders:manage");
+  const canManageFolders = useCanManageSomeFolders("pki:templates:folders:manage");
   const [folderId, setFolderId] = useState("");
   const templateFolders = useResourceFolderStore((state) => state.foldersByType["pki-template"]);
   const foldersLoading = useResourceFolderStore((state) => state.loadingByType["pki-template"]);

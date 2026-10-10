@@ -57,6 +57,12 @@ import {
   ReorderResourcesSchema,
   UpdateResourceFolderSchema,
 } from '@/modules/resource-folders/resource-folder.schemas.js';
+import {
+  assertFolderManage,
+  assertFolderManageForFolder,
+  assertFolderManageForFolders,
+  assertFolderManageForResources,
+} from '@/modules/resource-folders/resource-folder-access.js';
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { SessionService } from '@/services/session.service.js';
 import type { AppEnv } from '@/types.js';
@@ -138,7 +144,7 @@ adminRoutes.openapi(
         ? { includeAllFolders: true }
         : {
             allowedResourceIds: getResourceScopedIds(scopes, 'admin:users'),
-            allowedFolderIds: getFolderScopedIds(scopes, ['admin:users']),
+            allowedFolderIds: getFolderScopedIds(scopes, ['admin:users', 'admin:users:folders:manage']),
           }
     );
     return c.json({ data });
@@ -146,33 +152,41 @@ adminRoutes.openapi(
 );
 
 adminRoutes.openapi(
-  { ...createAdminUserFolderRoute, middleware: requireScope('admin:users:folders:manage') },
+  { ...createAdminUserFolderRoute, middleware: requireScopeBase('admin:users:folders:manage') },
   async (c) => {
     const service = container.resolve(AdminUserFolderService);
     const user = c.get('user')!;
     const input = CreateResourceFolderSchema.parse(await c.req.json());
+    assertFolderManage(c.get('effectiveScopes') || [], 'admin:users:folders:manage', input.parentId ?? null);
     const data = await service.createFolder(input, user.id);
     return c.json({ data }, 201);
   }
 );
 
 adminRoutes.openapi(
-  { ...reorderAdminUserFoldersRoute, middleware: requireScope('admin:users:folders:manage') },
+  { ...reorderAdminUserFoldersRoute, middleware: requireScopeBase('admin:users:folders:manage') },
   async (c) => {
     const service = container.resolve(AdminUserFolderService);
     const input = ReorderResourceFoldersSchema.parse(await c.req.json());
+    await assertFolderManageForFolders(
+      service,
+      c.get('effectiveScopes') || [],
+      'admin:users:folders:manage',
+      input.items.map((item) => item.id)
+    );
     await service.reorderFolders(input);
     return c.json({ success: true });
   }
 );
 
 adminRoutes.openapi(
-  { ...moveAdminUsersToFolderRoute, middleware: requireScope('admin:users:folders:manage') },
+  { ...moveAdminUsersToFolderRoute, middleware: requireScopeBase('admin:users:folders:manage') },
   async (c) => {
     const service = container.resolve(AdminUserFolderService);
     const user = c.get('user')!;
     const input = MoveResourcesToFolderSchema.parse(await c.req.json());
     const scopes = c.get('effectiveScopes') || [];
+    await assertFolderManageForResources(service, scopes, 'admin:users:folders:manage', input.ids, input.folderId);
     for (const id of input.ids)
       if (!hasScope(scopes, `admin:users:${id}`))
         throw new AppError(403, 'FORBIDDEN', 'User is outside your permissions', {
@@ -188,10 +202,17 @@ adminRoutes.openapi(
 );
 
 adminRoutes.openapi(
-  { ...reorderAdminUsersRoute, middleware: requireScope('admin:users:folders:manage') },
+  { ...reorderAdminUsersRoute, middleware: requireScopeBase('admin:users:folders:manage') },
   async (c) => {
     const service = container.resolve(AdminUserFolderService);
     const input = ReorderResourcesSchema.parse(await c.req.json());
+    await assertFolderManageForResources(
+      service,
+      c.get('effectiveScopes') || [],
+      'admin:users:folders:manage',
+      input.items.map((item) => item.id),
+      undefined
+    );
     for (const item of input.items)
       if (!hasScope(c.get('effectiveScopes') || [], `admin:users:${item.id}`))
         throw new AppError(403, 'FORBIDDEN', 'User is outside your permissions', {
@@ -203,35 +224,51 @@ adminRoutes.openapi(
 );
 
 adminRoutes.openapi(
-  { ...updateAdminUserFolderRoute, middleware: requireScope('admin:users:folders:manage') },
+  { ...updateAdminUserFolderRoute, middleware: requireScopeBase('admin:users:folders:manage') },
   async (c) => {
     const service = container.resolve(AdminUserFolderService);
     const user = c.get('user')!;
     const input = UpdateResourceFolderSchema.parse(await c.req.json());
+    await assertFolderManageForFolder(
+      service,
+      c.get('effectiveScopes') || [],
+      'admin:users:folders:manage',
+      c.req.param('id')!
+    );
     const data = await service.updateFolder(c.req.param('id')!, input, user.id);
     return c.json({ data });
   }
 );
 
 adminRoutes.openapi(
-  { ...moveAdminUserFolderRoute, middleware: requireScope('admin:users:folders:manage') },
+  { ...moveAdminUserFolderRoute, middleware: requireScopeBase('admin:users:folders:manage') },
   async (c) => {
     const service = container.resolve(AdminUserFolderService);
     const user = c.get('user')!;
     const input = MoveResourceFolderSchema.parse(await c.req.json());
-    const data = await service.moveFolder(c.req.param('id')!, input, user.id, {
-      scopes: c.get('effectiveScopes') || [],
-      editScope: 'admin:users',
-    });
+    const scopes = c.get('effectiveScopes') || [];
+    const data = await service.moveFolder(
+      c.req.param('id')!,
+      input,
+      user.id,
+      { scopes, editScope: 'admin:users' },
+      { scopes, manageScope: 'admin:users:folders:manage' }
+    );
     return c.json({ data });
   }
 );
 
 adminRoutes.openapi(
-  { ...deleteAdminUserFolderRoute, middleware: requireScope('admin:users:folders:manage') },
+  { ...deleteAdminUserFolderRoute, middleware: requireScopeBase('admin:users:folders:manage') },
   async (c) => {
     const service = container.resolve(AdminUserFolderService);
     const user = c.get('user')!;
+    await assertFolderManageForFolder(
+      service,
+      c.get('effectiveScopes') || [],
+      'admin:users:folders:manage',
+      c.req.param('id')!
+    );
     await service.deleteFolder(c.req.param('id')!, user.id);
     return c.json({ success: true });
   }

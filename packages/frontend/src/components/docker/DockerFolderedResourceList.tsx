@@ -5,7 +5,7 @@ import {
   FolderedResourceListCore,
   type FolderedResourceListViewProps,
 } from "@/components/common/resource-list/FolderedResourceListCore";
-import { useLimitedToFolders } from "@/hooks/use-limited-to-folders";
+import { useFolderAccess } from "@/hooks/use-folder-access";
 import { hasSavedFolderExpansion, useDockerFolderStore } from "@/stores/docker-folders";
 import type { DockerFolderResourceType } from "@/types";
 
@@ -63,14 +63,16 @@ export function DockerFolderedResourceList<TItem extends DockerFolderedResourceI
     createFolder,
     renameFolder,
     deleteFolder,
+    moveFolder,
     reorderFolders,
     moveResourcesToFolder,
     reorderResources,
     toggleFolder,
   } = useDockerFolderStore();
 
-  // Visible only through folder grants: one granted folder is shown on its own.
-  const limitedToFolders = useLimitedToFolders(DOCKER_VIEW_SCOPE[resourceType]);
+  // Visible only through folder grants: one top-most granted folder works as the root.
+  // Docker folder management stays global (`docker:folders:manage` spans every Docker list).
+  const { limitedToFolders, isGrantedFolder } = useFolderAccess(DOCKER_VIEW_SCOPE[resourceType]);
 
   const store = useMemo<FolderedListStore<DockerResourceRef>>(
     () => ({
@@ -80,6 +82,7 @@ export function DockerFolderedResourceList<TItem extends DockerFolderedResourceI
       createFolder: (name, parentId) => createFolder(name, parentId, resourceType),
       renameFolder: (id, name) => renameFolder(id, name, resourceType),
       deleteFolder: (id) => deleteFolder(id, resourceType),
+      moveFolder: (id, parentId) => moveFolder(id, parentId, resourceType),
       reorderFolders: (items) => reorderFolders(items, resourceType),
       moveItems: (refs, folderId) => moveResourcesToFolder(resourceType, refs, folderId),
       reorderItems: (items) =>
@@ -93,6 +96,7 @@ export function DockerFolderedResourceList<TItem extends DockerFolderedResourceI
       createFolder,
       deleteFolder,
       fetchFolders,
+      moveFolder,
       moveResourcesToFolder,
       renameFolder,
       reorderFolders,
@@ -131,6 +135,7 @@ export function DockerFolderedResourceList<TItem extends DockerFolderedResourceI
       keys={keys}
       lockExpanded={!!fixedNodeId}
       limitedToFolders={limitedToFolders}
+      isGrantedFolder={isGrantedFolder}
     />
   );
 }

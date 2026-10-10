@@ -20,6 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useCanManageSomeFolders } from "@/hooks/use-folder-access";
 import { useRealtime } from "@/hooks/use-realtime";
 import { arrangeCATree, type CAListItem } from "@/lib/ca-tree";
 import { cn, daysUntil, formatDate } from "@/lib/utils";
@@ -104,7 +105,7 @@ export function CAs() {
   const totalCerts = allCAs.reduce((sum, ca) => sum + (ca.certCount || 0), 0);
   const canCreateRoot = hasScope("pki:ca:create:root");
   const canCreateIntermediate = hasScopedAccess("pki:ca:create:intermediate");
-  const canManageFolders = hasScope("pki:ca:folders:manage");
+  const canManageFolders = useCanManageSomeFolders("pki:ca:folders:manage");
 
   const caColumns: ResourceListColumn<CAListItem>[] = [
     {

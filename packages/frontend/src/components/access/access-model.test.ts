@@ -371,6 +371,25 @@ describe("overlapping lines after a save", () => {
     expect(scopesToLines(stored, ctx)).toEqual(lines);
   });
 
+  it("adds Manage subfolders to a folder line and reads it back", () => {
+    const line: AccessLine = {
+      kind: "resources",
+      role: "developer",
+      types: ["routes", "ssl"],
+      where: { kind: "folder", path: "orders" },
+      mayDelete: false,
+      manageFolders: true,
+    };
+    const scopes = lineScopes(line, ctx);
+    expect(scopes).toContain("proxy:folders:manage:folder/proxy-orders");
+    expect(scopes).toContain("ssl:cert:folders:manage:folder/ssl-orders");
+    expect(scopesToLines(scopes, ctx)).toEqual([line]);
+    expect(describeLine(line).detail).toContain("manages subfolders");
+    // Only folder lines manage folders: everywhere keeps folder management out of the line.
+    const everywhere = lineScopes({ ...line, where: { kind: "everywhere" } }, ctx);
+    expect(everywhere.some((scope) => scope.includes(":folders:manage"))).toBe(false);
+  });
+
   it("never reads a line out of broad scopes alone", () => {
     expect(scopesToLines(["docker:containers:view", "proxy:view"], ctx)).toEqual([
       { ...viewerEverywhere, types: ["containers", "routes"] },

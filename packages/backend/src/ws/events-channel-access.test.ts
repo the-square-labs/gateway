@@ -81,6 +81,9 @@ describe('SSL certificate event channel access', () => {
     expect(hasChannelAccess(['ssl:cert:folders:manage'], 'ssl.cert.folder.changed')).toBe(true);
     expect(hasChannelAccess(['ssl:cert:folders:manage'], 'ssl.cert.changed')).toBe(false);
     expect(hasChannelAccess(['ssl:cert:view'], 'ssl.cert.folder.changed')).toBe(true);
+    // A folder-limited folder manager gets live layout events of that list.
+    expect(hasChannelAccess(['ssl:cert:folders:manage:folder/f1'], 'ssl.cert.folder.changed')).toBe(true);
+    expect(hasChannelAccess(['domains:folders:manage:folder/f1'], 'domain.changed')).toBe(true);
     expect(hasChannelAccess(['ssl:cert:view'], 'ssl.cert.changed')).toBe(true);
   });
 });

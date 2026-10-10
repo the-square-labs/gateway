@@ -32,6 +32,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useCanManageSomeFolders } from "@/hooks/use-folder-access";
 import { useRealtime } from "@/hooks/use-realtime";
 import { hostingNodeLabel } from "@/lib/hosting-status";
 import {
@@ -244,7 +245,7 @@ export function AdminNodes() {
   const handleSearch = () => setFilters({ search: searchInput });
   const hasActiveFilters =
     filters.search !== "" || filters.status !== "all" || filters.hosting !== "all";
-  const canManageFolders = hasScope("nodes:folders:manage");
+  const canManageFolders = useCanManageSomeFolders("nodes:folders:manage");
 
   const handleDelete = useCallback(
     async (nodeId: string, hostname: string) => {

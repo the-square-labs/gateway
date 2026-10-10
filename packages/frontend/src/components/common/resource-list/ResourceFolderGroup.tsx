@@ -5,6 +5,7 @@ import {
   ChevronDown,
   ChevronRight,
   Folder,
+  FolderInput,
   FolderPlus,
   Lock,
   MoreVertical,
@@ -121,6 +122,12 @@ export function ResourceFolderGroup<TFolder, TItem>({
                   >
                     <FolderPlus className="h-4 w-4" />
                     Add subfolder
+                  </DropdownMenuItem>
+                )}
+                {folderConfig.onRequestMoveFolder && (
+                  <DropdownMenuItem onClick={() => folderConfig.onRequestMoveFolder?.(folderId)}>
+                    <FolderInput className="h-4 w-4" />
+                    Move
                   </DropdownMenuItem>
                 )}
                 <DropdownMenuSeparator />

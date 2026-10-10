@@ -51,6 +51,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useCanManageSomeFolders } from "@/hooks/use-folder-access";
 import { useRealtime } from "@/hooks/use-realtime";
 import { hasCreationDestination } from "@/lib/creation-folders";
 import { canCreateInFolder } from "@/lib/scope-utils";
@@ -388,7 +389,7 @@ export function Domains() {
       );
     });
   }, [domains, search, statusFilter]);
-  const canManageFolders = hasScope("domains:folders:manage");
+  const canManageFolders = useCanManageSomeFolders("domains:folders:manage");
   const domainColumns: ResourceListColumn<Domain>[] = [
     {
       id: "domain",

@@ -42,6 +42,8 @@ export interface ResourceListFolderConfig<TFolder, TItem> {
   onRenameFolder?: (id: string, name: string) => void | Promise<void>;
   onDeleteFolder?: (id: string) => void;
   onRequestCreateSubfolder?: (id: string) => void;
+  /** Opens the move dialog for a folder; absent when the list cannot move folders. */
+  onRequestMoveFolder?: (id: string) => void;
   ungroupedLabel?: React.ReactNode;
   ungroupedDroppable?: {
     id: string;

@@ -56,6 +56,7 @@ import {
   DockerFolderPlacementsSchema,
   DockerFolderResourceTypeSchema,
   MoveDockerContainersToFolderSchema,
+  MoveDockerFolderSchema,
   MoveDockerResourcesToFolderSchema,
   ReorderDockerContainersSchema,
   ReorderDockerFoldersSchema,
@@ -1225,6 +1226,14 @@ export const updateDockerFolderRoute = appRoute({
   tags: ['Docker Folders'],
   summary: 'Update a Docker folder',
   request: { params: pathParamSchema('id'), ...jsonBody(UpdateDockerFolderSchema) },
+  responses: okJson(UnknownDataResponseSchema),
+});
+export const moveDockerFolderRoute = appRoute({
+  method: 'put',
+  path: '/folders/{id}/move',
+  tags: ['Docker Folders'],
+  summary: 'Move a Docker folder under another folder or to the root',
+  request: { params: pathParamSchema('id'), ...jsonBody(MoveDockerFolderSchema) },
   responses: okJson(UnknownDataResponseSchema),
 });
 export const deleteDockerFolderRoute = appRoute({

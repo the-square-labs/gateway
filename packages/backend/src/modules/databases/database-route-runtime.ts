@@ -32,6 +32,12 @@ import {
   ReorderResourcesSchema,
   UpdateResourceFolderSchema,
 } from '@/modules/resource-folders/resource-folder.schemas.js';
+import {
+  assertFolderManage,
+  assertFolderManageForFolder,
+  assertFolderManageForFolders,
+  assertFolderManageForResources,
+} from '@/modules/resource-folders/resource-folder-access.js';
 import { DatabaseFolderService } from './database-folders.service.js';
 import { DatabaseMonitoringService } from './database-monitoring.service.js';
 import {
@@ -161,6 +167,11 @@ export const databaseRouteRuntime = {
   ReorderResourcesSchema,
   UpdateResourceFolderSchema,
   DatabaseFolderService,
+  // Folder-scoped folder management: check the exact place a folder change touches.
+  assertFolderManage,
+  assertFolderManageForFolder,
+  assertFolderManageForFolders,
+  assertFolderManageForResources,
   DatabaseMonitoringService,
   addPostgresColumnRoute,
   browsePostgresRowsRoute,

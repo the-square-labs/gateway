@@ -45,6 +45,7 @@ import {
   principalHolds,
   roleCanDelete,
   tokenStoredScopes,
+  typesManagingFolders,
   typesText,
   typesWithoutFolder,
 } from "./access-model";
@@ -64,6 +65,8 @@ interface Draft {
   resources: string[];
   types: AccessTypeId[];
   mayDelete: boolean;
+  /** Folder lines: also manage the folder's subfolders. */
+  manageFolders: boolean;
   /** `<provider>:<connectorId>`, or `<provider>:*` for every connector of the provider. */
   connector: string;
   repositories: RepositoriesKind;
@@ -81,6 +84,7 @@ function draftFor(line: AccessLine | null, folders: string[], firstConnector: st
     resources: [],
     types: [...ACCESS_TYPE_IDS],
     mayDelete: false,
+    manageFolders: false,
     connector: firstConnector,
     repositories: "all",
     group: "",
@@ -102,6 +106,7 @@ function draftFor(line: AccessLine | null, folders: string[], firstConnector: st
           : [],
       types: [...line.types],
       mayDelete: line.mayDelete,
+      manageFolders: !!line.manageFolders,
     };
   }
   if (line?.kind === "git") {
@@ -160,12 +165,14 @@ function lineFor(
   if (draft.where === "folder") {
     const types = folderTypes(draft.types);
     if (!draft.folder || types.length === 0) return null;
+    const manageFolders = draft.manageFolders && typesManagingFolders(types).length > 0;
     return {
       kind: "resources",
       role: draft.role,
       types,
       where: { kind: "folder", path: draft.folder },
       mayDelete,
+      ...(manageFolders ? { manageFolders } : {}),
     };
   }
   const ids: Partial<Record<AccessTypeId, string[]>> = {};
@@ -552,6 +559,22 @@ export function AddAccessDialog({
                   ariaLabel="May delete resources"
                 />
               </div>
+              {draft.where === "folder" && typesManagingFolders(draft.types).length > 0 && (
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-medium">Manage subfolders</p>
+                    <p className="text-xs text-muted-foreground">
+                      Create, rename, move and delete folders inside this folder (
+                      {typesText(typesManagingFolders(draft.types))}).
+                    </p>
+                  </div>
+                  <Switch
+                    checked={draft.manageFolders}
+                    onChange={(manageFolders) => update({ manageFolders })}
+                    ariaLabel="Manage subfolders"
+                  />
+                </div>
+              )}
             </>
           ) : connectorOptions.length === 0 ? (
             <p className="text-sm text-muted-foreground">No Git connectors you can see.</p>

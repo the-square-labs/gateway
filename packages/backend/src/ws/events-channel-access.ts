@@ -159,7 +159,7 @@ export function hasChannelAccess(scopes: string[], channel: string): boolean {
       hasScopeBase(scopes, 'docker:volumes:view') ||
       hasScopeBase(scopes, 'docker:networks:view') ||
       hasScopeBase(scopes, 'docker:compose:view') ||
-      hasScope(scopes, 'docker:folders:manage')
+      hasScopeBase(scopes, 'docker:folders:manage')
     );
   }
   if (channel === 'docker.snapshot.changed') {
@@ -198,7 +198,7 @@ export function hasChannelAccess(scopes: string[], channel: string): boolean {
     return hasScopeBase(scopes, 'docker:networks:view');
   }
   if (channel === 'database.folder.changed') {
-    return hasScopeBase(scopes, 'databases:view') || hasScope(scopes, 'databases:folders:manage');
+    return hasScopeBase(scopes, 'databases:view') || hasScopeBase(scopes, 'databases:folders:manage');
   }
   if (channel.startsWith('database.')) {
     return scopes.some((scope) =>
@@ -212,26 +212,26 @@ export function hasChannelAccess(scopes: string[], channel: string): boolean {
     return (
       hasScopeBase(scopes, 'pages:view') ||
       hasScopeBase(scopes, 'pages:create') ||
-      hasScope(scopes, 'pages:folders:manage')
+      hasScopeBase(scopes, 'pages:folders:manage')
     );
   }
   if (channel.startsWith('pages.')) {
     return hasScopeBase(scopes, 'pages:view');
   }
   if (channel === 'domain.changed') {
-    return hasScopeBase(scopes, 'domains:view') || hasScope(scopes, 'domains:folders:manage');
+    return hasScopeBase(scopes, 'domains:view') || hasScopeBase(scopes, 'domains:folders:manage');
   }
   if (channel === 'ssl.cert.folder.changed') {
-    return hasScopeBase(scopes, 'ssl:cert:view') || hasScope(scopes, 'ssl:cert:folders:manage');
+    return hasScopeBase(scopes, 'ssl:cert:view') || hasScopeBase(scopes, 'ssl:cert:folders:manage');
   }
   if (channel === 'ssl.cert.changed') {
     return hasScopeBase(scopes, 'ssl:cert:view');
   }
   if (channel.startsWith('proxy.host')) {
-    return hasScopeBase(scopes, 'proxy:view') || hasScope(scopes, 'proxy:folders:manage');
+    return hasScopeBase(scopes, 'proxy:view') || hasScopeBase(scopes, 'proxy:folders:manage');
   }
   if (channel === 'node.folder.changed') {
-    return hasScopeBase(scopes, 'nodes:details') || hasScope(scopes, 'nodes:folders:manage');
+    return hasScopeBase(scopes, 'nodes:details') || hasScopeBase(scopes, 'nodes:folders:manage');
   }
   if (channel === 'ingress_group.changed') {
     // Only the group id travels; the list and detail requests apply the folder grants.
@@ -280,35 +280,35 @@ export function hasChannelAccess(scopes: string[], channel: string): boolean {
     return hasScopeBase(scopes, 'logs:read');
   }
   if (channel === 'logging.environment.changed') {
-    return hasScopeBase(scopes, 'logs:environments:view') || hasScope(scopes, 'logs:environments:folders:manage');
+    return hasScopeBase(scopes, 'logs:environments:view') || hasScopeBase(scopes, 'logs:environments:folders:manage');
   }
   if (channel === 'logging.schema.changed') {
-    return hasScopeBase(scopes, 'logs:schemas:view') || hasScope(scopes, 'logs:schemas:folders:manage');
+    return hasScopeBase(scopes, 'logs:schemas:view') || hasScopeBase(scopes, 'logs:schemas:folders:manage');
   }
   if (channel === 'logging.token.changed') {
     return hasScopeBase(scopes, 'logs:tokens:view');
   }
   if (channel === 'user.changed') {
-    return hasScopeBase(scopes, 'admin:users') || hasScope(scopes, 'admin:users:folders:manage');
+    return hasScopeBase(scopes, 'admin:users') || hasScopeBase(scopes, 'admin:users:folders:manage');
   }
   if (channel === 'group.changed') {
-    return hasScopeBase(scopes, 'admin:groups') || hasScope(scopes, 'admin:groups:folders:manage');
+    return hasScopeBase(scopes, 'admin:groups') || hasScopeBase(scopes, 'admin:groups:folders:manage');
   }
   if (channel === 'ca.changed') {
     return hasScopeBase(scopes, 'pki:ca:view');
   }
   // Folder layout events carry only the action and folder id; lists apply the grants.
   if (channel === 'ca.folder.changed') {
-    return hasScopeBase(scopes, 'pki:ca:view') || hasScope(scopes, 'pki:ca:folders:manage');
+    return hasScopeBase(scopes, 'pki:ca:view') || hasScopeBase(scopes, 'pki:ca:folders:manage');
   }
   if (channel === 'cert.folder.changed') {
-    return hasScopeBase(scopes, 'pki:cert:view') || hasScope(scopes, 'pki:cert:folders:manage');
+    return hasScopeBase(scopes, 'pki:cert:view') || hasScopeBase(scopes, 'pki:cert:folders:manage');
   }
   if (channel === 'pki.template.folder.changed') {
-    return hasScope(scopes, 'pki:templates:view') || hasScope(scopes, 'pki:templates:folders:manage');
+    return hasScope(scopes, 'pki:templates:view') || hasScopeBase(scopes, 'pki:templates:folders:manage');
   }
   if (channel === 'nginx.template.folder.changed') {
-    return hasScopeBase(scopes, 'proxy:templates:view') || hasScope(scopes, 'proxy:templates:folders:manage');
+    return hasScopeBase(scopes, 'proxy:templates:view') || hasScopeBase(scopes, 'proxy:templates:folders:manage');
   }
 
   return hasScopeBase(scopes, required);

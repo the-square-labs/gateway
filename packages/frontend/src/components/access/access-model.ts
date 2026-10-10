@@ -66,6 +66,11 @@ export interface AccessType {
   roles: Readonly<Record<AccessRole, readonly string[]>>;
   /** Added by "May delete resources" (Developer and Operator only). */
   delete: readonly string[];
+  /**
+   * Folder management scope that a folder line may add ("Manage subfolders"): create, rename,
+   * move and delete folders inside that folder. Absent where folder management is global only.
+   */
+  foldersManage?: string;
 }
 
 export const ACCESS_TYPES: readonly AccessType[] = [
@@ -124,6 +129,7 @@ export const ACCESS_TYPES: readonly AccessType[] = [
       operator: ["proxy:view", "proxy:create", "proxy:edit", "proxy:maintenance:bypass"],
     },
     delete: ["proxy:delete"],
+    foldersManage: "proxy:folders:manage",
   },
   {
     id: "domains",
@@ -137,6 +143,7 @@ export const ACCESS_TYPES: readonly AccessType[] = [
       operator: ["domains:view", "domains:create", "domains:edit"],
     },
     delete: ["domains:delete"],
+    foldersManage: "domains:folders:manage",
   },
   {
     id: "ssl",
@@ -150,6 +157,7 @@ export const ACCESS_TYPES: readonly AccessType[] = [
       operator: ["ssl:cert:view", "ssl:cert:issue", "ssl:cert:renew"],
     },
     delete: ["ssl:cert:delete"],
+    foldersManage: "ssl:cert:folders:manage",
   },
   {
     id: "databases",
@@ -233,6 +241,11 @@ export function accessTypeScopes(type: AccessType): string[] {
   return [...new Set([...ROLE_IDS.flatMap((role) => type.roles[role]), ...type.delete])];
 }
 
+/** Types whose folder lines may add "Manage subfolders". */
+export function typesManagingFolders(types: readonly AccessTypeId[]): AccessTypeId[] {
+  return types.filter((type) => !!accessType(type).foldersManage);
+}
+
 const TYPE_BY_SCOPE = new Map<string, AccessType>(
   ACCESS_TYPES.flatMap((type) => accessTypeScopes(type).map((scope) => [scope, type] as const))
 );
@@ -297,6 +310,8 @@ export interface ResourceAccessLine {
   types: AccessTypeId[];
   where: AccessWhere;
   mayDelete: boolean;
+  /** Folder lines only: also manage the folder's subfolders (types with `foldersManage`). */
+  manageFolders?: boolean;
 }
 
 export type GitRepositories =
@@ -434,9 +449,17 @@ export function lineScopes(line: AccessLine, ctx: AccessContext): string[] {
       )
     );
   }
-  return line.types.flatMap((typeId) =>
-    typeScopesAt(accessType(typeId), line.role, line.mayDelete, where, ctx)
-  );
+  return line.types.flatMap((typeId) => [
+    ...typeScopesAt(accessType(typeId), line.role, line.mayDelete, where, ctx),
+    ...(line.manageFolders ? folderManageScopes(accessType(typeId), where, ctx) : []),
+  ]);
+}
+
+/** The folder management scope of a type in a folder line ("Manage subfolders"). */
+function folderManageScopes(type: AccessType, where: AccessWhere, ctx: AccessContext): string[] {
+  if (where.kind !== "folder" || !type.foldersManage) return [];
+  const qualified = qualify(type.foldersManage, type, where, ctx);
+  return qualified ? [qualified] : [];
 }
 
 /**
@@ -636,13 +659,22 @@ export function scopesToLines(scopes: readonly string[], ctx: AccessContext): Ac
         ? ACCESS_TYPE_IDS.length - typesWithoutFolder(ctx, place.path, ACCESS_TYPE_IDS).length
         : ACCESS_TYPE_IDS.length;
     for (const group of groupMatches(matches, available)) {
+      const types = group.matches.map((match) => match.type.id).sort(typeOrder);
+      const where: AccessWhere =
+        place.kind === "folder" ? { kind: "folder", path: place.path } : { kind: "everywhere" };
+      // "Manage subfolders" reads back when every type of the line that has it holds it here.
+      const manageScopes = types.flatMap((type) =>
+        folderManageScopes(accessType(type), where, ctx)
+      );
+      const manageFolders =
+        manageScopes.length > 0 && manageScopes.every((scope) => remaining.has(scope));
       consume({
         kind: "resources",
         role: group.role,
         mayDelete: group.mayDelete,
-        types: group.matches.map((match) => match.type.id).sort(typeOrder),
-        where:
-          place.kind === "folder" ? { kind: "folder", path: place.path } : { kind: "everywhere" },
+        ...(manageFolders ? { manageFolders } : {}),
+        types,
+        where,
       });
     }
   }
@@ -859,7 +891,9 @@ export function describeLine(
   }
   return {
     title: `${roleTitle(line.role)} ${whereLabel(line.where, labels)}`,
-    detail: `${coversLabel(line.types)}${line.mayDelete ? " · may delete" : ""}`,
+    detail: `${coversLabel(line.types)}${line.mayDelete ? " · may delete" : ""}${
+      line.manageFolders ? " · manages subfolders" : ""
+    }`,
   };
 }
 

@@ -168,7 +168,11 @@ function createTreeDb(rows: TreeRow[]) {
           const found = matching(condition);
           if (fields && 'maxDepth' in fields) return [{ maxDepth: Math.max(...found.map((row) => row.depth)) }];
           if (fields && 'sortOrder' in fields) return [];
-          if (fields) return found.map((row) => ({ id: row.id }));
+          if (fields) {
+            return found.map((row) =>
+              Object.fromEntries(Object.keys(fields).map((key) => [key, row[key as keyof TreeRow]]))
+            );
+          }
           return found.map((row) => ({ ...row }));
         };
         const query = {
@@ -272,5 +276,79 @@ describe('FolderedResourceService tree consistency', () => {
     await treeService(db).deleteFolder('a', 'user-1');
 
     expect(folders.has('a')).toBe(false);
+  });
+
+  it('refuses to move a folder into its own subfolder', async () => {
+    const { db, folders } = createTreeDb([
+      { id: 'a', name: 'A', parentId: null, depth: 0, sortOrder: 0 },
+      { id: 'b', name: 'B', parentId: 'a', depth: 1, sortOrder: 0 },
+    ]);
+
+    await expect(treeService(db).moveFolder('a', { parentId: 'b' }, 'user-1', null)).rejects.toMatchObject({
+      code: 'CIRCULAR_REFERENCE',
+    });
+    expect(folders.get('a')).toMatchObject({ parentId: null, depth: 0 });
+  });
+
+  it('moves a folder with its subfolders and updates their depths', async () => {
+    const { db, folders } = createTreeDb([
+      { id: 'a', name: 'A', parentId: null, depth: 0, sortOrder: 0 },
+      { id: 'child', name: 'Child', parentId: 'a', depth: 1, sortOrder: 0 },
+      { id: 'b', name: 'B', parentId: null, depth: 0, sortOrder: 1 },
+    ]);
+
+    await treeService(db).moveFolder('a', { parentId: 'b' }, 'user-1', null);
+
+    expect(folders.get('a')).toMatchObject({ parentId: 'b', depth: 1 });
+    expect(folders.get('child')).toMatchObject({ parentId: 'a', depth: 2 });
+  });
+
+  it('refuses a move next to a folder with the same name, ignoring case and spaces', async () => {
+    const { db, folders } = createTreeDb([
+      { id: 'a', name: 'Production', parentId: null, depth: 0, sortOrder: 0 },
+      { id: 'b', name: 'Team', parentId: null, depth: 0, sortOrder: 1 },
+      { id: 'c', name: ' production ', parentId: 'b', depth: 1, sortOrder: 0 },
+    ]);
+
+    await expect(treeService(db).moveFolder('a', { parentId: 'b' }, 'user-1', null)).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'FOLDER_NAME_CONFLICT',
+    });
+    expect(folders.get('a')).toMatchObject({ parentId: null, depth: 0 });
+  });
+
+  it('moves a folder only between places the caller manages', async () => {
+    const tree = () =>
+      createTreeDb([
+        { id: 'team', name: 'Team', parentId: null, depth: 0, sortOrder: 0 },
+        { id: 'a', name: 'A', parentId: 'team', depth: 1, sortOrder: 0 },
+        { id: 'b', name: 'B', parentId: 'team', depth: 1, sortOrder: 1 },
+        { id: 'other', name: 'Other', parentId: null, depth: 0, sortOrder: 1 },
+      ]);
+    // A grant on Team, expanded to its subfolders.
+    const manage = {
+      scopes: [
+        'domains:folders:manage:folder/team',
+        'domains:folders:manage:folder/a',
+        'domains:folders:manage:folder/b',
+      ],
+      manageScope: 'domains:folders:manage',
+    };
+
+    let { db, folders } = tree();
+    await expect(treeService(db).moveFolder('a', { parentId: 'other' }, 'user-1', null, manage)).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    await expect(treeService(db).moveFolder('a', { parentId: null }, 'user-1', null, manage)).rejects.toMatchObject({
+      statusCode: 403,
+    });
+    await expect(
+      treeService(db).moveFolder('team', { parentId: 'other' }, 'user-1', null, manage)
+    ).rejects.toMatchObject({ statusCode: 403 });
+    expect(folders.get('a')).toMatchObject({ parentId: 'team' });
+
+    ({ db, folders } = tree());
+    await treeService(db).moveFolder('a', { parentId: 'b' }, 'user-1', null, manage);
+    expect(folders.get('a')).toMatchObject({ parentId: 'b', depth: 2 });
   });
 });

@@ -14,10 +14,11 @@ import {
   DockerAccessResourceService,
   hasDockerResourceScope,
 } from '@/modules/docker/docker-access-resource.service.js';
-import { dockerFolderTreeOptions } from '@/modules/docker/docker-folder.routes.js';
+import { assertDockerFolderMoveAccess, dockerFolderTreeOptions } from '@/modules/docker/docker-folder.routes.js';
 import {
   CreateDockerFolderSchema,
   DockerFolderResourceTypeSchema,
+  MoveDockerFolderSchema,
   MoveDockerResourcesToFolderSchema,
   ReorderDockerFoldersSchema,
   ReorderDockerResourcesSchema,
@@ -38,6 +39,12 @@ import {
   ReorderResourcesSchema,
   UpdateResourceFolderSchema,
 } from '@/modules/resource-folders/resource-folder.schemas.js';
+import {
+  assertFolderManage,
+  assertFolderManageForFolder,
+  assertFolderManageForFolders,
+  assertFolderManageForResources,
+} from '@/modules/resource-folders/resource-folder-access.js';
 import type { User } from '@/types.js';
 import { folderLicenseFeature, type GenericFolderConfig, genericFolderConfig } from './ai.folder-tool-configs.js';
 import {
@@ -124,6 +131,13 @@ function ensureScope(user: User, scope: string) {
   }
 }
 
+/** Folder management held broadly or on some folder; each operation then checks the exact place it changes. */
+function ensureScopeBase(user: User, scope: string) {
+  if (!hasScopeBase(user.scopes, scope)) {
+    throw new Error(`PERMISSION_DENIED: Missing required scope ${scope}`);
+  }
+}
+
 function ensureScopeForResource(user: User, scope: string, resourceId: string) {
   if (!hasScopeForResource(user.scopes, scope, resourceId)) {
     throw new Error(`PERMISSION_DENIED: Missing required scope ${scope}:${resourceId}`);
@@ -204,7 +218,7 @@ function genericListOptions(user: User, config: GenericFolderConfig, resourceTyp
     ...(config.listScopes ?? []),
   ];
   const listsAll = (config.listScopes ?? []).some((scope) => hasScope(scopes, scope));
-  const grantedFolderIds = getFolderScopedIds(scopes, folderFamilyBases(resourceType));
+  const grantedFolderIds = getFolderScopedIds(scopes, [...folderFamilyBases(resourceType), config.manageScope]);
   if (!canManageFolders && grantedFolderIds.length === 0 && !listScopes.some((scope) => hasScopeBase(scopes, scope))) {
     throw new Error(`PERMISSION_DENIED: Missing one of required scopes: ${listScopes.join(', ')}`);
   }
@@ -240,26 +254,47 @@ async function executeGenericFolderTool(
   }
   if (resourceType === 'pages') await container.resolve(PageProfileService).requireEnabled();
 
-  ensureScope(user, config.manageScope);
+  // Same per-place rule as the folder routes (resource-folder-access.ts): a folder grant manages its subfolders.
+  ensureScopeBase(user, config.manageScope);
+  const manageScope = config.manageScope;
 
   switch (operation) {
-    case 'create':
-      return config.service.createFolder(CreateResourceFolderSchema.parse(args), user.id);
-    case 'update':
-      return config.service.updateFolder(folderIdArg(args), UpdateResourceFolderSchema.parse(args), user.id);
+    case 'create': {
+      const input = CreateResourceFolderSchema.parse(args);
+      assertFolderManage(user.scopes, manageScope, input.parentId ?? null);
+      return config.service.createFolder(input, user.id);
+    }
+    case 'update': {
+      const input = UpdateResourceFolderSchema.parse(args);
+      await assertFolderManageForFolder(config.service, user.scopes, manageScope, folderIdArg(args));
+      return config.service.updateFolder(folderIdArg(args), input, user.id);
+    }
     case 'move_folder':
-      return config.service.moveFolder(folderIdArg(args), MoveResourceFolderSchema.parse(args), user.id, {
-        scopes: user.scopes,
-        editScope: config.moveEditScope,
-      });
+      return config.service.moveFolder(
+        folderIdArg(args),
+        MoveResourceFolderSchema.parse(args),
+        user.id,
+        { scopes: user.scopes, editScope: config.moveEditScope },
+        { scopes: user.scopes, manageScope }
+      );
     case 'delete':
+      await assertFolderManageForFolder(config.service, user.scopes, manageScope, folderIdArg(args));
       await config.service.deleteFolder(folderIdArg(args), user.id);
       return { success: true };
-    case 'reorder_folders':
-      await config.service.reorderFolders(ReorderResourceFoldersSchema.parse(args));
+    case 'reorder_folders': {
+      const input = ReorderResourceFoldersSchema.parse(args);
+      await assertFolderManageForFolders(
+        config.service,
+        user.scopes,
+        manageScope,
+        input.items.map((item) => item.id)
+      );
+      await config.service.reorderFolders(input);
       return { success: true };
+    }
     case 'move_resources': {
       const input = MoveResourcesToFolderSchema.parse({ ids: args.resourceIds, folderId: args.folderId });
+      await assertFolderManageForResources(config.service, user.scopes, manageScope, input.ids, input.folderId);
       if (config.authorizePlacement) await config.authorizePlacement(user.scopes, input.ids);
       else ensureResourceMoveAccess(user, config.resourceMoveScope, input.ids, input.folderId);
       await config.service.moveResourcesToFolder(input, user.id);
@@ -267,6 +302,13 @@ async function executeGenericFolderTool(
     }
     case 'reorder_resources': {
       const input = ReorderResourcesSchema.parse(args);
+      await assertFolderManageForResources(
+        config.service,
+        user.scopes,
+        manageScope,
+        input.items.map((item) => item.id),
+        undefined
+      );
       if (config.authorizePlacement) {
         await config.authorizePlacement(
           user.scopes,
@@ -297,7 +339,7 @@ async function executeProxyFolderTool(user: User, args: Record<string, unknown>)
     if (
       !hasScopeBase(scopes, 'proxy:view') &&
       !hasScopeBase(scopes, 'proxy:create') &&
-      !hasScope(scopes, 'proxy:folders:manage')
+      !hasScopeBase(scopes, 'proxy:folders:manage')
     ) {
       throw new Error(
         'PERMISSION_DENIED: Missing one of required scopes: proxy:view, proxy:create, proxy:folders:manage'
@@ -311,37 +353,65 @@ async function executeProxyFolderTool(user: User, args: Record<string, unknown>)
         ? { includeAllFolders: true }
         : {
             allowedHostIds: getResourceScopedIds(scopes, 'proxy:view'),
-            allowedFolderIds: getFolderScopedIds(scopes, routeFolderBases),
+            allowedFolderIds: getFolderScopedIds(scopes, [...routeFolderBases, 'proxy:folders:manage']),
           }
     );
     return annotateFolderAccess(present(tree), scopes, routeFolderBases, 'proxy:create');
   }
 
-  ensureScope(user, 'proxy:folders:manage');
+  // Same per-place rule as the route folder endpoints: a folder grant manages its subfolders.
+  ensureScopeBase(user, 'proxy:folders:manage');
+  const manageScope = 'proxy:folders:manage';
   switch (operation) {
-    case 'create':
-      return service.createFolder(CreateResourceFolderSchema.parse(args), user.id);
-    case 'update':
-      return service.updateFolder(folderIdArg(args), UpdateResourceFolderSchema.parse(args), user.id);
+    case 'create': {
+      const input = CreateResourceFolderSchema.parse(args);
+      assertFolderManage(user.scopes, manageScope, input.parentId ?? null);
+      return service.createFolder(input, user.id);
+    }
+    case 'update': {
+      const input = UpdateResourceFolderSchema.parse(args);
+      await assertFolderManageForFolder(service, user.scopes, manageScope, folderIdArg(args));
+      return service.updateFolder(folderIdArg(args), input, user.id);
+    }
     case 'move_folder':
-      return service.moveFolder(folderIdArg(args), MoveResourceFolderSchema.parse(args), user.id, {
-        scopes: user.scopes,
-        editScope: 'proxy:edit',
-      });
+      return service.moveFolder(
+        folderIdArg(args),
+        MoveResourceFolderSchema.parse(args),
+        user.id,
+        { scopes: user.scopes, editScope: 'proxy:edit' },
+        { scopes: user.scopes, manageScope }
+      );
     case 'delete':
+      await assertFolderManageForFolder(service, user.scopes, manageScope, folderIdArg(args));
       await service.deleteFolder(folderIdArg(args), user.id);
       return { success: true };
-    case 'reorder_folders':
-      await service.reorderFolders(ReorderResourceFoldersSchema.parse(args));
+    case 'reorder_folders': {
+      const input = ReorderResourceFoldersSchema.parse(args);
+      await assertFolderManageForFolders(
+        service,
+        user.scopes,
+        manageScope,
+        input.items.map((item) => item.id)
+      );
+      await service.reorderFolders(input);
       return { success: true };
+    }
     case 'move_resources': {
       const parsed = MoveHostsToFolderSchema.parse({ hostIds: args.resourceIds, folderId: args.folderId });
+      await assertFolderManageForResources(service, user.scopes, manageScope, parsed.hostIds, parsed.folderId);
       ensureResourceMoveAccess(user, 'proxy:edit', parsed.hostIds, parsed.folderId);
       await service.moveHostsToFolder(parsed, user.id);
       return { success: true };
     }
     case 'reorder_resources': {
       const parsed = ReorderHostsSchema.parse(args);
+      await assertFolderManageForResources(
+        service,
+        user.scopes,
+        manageScope,
+        parsed.items.map((item) => item.id),
+        undefined
+      );
       for (const item of parsed.items) ensureScopeForResource(user, 'proxy:edit', item.id);
       await service.reorderHosts(parsed);
       return { success: true };
@@ -419,7 +489,10 @@ async function executeDockerFolderTool(user: User, args: Record<string, unknown>
       await service.reorderResources(ReorderDockerResourcesSchema.parse({ ...args, resourceType }), user.id);
       return { success: true };
     case 'move_folder':
-      throw new Error('Docker folders do not support move_folder; reorder or recreate the folder instead');
+      // Same per-resource and destination checks as PUT /docker/folders/:id/move (docker-folder.routes.ts).
+      return service.moveFolder(folderIdArg(args), MoveDockerFolderSchema.parse(args), user.id, (context) =>
+        assertDockerFolderMoveAccess(user.scopes, context)
+      );
     default:
       throw new Error(`Unsupported docker folder operation: ${operation}`);
   }

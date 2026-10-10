@@ -25,6 +25,11 @@ import {
   withoutReservedTemplateVariables,
 } from '@/modules/proxy/proxy-template-variables.js';
 import { redactRawProxyConfigForBrowser } from '@/modules/proxy/raw-visibility.js';
+import {
+  assertFolderManage,
+  assertFolderManageForFolder,
+  assertFolderManageForResources,
+} from '@/modules/resource-folders/resource-folder-access.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { User } from '@/types.js';
 import {
@@ -224,11 +229,13 @@ export async function executeProxyTool(
         if (folderId === ((existing as { folderId?: string | null }).folderId ?? null)) {
           delete updateFields.folderId;
         } else {
-          if (!hasScope(user.scopes, 'proxy:folders:manage')) {
-            throw new AppError(403, 'FORBIDDEN', 'Moving a route requires proxy:folders:manage scope', {
-              requiredScope: 'proxy:folders:manage',
-            });
-          }
+          // Folder management is needed where the route leaves and where it lands, as in the REST update.
+          assertFolderManage(
+            user.scopes,
+            'proxy:folders:manage',
+            (existing as { folderId?: string | null }).folderId ?? null
+          );
+          assertFolderManage(user.scopes, 'proxy:folders:manage', folderId);
           if (
             !hasScope(user.scopes, `proxy:edit:${routeId}`) ||
             !hasScopeForCreation(user.scopes, 'proxy:edit', folderId)
@@ -318,13 +325,20 @@ export async function executeProxyTool(
     case 'delete_route':
       await context.proxyService.deleteProxyHost(a.routeId, user.id);
       return { success: true };
-    case 'create_route_folder':
-      return context.folderService.createFolder(
-        CreateFolderSchema.parse({ name: a.name, parentId: a.parentId }),
-        user.id
-      );
+    case 'create_route_folder': {
+      const input = CreateFolderSchema.parse({ name: a.name, parentId: a.parentId });
+      assertFolderManage(user.scopes, 'proxy:folders:manage', input.parentId ?? null);
+      return context.folderService.createFolder(input, user.id);
+    }
     case 'move_routes_to_folder': {
       const input = MoveHostsToFolderSchema.parse({ hostIds: a.routeIds, folderId: a.folderId });
+      await assertFolderManageForResources(
+        context.folderService,
+        user.scopes,
+        'proxy:folders:manage',
+        input.hostIds,
+        input.folderId
+      );
       for (const routeId of input.hostIds) {
         if (!hasScope(user.scopes, `proxy:edit:${routeId}`)) {
           throw new Error(`PERMISSION_DENIED: Missing required scope proxy:edit:${routeId}`);
@@ -336,6 +350,7 @@ export async function executeProxyTool(
       return context.folderService.moveHostsToFolder(input, user.id);
     }
     case 'delete_route_folder':
+      await assertFolderManageForFolder(context.folderService, user.scopes, 'proxy:folders:manage', a.folderId);
       await context.folderService.deleteFolder(a.folderId, user.id);
       return { success: true };
     case 'manage_route':

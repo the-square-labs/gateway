@@ -1,5 +1,5 @@
 import { hasScope } from './permissions.js';
-import { FOLDER_CREATION_SCOPES, RESOURCE_SCOPABLE } from './scopes.js';
+import { FOLDER_CREATION_SCOPES, FOLDER_ONLY_SCOPABLE, RESOURCE_SCOPABLE } from './scopes.js';
 
 export type CreatedResourceFamily =
   | 'nodes'
@@ -27,8 +27,14 @@ export interface CreatedResourceDestination {
   nodeId?: string | null;
 }
 
-// Ownership never grants global settings, creation elsewhere, or security-validation bypasses.
-const excluded = new Set<string>([...FOLDER_CREATION_SCOPES, 'proxy:unrestricted', 'hosting:resources:create']);
+// Ownership never grants global settings, creation elsewhere, or security-validation bypasses, nor
+// scopes only a folder can qualify (folder management).
+const excluded = new Set<string>([
+  ...FOLDER_CREATION_SCOPES,
+  ...FOLDER_ONLY_SCOPABLE,
+  'proxy:unrestricted',
+  'hosting:resources:create',
+]);
 export function createdResourceScopes(family: CreatedResourceFamily, resourceId: string): string[] {
   if (
     !resourceId ||

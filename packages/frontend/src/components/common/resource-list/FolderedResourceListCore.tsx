@@ -4,12 +4,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { FolderCreateDialog } from "@/components/common/FolderCreateDialog";
+import { MoveToFolderDialog } from "@/components/common/MoveToFolderDialog";
 import { ResourceListForm } from "@/components/common/ResourceListForm";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { useRealtime } from "@/hooks/use-realtime";
 import { collectFolderTreeIds, findFolderTreeNode } from "@/lib/folder-tree";
-import { applySingleFolderView, defaultOpenFolderId } from "./folder-view";
+import { applyRootFolderView, canMoveFolderInto, defaultOpenFolderId } from "./folder-view";
 import type { ResourceListSearchProps } from "./types";
 
 /** A folder as the folder stores return it. */
@@ -45,6 +46,8 @@ export interface FolderedListStore<TRef> {
   createFolder: (name: string, parentId?: string) => Promise<unknown>;
   renameFolder: (id: string, name: string) => Promise<void>;
   deleteFolder: (id: string) => Promise<void>;
+  /** Moves a folder (with its subfolders and resources) under `parentId`; absent when the list cannot. */
+  moveFolder?: (id: string, parentId: string | null) => Promise<void>;
   reorderFolders: (items: { id: string; sortOrder: number }[]) => Promise<void>;
   moveItems: (refs: TRef[], folderId: string | null) => Promise<void>;
   reorderItems: (items: Array<{ ref: TRef; sortOrder: number }>) => Promise<void>;
@@ -95,12 +98,17 @@ export interface FolderedResourceListViewProps<TItem> {
   /** Embed search and table directly in a PanelShell. */
   embedded?: boolean;
   notifyOnMove?: boolean;
+  /** Folder management somewhere in the list (broadly, or inside granted folders). */
   canManageFolders: boolean;
   /**
-   * The caller sees these resources only through folder grants: with one granted folder the
-   * list shows that folder alone (or just its resources, without folder management).
+   * The caller sees these resources only through folder grants: with one top-most granted folder
+   * the list works in that folder as the root.
    */
   limitedToFolders?: boolean;
+  /** The caller holds a folder grant on this folder (stops the root search at it). */
+  isGrantedFolder?: (folderId: string) => boolean;
+  /** Folder management inside `parentId` (null = root). Default: `canManageFolders` everywhere. */
+  canManageFolderAt?: (parentId: string | null) => boolean;
   canViewItem?: (item: TItem) => boolean;
   canReorganizeItem?: (item: TItem) => boolean;
   getResourceLabel: (item: TItem) => string;
@@ -227,6 +235,8 @@ export function FolderedResourceListCore<TItem extends FolderedListItem, TRef>({
   notifyOnMove = true,
   canManageFolders,
   limitedToFolders = false,
+  isGrantedFolder,
+  canManageFolderAt,
   canViewItem,
   canReorganizeItem,
   getResourceLabel,
@@ -246,6 +256,7 @@ export function FolderedResourceListCore<TItem extends FolderedListItem, TRef>({
   const [activeDrag, setActiveDrag] = useState<DragEndEvent["active"] | null>(null);
   const [createFolderParentId, setCreateFolderParentId] = useState<string | null>(null);
   const [createFolderOpen, setCreateFolderOpen] = useState(false);
+  const [moveFolderId, setMoveFolderId] = useState<string | null>(null);
   const [optimisticResources, setOptimisticResources] = useState<TItem[] | null>(null);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
 
@@ -312,35 +323,49 @@ export function FolderedResourceListCore<TItem extends FolderedListItem, TRef>({
 
   const isSearchFiltering = search.search.trim() !== "";
   const canDragFolders = canManageFolders && !isMobile && !isSearchFiltering;
+  // The root view stays while searching, so the top level keeps meaning the caller's folder.
   const shown = useMemo(
     () =>
-      isSearchFiltering || lockExpanded
-        ? { folders: folderTree, ungrouped: ungroupedResources }
-        : applySingleFolderView(folderTree, ungroupedResources, (folder) => folder.items, {
+      lockExpanded
+        ? { folders: folderTree, ungrouped: ungroupedResources, root: null }
+        : applyRootFolderView(folderTree, ungroupedResources, (folder) => folder.items, {
             limitedToFolders,
-            canManageFolders,
+            isGrantedFolder,
           }),
-    [
-      canManageFolders,
-      folderTree,
-      isSearchFiltering,
-      limitedToFolders,
-      lockExpanded,
-      ungroupedResources,
-    ]
+    [folderTree, isGrantedFolder, limitedToFolders, lockExpanded, ungroupedResources]
   );
+  const rootFolderId = shown.root?.id ?? null;
+  const canManageAt = (parentId: string | null) =>
+    canManageFolders && (canManageFolderAt ? canManageFolderAt(parentId) : true);
+  const canManageFolderNode = (folder: { parentId: string | null; isSystem?: boolean }) =>
+    !folder.isSystem && canManageAt(folder.parentId ?? null);
   const defaultOpenId = lockExpanded
     ? null
     : defaultOpenFolderId(shown.folders, shown.ungrouped.length, expansionTouched);
 
   const handleCreateFolder = async (name: string) => {
     try {
-      await store.createFolder(name, createFolderParentId ?? undefined);
+      await store.createFolder(name, createFolderParentId ?? rootFolderId ?? undefined);
       toast.success("Folder created");
       setCreateFolderOpen(false);
       setCreateFolderParentId(null);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to create folder");
+    }
+  };
+
+  const movingFolder = moveFolderId ? findFolderTreeNode(folders, moveFolderId) : null;
+  /** Where the server accepts the folder, and where the caller manages folders. */
+  const canMoveFolderTo = (parentId: string | null) =>
+    !!moveFolderId && canMoveFolderInto(folders, moveFolderId, parentId) && canManageAt(parentId);
+
+  const handleMoveFolder = async (id: string, parentId: string | null) => {
+    try {
+      await store.moveFolder?.(id, parentId);
+      toast.success("Folder moved");
+      await onRefresh(true);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to move folder");
     }
   };
 
@@ -428,6 +453,7 @@ export function FolderedResourceListCore<TItem extends FolderedListItem, TRef>({
       const activeGroup = findFolderSiblings(folders, activeData.folderId as string);
       const overGroup = findFolderSiblings(folders, dropData.folderId as string);
       if (!activeGroup || !overGroup || activeGroup.parentId !== overGroup.parentId) return;
+      if (!canManageAt(activeGroup.parentId)) return;
       const oldIndex = activeGroup.siblings.findIndex(
         (folder) => folder.id === activeData.folderId
       );
@@ -447,11 +473,12 @@ export function FolderedResourceListCore<TItem extends FolderedListItem, TRef>({
     }
 
     const source = activeData?.resource as TItem | undefined;
-    if (!source || !canMoveItem(source)) return;
+    if (!source || !canMoveItem(source) || !canManageAt(source.folderId ?? null)) return;
 
     if (dropData?.type === "folder") {
       const targetFolderId = dropData.folderId as string | null;
       if (dropData.isSystem || source.folderId === targetFolderId) return;
+      if (!canManageAt(targetFolderId)) return;
       await moveResource(source, targetFolderId);
       return;
     }
@@ -460,6 +487,7 @@ export function FolderedResourceListCore<TItem extends FolderedListItem, TRef>({
     if (!overResource || active.id === over.id || !canMoveItem(overResource)) return;
 
     if (source.folderId !== overResource.folderId) {
+      if (!canManageAt(overResource.folderId ?? null)) return;
       await moveResource(source, overResource.folderId ?? null);
       return;
     }
@@ -528,8 +556,8 @@ export function FolderedResourceListCore<TItem extends FolderedListItem, TRef>({
             lockExpanded || expandedFolderIds.has(folder.id) || folder.id === defaultOpenId,
           isFolderSystem: (folder) => !!folder.isSystem,
           isFolderCollapsible: () => !lockExpanded,
-          canManageFolder: (folder) => canManageFolders && !folder.isSystem,
-          canReorderFolder: (folder) => canDragFolders && !folder.isSystem,
+          canManageFolder: canManageFolderNode,
+          canReorderFolder: (folder) => canDragFolders && canManageFolderNode(folder),
           canCreateSubfolder: (folder) => !folder.isSystem && folder.depth < 2,
           onToggleFolder: (id) => {
             if (lockExpanded) return;
@@ -539,14 +567,15 @@ export function FolderedResourceListCore<TItem extends FolderedListItem, TRef>({
           },
           onRenameFolder: handleRenameFolder,
           onDeleteFolder: handleDeleteFolder,
+          ...(store.moveFolder ? { onRequestMoveFolder: (id: string) => setMoveFolderId(id) } : {}),
           onRequestCreateSubfolder: (parentId) => {
             setCreateFolderParentId(parentId);
             setCreateFolderOpen(true);
           },
           ungroupedDroppable: {
             id: `${store.dndPrefix}-folder-ungrouped`,
-            data: { type: "folder", folderId: null, isSystem: false },
-            disabled: !canDragFolders,
+            data: { type: "folder", folderId: rootFolderId, isSystem: false },
+            disabled: !canDragFolders || !canManageAt(rootFolderId),
           },
         }}
         items={{
@@ -554,10 +583,33 @@ export function FolderedResourceListCore<TItem extends FolderedListItem, TRef>({
           getItemSortableId: keys.getItemSortableId,
           getItemSortableData: (resource) => ({ type: "resource", resource }),
           canViewItem,
-          isItemDragDisabled: (resource) => !canDragFolders || !canMoveItem(resource),
+          isItemDragDisabled: (resource) =>
+            !canDragFolders || !canMoveItem(resource) || !canManageAt(resource.folderId ?? null),
           onItemClick,
         }}
       />
+
+      {store.moveFolder && (
+        <MoveToFolderDialog
+          open={moveFolderId !== null}
+          onOpenChange={(open) => {
+            if (!open) setMoveFolderId(null);
+          }}
+          title="Move Folder"
+          description="Select where to move the folder. Its subfolders and resources move with it."
+          folders={shown.folders.filter((folder) => !folder.isSystem)}
+          root={
+            shown.root
+              ? { id: shown.root.id, label: shown.root.name }
+              : { id: null, label: "Top level" }
+          }
+          currentFolderId={movingFolder?.parentId ?? null}
+          canMoveTo={canMoveFolderTo}
+          onMove={(parentId) => {
+            if (moveFolderId) void handleMoveFolder(moveFolderId, parentId);
+          }}
+        />
+      )}
 
       <FolderCreateDialog
         open={createFolderOpen}

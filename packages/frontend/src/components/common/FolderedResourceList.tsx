@@ -5,7 +5,7 @@ import {
   FolderedResourceListCore,
   type FolderedResourceListViewProps,
 } from "@/components/common/resource-list/FolderedResourceListCore";
-import { useLimitedToFolders } from "@/hooks/use-limited-to-folders";
+import { useFolderAccess } from "@/hooks/use-folder-access";
 import { hasSavedFolderExpansion, useResourceFolderStore } from "@/stores/resource-folders";
 import type { ResourceFolderTreeNode, ResourceFolderType } from "@/types";
 
@@ -24,8 +24,10 @@ interface FolderedResourceListProps<TItem extends FolderedResourceListItem>
 const EMPTY_FOLDERS: ResourceFolderTreeNode[] = [];
 const EMPTY_EXPANDED = new Set<string>();
 
+type StoredFolderType = Exclude<ResourceFolderType, `hosting-snapshot:${string}`>;
+
 /** The view scope of each list; held broadly it shows every folder. */
-const VIEW_SCOPE: Record<Exclude<ResourceFolderType, `hosting-snapshot:${string}`>, string> = {
+const VIEW_SCOPE: Record<StoredFolderType, string> = {
   node: "nodes:details",
   domain: "domains:view",
   "ssl-certificate": "ssl:cert:view",
@@ -42,11 +44,30 @@ const VIEW_SCOPE: Record<Exclude<ResourceFolderType, `hosting-snapshot:${string}
   "pages-project": "pages:view",
 };
 
-/** Snapshot grants name the hosting resource, which shows all of its snapshot folders. */
-function viewScopeOf(type: ResourceFolderType): string | null {
-  return type.startsWith("hosting-snapshot:")
-    ? null
-    : VIEW_SCOPE[type as Exclude<ResourceFolderType, `hosting-snapshot:${string}`>];
+/** Folder management scope of each list (a folder grant manages that folder's subfolders), then broad alternatives. */
+const MANAGE_SCOPES: Record<StoredFolderType, string[]> = {
+  node: ["nodes:folders:manage"],
+  domain: ["domains:folders:manage"],
+  "ssl-certificate": ["ssl:cert:folders:manage"],
+  "pki-ca": ["pki:ca:folders:manage"],
+  "pki-certificate": ["pki:cert:folders:manage"],
+  "pki-template": ["pki:templates:folders:manage"],
+  "nginx-template": ["proxy:templates:folders:manage"],
+  database: ["databases:folders:manage"],
+  storage: ["storage:folders:manage"],
+  "logging-environment": ["logs:environments:folders:manage"],
+  "logging-schema": ["logs:schemas:folders:manage"],
+  "admin-user": ["admin:users:folders:manage", "admin:system"],
+  "admin-group": ["admin:groups:folders:manage", "admin:system"],
+  "pages-project": ["pages:folders:manage"],
+};
+
+/**
+ * Snapshot folders are decided by the server per hosting resource (`view.canManageFolders`), and
+ * their grants name the hosting resource, which shows all of its snapshot folders.
+ */
+function isSnapshotType(type: ResourceFolderType): boolean {
+  return type.startsWith("hosting-snapshot:");
 }
 
 const getSortOrder = (item: FolderedResourceListItem) => item.sortOrder;
@@ -73,10 +94,15 @@ export function FolderedResourceList<TItem extends FolderedResourceListItem>({
     moveResourcesToFolder,
     reorderResources,
     toggleFolder,
+    moveFolder,
   } = useResourceFolderStore();
 
-  // Visible only through folder grants: one granted folder is shown on its own.
-  const limitedToFolders = useLimitedToFolders(viewScopeOf(resourceType));
+  const snapshot = isSnapshotType(resourceType);
+  // Visible only through folder grants: one top-most granted folder works as the root.
+  const access = useFolderAccess(
+    snapshot ? null : VIEW_SCOPE[resourceType as StoredFolderType],
+    ...(snapshot ? [] : MANAGE_SCOPES[resourceType as StoredFolderType])
+  );
 
   const store = useMemo<FolderedListStore<string>>(
     () => ({
@@ -86,6 +112,12 @@ export function FolderedResourceList<TItem extends FolderedResourceListItem>({
       createFolder: (name, parentId) => createFolder(resourceType, name, parentId),
       renameFolder: (id, name) => renameFolder(resourceType, id, name),
       deleteFolder: (id) => deleteFolder(resourceType, id),
+      ...(snapshot
+        ? {}
+        : {
+            moveFolder: (id: string, parentId: string | null) =>
+              moveFolder(resourceType, id, parentId),
+          }),
       reorderFolders: (items) => reorderFolders(resourceType, items),
       moveItems: (ids, folderId) => moveResourcesToFolder(resourceType, ids, folderId),
       reorderItems: (items) =>
@@ -99,8 +131,10 @@ export function FolderedResourceList<TItem extends FolderedResourceListItem>({
       createFolder,
       deleteFolder,
       fetchFolders,
+      moveFolder,
       moveResourcesToFolder,
       realtimeChannel,
+      snapshot,
       renameFolder,
       reorderFolders,
       reorderResources,
@@ -131,7 +165,9 @@ export function FolderedResourceList<TItem extends FolderedResourceListItem>({
         expansionTouched: hasSavedFolderExpansion(resourceType),
       }}
       keys={keys}
-      limitedToFolders={limitedToFolders}
+      limitedToFolders={access.limitedToFolders}
+      isGrantedFolder={access.isGrantedFolder}
+      {...(snapshot ? {} : { canManageFolderAt: access.canManageFolderAt })}
     />
   );
 }

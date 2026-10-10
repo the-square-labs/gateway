@@ -4,12 +4,7 @@ import { getFolderScopedIds } from '@/lib/folder-scopes.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { getResourceScopedIds, hasScope, hasScopeBase, hasScopeForCreation } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
-import {
-  authMiddleware,
-  requireScope,
-  requireScopeBase,
-  requireScopeForResource,
-} from '@/modules/auth/auth.middleware.js';
+import { authMiddleware, requireScopeBase, requireScopeForResource } from '@/modules/auth/auth.middleware.js';
 import {
   CreateResourceFolderSchema,
   MoveResourceFolderSchema,
@@ -18,6 +13,12 @@ import {
   ReorderResourcesSchema,
   UpdateResourceFolderSchema,
 } from '@/modules/resource-folders/resource-folder.schemas.js';
+import {
+  assertFolderManage,
+  assertFolderManageForFolder,
+  assertFolderManageForFolders,
+  assertFolderManageForResources,
+} from '@/modules/resource-folders/resource-folder-access.js';
 import type { AppEnv } from '@/types.js';
 import {
   createGroupFolderRoute,
@@ -74,7 +75,7 @@ groupRoutes.openapi(
         ? { includeAllFolders: true }
         : {
             allowedResourceIds: getResourceScopedIds(scopes, 'admin:groups'),
-            allowedFolderIds: getFolderScopedIds(scopes, ['admin:groups']),
+            allowedFolderIds: getFolderScopedIds(scopes, ['admin:groups', 'admin:groups:folders:manage']),
           }
     );
     return c.json({ data });
@@ -82,33 +83,41 @@ groupRoutes.openapi(
 );
 
 groupRoutes.openapi(
-  { ...createGroupFolderRoute, middleware: requireScope('admin:groups:folders:manage') },
+  { ...createGroupFolderRoute, middleware: requireScopeBase('admin:groups:folders:manage') },
   async (c) => {
     const service = container.resolve(PermissionGroupFolderService);
     const user = c.get('user')!;
     const input = CreateResourceFolderSchema.parse(await c.req.json());
+    assertFolderManage(c.get('effectiveScopes') || [], 'admin:groups:folders:manage', input.parentId ?? null);
     const data = await service.createFolder(input, user.id);
     return c.json({ data }, 201);
   }
 );
 
 groupRoutes.openapi(
-  { ...reorderGroupFoldersRoute, middleware: requireScope('admin:groups:folders:manage') },
+  { ...reorderGroupFoldersRoute, middleware: requireScopeBase('admin:groups:folders:manage') },
   async (c) => {
     const service = container.resolve(PermissionGroupFolderService);
     const input = ReorderResourceFoldersSchema.parse(await c.req.json());
+    await assertFolderManageForFolders(
+      service,
+      c.get('effectiveScopes') || [],
+      'admin:groups:folders:manage',
+      input.items.map((item) => item.id)
+    );
     await service.reorderFolders(input);
     return c.json({ success: true });
   }
 );
 
 groupRoutes.openapi(
-  { ...moveGroupsToFolderRoute, middleware: requireScope('admin:groups:folders:manage') },
+  { ...moveGroupsToFolderRoute, middleware: requireScopeBase('admin:groups:folders:manage') },
   async (c) => {
     const service = container.resolve(PermissionGroupFolderService);
     const user = c.get('user')!;
     const input = MoveResourcesToFolderSchema.parse(await c.req.json());
     const scopes = c.get('effectiveScopes') || [];
+    await assertFolderManageForResources(service, scopes, 'admin:groups:folders:manage', input.ids, input.folderId);
     for (const id of input.ids)
       if (!hasScope(scopes, `admin:groups:${id}`))
         throw new AppError(403, 'FORBIDDEN', 'Group is outside your permissions', {
@@ -123,45 +132,74 @@ groupRoutes.openapi(
   }
 );
 
-groupRoutes.openapi({ ...reorderGroupsRoute, middleware: requireScope('admin:groups:folders:manage') }, async (c) => {
-  const service = container.resolve(PermissionGroupFolderService);
-  const input = ReorderResourcesSchema.parse(await c.req.json());
-  for (const item of input.items)
-    if (!hasScope(c.get('effectiveScopes') || [], `admin:groups:${item.id}`))
-      throw new AppError(403, 'FORBIDDEN', 'Group is outside your permissions', {
-        requiredScope: `admin:groups:${item.id}`,
-      });
-  await service.reorderResources(input);
-  return c.json({ success: true });
-});
+groupRoutes.openapi(
+  { ...reorderGroupsRoute, middleware: requireScopeBase('admin:groups:folders:manage') },
+  async (c) => {
+    const service = container.resolve(PermissionGroupFolderService);
+    const input = ReorderResourcesSchema.parse(await c.req.json());
+    await assertFolderManageForResources(
+      service,
+      c.get('effectiveScopes') || [],
+      'admin:groups:folders:manage',
+      input.items.map((item) => item.id),
+      undefined
+    );
+    for (const item of input.items)
+      if (!hasScope(c.get('effectiveScopes') || [], `admin:groups:${item.id}`))
+        throw new AppError(403, 'FORBIDDEN', 'Group is outside your permissions', {
+          requiredScope: `admin:groups:${item.id}`,
+        });
+    await service.reorderResources(input);
+    return c.json({ success: true });
+  }
+);
 
 groupRoutes.openapi(
-  { ...updateGroupFolderRoute, middleware: requireScope('admin:groups:folders:manage') },
+  { ...updateGroupFolderRoute, middleware: requireScopeBase('admin:groups:folders:manage') },
   async (c) => {
     const service = container.resolve(PermissionGroupFolderService);
     const user = c.get('user')!;
     const input = UpdateResourceFolderSchema.parse(await c.req.json());
+    await assertFolderManageForFolder(
+      service,
+      c.get('effectiveScopes') || [],
+      'admin:groups:folders:manage',
+      c.req.param('id')!
+    );
     const data = await service.updateFolder(c.req.param('id')!, input, user.id);
     return c.json({ data });
   }
 );
 
-groupRoutes.openapi({ ...moveGroupFolderRoute, middleware: requireScope('admin:groups:folders:manage') }, async (c) => {
-  const service = container.resolve(PermissionGroupFolderService);
-  const user = c.get('user')!;
-  const input = MoveResourceFolderSchema.parse(await c.req.json());
-  const data = await service.moveFolder(c.req.param('id')!, input, user.id, {
-    scopes: c.get('effectiveScopes') || [],
-    editScope: 'admin:groups',
-  });
-  return c.json({ data });
-});
-
 groupRoutes.openapi(
-  { ...deleteGroupFolderRoute, middleware: requireScope('admin:groups:folders:manage') },
+  { ...moveGroupFolderRoute, middleware: requireScopeBase('admin:groups:folders:manage') },
   async (c) => {
     const service = container.resolve(PermissionGroupFolderService);
     const user = c.get('user')!;
+    const input = MoveResourceFolderSchema.parse(await c.req.json());
+    const scopes = c.get('effectiveScopes') || [];
+    const data = await service.moveFolder(
+      c.req.param('id')!,
+      input,
+      user.id,
+      { scopes, editScope: 'admin:groups' },
+      { scopes, manageScope: 'admin:groups:folders:manage' }
+    );
+    return c.json({ data });
+  }
+);
+
+groupRoutes.openapi(
+  { ...deleteGroupFolderRoute, middleware: requireScopeBase('admin:groups:folders:manage') },
+  async (c) => {
+    const service = container.resolve(PermissionGroupFolderService);
+    const user = c.get('user')!;
+    await assertFolderManageForFolder(
+      service,
+      c.get('effectiveScopes') || [],
+      'admin:groups:folders:manage',
+      c.req.param('id')!
+    );
     await service.deleteFolder(c.req.param('id')!, user.id);
     return c.json({ success: true });
   }

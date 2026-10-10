@@ -127,6 +127,35 @@ describe('folder-scoped permissions', () => {
     expect(isScopeSubset(['proxy:view:folder/folder-3'], scopes)).toBe(false);
   });
 
+  it.each([
+    'domains:folders:manage',
+    'proxy:folders:manage',
+    'admin:users:folders:manage',
+    'admin:groups:folders:manage',
+    'pki:templates:folders:manage',
+  ])('expands a %s folder grant to the folder and its subfolders only', async (base) => {
+    const folderRows = [
+      { id: 'folder-1', parentId: null },
+      { id: 'folder-2', parentId: 'folder-1' },
+      { id: 'folder-3', parentId: null },
+    ];
+    const select = vi.fn((fields: Record<string, unknown>) => ({
+      from: vi.fn(() =>
+        'parentId' in fields
+          ? Promise.resolve(folderRows)
+          : { where: vi.fn().mockResolvedValue([{ id: 'item-1', folderId: 'folder-2' }]) }
+      ),
+    }));
+
+    const scopes = await expandFolderScopes({ select } as never, [folderScopedScope(base, 'folder-1')]);
+
+    expect(parseFolderScopedGrant(`${base}:folder/folder-1`)).toMatchObject({ baseScope: base, folderId: 'folder-1' });
+    expect(scopes).toEqual([`${base}:folder/folder-1`, `${base}:folder/folder-2`]);
+    expect(hasScopeForCreation(scopes, base, 'folder-2')).toBe(true);
+    expect(hasScopeForCreation(scopes, base, 'folder-3')).toBe(false);
+    expect(hasScopeForCreation(scopes, base, null)).toBe(false);
+  });
+
   it('expands Docker folders to stable container and deployment resource IDs', async () => {
     const select = vi.fn((fields: Record<string, unknown>) => ({
       from: vi.fn(() => {

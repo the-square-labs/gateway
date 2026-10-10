@@ -30,6 +30,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useCanManageSomeFolders } from "@/hooks/use-folder-access";
 import { useRealtime } from "@/hooks/use-realtime";
 import { loggingEnvironmentRoute, loggingSchemaRoute } from "@/lib/resource-routes";
 import { scopeMatches } from "@/lib/scope-utils";
@@ -152,9 +153,9 @@ export function Logging({
 
   // Creation may be granted on a folder only; the dialog then offers just those folders.
   const canCreateEnvironment = hasScopedAccess("logs:environments:create");
-  const canManageEnvironmentFolders = hasAnyScope("logs:environments:folders:manage");
+  const canManageEnvironmentFolders = useCanManageSomeFolders("logs:environments:folders:manage");
   const canCreateSchema = hasScopedAccess("logs:schemas:create");
-  const canManageSchemaFolders = hasAnyScope("logs:schemas:folders:manage");
+  const canManageSchemaFolders = useCanManageSomeFolders("logs:schemas:folders:manage");
   const canEditEnvironment =
     !!selectedEnvironment && hasAnyScope(`logs:environments:edit:${selectedEnvironment.id}`);
   const canDeleteEnvironment =

@@ -610,6 +610,14 @@ class ApiClient extends withIngressGroupsApi(
     );
   }
 
+  /** Moves a resource folder under `parentId` (null = top level); `basePath` is the list's folder route. */
+  async moveResourceFolder(basePath: string, id: string, parentId: string | null): Promise<void> {
+    await this.request(`${basePath}/${id}/move`, {
+      method: "PUT",
+      body: JSON.stringify({ parentId }),
+    });
+  }
+
   async deleteAdminUserFolder(id: string): Promise<void> {
     await this.request(`/admin/user-folders/${id}`, { method: "DELETE" });
   }

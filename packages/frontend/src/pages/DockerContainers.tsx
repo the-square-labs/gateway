@@ -15,6 +15,7 @@ import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { FolderCreateDialog } from "@/components/common/FolderCreateDialog";
+import { MoveToFolderDialog } from "@/components/common/MoveToFolderDialog";
 import { Notice } from "@/components/common/Notice";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
@@ -22,7 +23,8 @@ import { ResourceListForm } from "@/components/common/ResourceListForm";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import {
-  applySingleFolderView,
+  applyRootFolderView,
+  canMoveFolderInto,
   defaultOpenFolderId,
 } from "@/components/common/resource-list/folder-view";
 import { DockerMoveToFolderDialog } from "@/components/docker/DockerMoveToFolderDialog";
@@ -51,8 +53,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { TruncateStart } from "@/components/ui/truncate-start";
+import { useFolderAccess } from "@/hooks/use-folder-access";
 import { useIsMobile } from "@/hooks/use-is-mobile";
-import { useLimitedToFolders } from "@/hooks/use-limited-to-folders";
 import { useRealtime } from "@/hooks/use-realtime";
 import { matchesDockerContainerStatus } from "@/lib/docker-container-filters";
 import { formatDisplayImageRef } from "@/lib/docker-image-ref";
@@ -177,6 +179,7 @@ export function DockerContainers({
     createFolder,
     renameFolder,
     deleteFolder,
+    moveFolder,
     reorderFolders,
     moveContainersToFolder,
     reorderContainers,
@@ -194,6 +197,7 @@ export function DockerContainers({
   const [checkingDeployNodes, setCheckingDeployNodes] = useState(false);
   const [createFolderParentId, setCreateFolderParentId] = useState<string | null>(null);
   const [createFolderOpen, setCreateFolderOpen] = useState(false);
+  const [moveFolderId, setMoveFolderId] = useState<string | null>(null);
   const [moveDialogContainer, setMoveDialogContainer] = useState<DockerContainerListItem | null>(
     null
   );
@@ -424,15 +428,15 @@ export function DockerContainers({
   const hasActiveNodeFilter = !fixedNodeId && !!selectedNodeId;
   const isSearchFiltering = filters.search.trim() !== "";
   const canManageFolders = !fixedNodeId && hasScope("docker:folders:manage");
-  // Visible only through folder grants: one granted folder is shown on its own.
-  const limitedToFolders = useLimitedToFolders("docker:containers:view");
-  const shown =
-    fixedNodeId || isSearchFiltering
-      ? { folders: folderTree, ungrouped: ungroupedContainers }
-      : applySingleFolderView(folderTree, ungroupedContainers, (folder) => folder.containers, {
-          limitedToFolders,
-          canManageFolders,
-        });
+  // Visible only through folder grants: one top-most granted folder works as the root.
+  const { limitedToFolders, isGrantedFolder } = useFolderAccess("docker:containers:view");
+  const shown = fixedNodeId
+    ? { folders: folderTree, ungrouped: ungroupedContainers, root: null }
+    : applyRootFolderView(folderTree, ungroupedContainers, (folder) => folder.containers, {
+        limitedToFolders,
+        isGrantedFolder,
+      });
+  const rootFolderId = shown.root?.id ?? null;
   const defaultOpenId = fixedNodeId
     ? null
     : defaultOpenFolderId(
@@ -559,7 +563,7 @@ export function DockerContainers({
 
   const handleCreateFolder = async (name: string) => {
     try {
-      await createFolder(name, createFolderParentId ?? undefined);
+      await createFolder(name, createFolderParentId ?? rootFolderId ?? undefined);
       toast.success("Folder created");
       setCreateFolderOpen(false);
       setCreateFolderParentId(null);
@@ -574,6 +578,16 @@ export function DockerContainers({
       toast.success("Folder renamed");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to rename folder");
+    }
+  };
+
+  const handleMoveFolder = async (id: string, parentId: string | null) => {
+    try {
+      await moveFolder(id, parentId);
+      toast.success("Folder moved");
+      await refreshData(true);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to move folder");
     }
   };
 
@@ -1168,13 +1182,14 @@ export function DockerContainers({
               },
           onRenameFolder: handleRenameFolder,
           onDeleteFolder: handleDeleteFolder,
+          onRequestMoveFolder: setMoveFolderId,
           onRequestCreateSubfolder: (parentId) => {
             setCreateFolderParentId(parentId);
             setCreateFolderOpen(true);
           },
           ungroupedDroppable: {
             id: "docker-folder-ungrouped",
-            data: { type: "folder", folderId: null, isSystem: false },
+            data: { type: "folder", folderId: rootFolderId, isSystem: false },
             disabled: !canDragFolders,
           },
         }}
@@ -1218,6 +1233,32 @@ export function DockerContainers({
         }
         onMove={(folderId) => {
           if (moveDialogContainer) void moveContainer(moveDialogContainer, folderId);
+        }}
+      />
+
+      <MoveToFolderDialog
+        open={moveFolderId !== null}
+        onOpenChange={(open) => {
+          if (!open) setMoveFolderId(null);
+        }}
+        title="Move Folder"
+        description="Select where to move the folder. Its subfolders and containers move with it."
+        folders={shown.folders.filter((folder) => !folder.isSystem)}
+        root={
+          shown.root
+            ? { id: shown.root.id, label: shown.root.name }
+            : { id: null, label: "Top level" }
+        }
+        currentFolderId={
+          (moveFolderId ? findFolderTreeNode(folders, moveFolderId)?.parentId : null) ?? null
+        }
+        canMoveTo={(parentId) =>
+          !!moveFolderId &&
+          canMoveFolderInto(generalFolders, moveFolderId, parentId) &&
+          !(parentId && findFolderTreeNode(generalFolders, parentId)?.isSystem)
+        }
+        onMove={(parentId) => {
+          if (moveFolderId) void handleMoveFolder(moveFolderId, parentId);
         }}
       />
 

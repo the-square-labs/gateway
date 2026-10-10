@@ -8,7 +8,7 @@ import {
   pkiCertificateFolders,
   pkiTemplateFolders,
 } from '@/db/schema/index.js';
-import { hasScope, hasScopeForCreation, hasScopeForResource } from '@/lib/permissions.js';
+import { hasScopeForCreation, hasScopeForResource } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type {
@@ -17,6 +17,7 @@ import type {
   ReorderResourcesInput,
 } from '@/modules/resource-folders/resource-folder.schemas.js';
 import { FolderedResourceService, type FolderMoveAccess } from '@/modules/resource-folders/resource-folder.service.js';
+import type { FolderManageAccess } from '@/modules/resource-folders/resource-folder-access.js';
 import { rootCaIds, rootFolderId } from './ca-folder-placement.js';
 
 type FolderTreeOptions = Parameters<FolderedResourceService['getFolderTree']>[0];
@@ -143,12 +144,12 @@ export class CertificateFolderService extends FolderedResourceService {
 
   /**
    * PKI certificates have no folder-qualified issue grant, so placing a new certificate in a folder needs
-   * what moving it there needs: pki:cert:folders:manage (issuing from the CA is checked by the issue route).
+   * what moving it there needs: pki:cert:folders:manage on the folder (issuing from the CA is checked by the issue route).
    */
   async assertCreateFolder(scopes: readonly string[], folderId: string | null | undefined) {
     if (!folderId) return;
-    if (!hasScope([...scopes], 'pki:cert:folders:manage')) {
-      throw new AppError(403, 'FORBIDDEN', 'Missing required scope: pki:cert:folders:manage');
+    if (!hasScopeForCreation(scopes, 'pki:cert:folders:manage', folderId)) {
+      throw new AppError(403, 'FORBIDDEN', 'Missing pki:cert:folders:manage for the destination folder');
     }
     await this.assertFolderExists(folderId);
   }
@@ -188,7 +189,8 @@ export class CertificateFolderService extends FolderedResourceService {
     id: string,
     input: MoveResourceFolderInput,
     userId: string,
-    access: FolderMoveAccess | null
+    access: FolderMoveAccess | null,
+    manage?: FolderManageAccess
   ) {
     if (access) {
       const folderIds = await this.subtreeFolderIds(id);
@@ -206,7 +208,7 @@ export class CertificateFolderService extends FolderedResourceService {
       }
     }
     // The placement check above replaces the generic one: certificates have no edit scope.
-    return super.moveFolder(id, input, userId, null);
+    return super.moveFolder(id, input, userId, null, manage);
   }
 
   private async assertMovable(ids: readonly string[]) {
@@ -250,11 +252,11 @@ export class PkiTemplateFolderService extends FolderedResourceService {
     });
   }
 
-  /** Templates are not folder-scopable: placing a new one needs pki:templates:folders:manage, like a move. */
+  /** Placing a new template in a folder needs pki:templates:folders:manage there (broadly or on the folder), like a move. */
   async assertCreateFolder(scopes: readonly string[], folderId: string | null | undefined) {
     if (!folderId) return;
-    if (!hasScope([...scopes], 'pki:templates:folders:manage')) {
-      throw new AppError(403, 'FORBIDDEN', 'Missing required scope: pki:templates:folders:manage');
+    if (!hasScopeForCreation(scopes, 'pki:templates:folders:manage', folderId)) {
+      throw new AppError(403, 'FORBIDDEN', 'Missing pki:templates:folders:manage for the destination folder');
     }
     await this.assertFolderExists(folderId);
   }

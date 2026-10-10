@@ -15,7 +15,7 @@ import { AppError } from '@/middleware/error-handler.js';
 import {
   assertNotImpersonating,
   authMiddleware,
-  requireScope,
+  requireScopeBase,
   requireScopeForResource,
 } from '@/modules/auth/auth.middleware.js';
 import {
@@ -43,6 +43,12 @@ import {
   ReorderResourcesSchema,
   UpdateResourceFolderSchema,
 } from '@/modules/resource-folders/resource-folder.schemas.js';
+import {
+  assertFolderManage,
+  assertFolderManageForFolder,
+  assertFolderManageForFolders,
+  assertFolderManageForResources,
+} from '@/modules/resource-folders/resource-folder-access.js';
 import { nodeHostAccessFlags } from '@/services/node-host-access.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { AppEnv } from '@/types.js';
@@ -336,8 +342,17 @@ nodesRoutes.openapi(listNodeFoldersRoute, async (c) => {
   const hasNodeDetails = hasScope(scopes, 'nodes:details');
   const hasGlobalCreate = hasScope(scopes, 'nodes:create');
   const allowedNodeIds = getResourceScopedIds(scopes, 'nodes:details');
-  const allowedFolderIds = getFolderScopedIds(scopes, ['nodes:details', 'nodes:rename', 'nodes:create']);
-  if (!canManageFolders && !hasScopeBase(scopes, 'nodes:details') && !hasScopeBase(scopes, 'nodes:create')) {
+  const allowedFolderIds = getFolderScopedIds(scopes, [
+    'nodes:details',
+    'nodes:rename',
+    'nodes:create',
+    'nodes:folders:manage',
+  ]);
+  if (
+    !hasScopeBase(scopes, 'nodes:folders:manage') &&
+    !hasScopeBase(scopes, 'nodes:details') &&
+    !hasScopeBase(scopes, 'nodes:create')
+  ) {
     throw new AppError(403, 'FORBIDDEN', 'Missing required node details, create, or folder scope', {
       requiredScopes: ['nodes:details', 'nodes:create', 'nodes:folders:manage'],
       scopeMatch: 'any',
@@ -351,26 +366,34 @@ nodesRoutes.openapi(listNodeFoldersRoute, async (c) => {
   return c.json({ data });
 });
 
-nodesRoutes.openapi({ ...createNodeFolderRoute, middleware: requireScope('nodes:folders:manage') }, async (c) => {
+nodesRoutes.openapi({ ...createNodeFolderRoute, middleware: requireScopeBase('nodes:folders:manage') }, async (c) => {
   const service = container.resolve(NodeFolderService);
   const user = c.get('user')!;
   const input = CreateResourceFolderSchema.parse(await c.req.json());
+  assertFolderManage(c.get('effectiveScopes') ?? [], 'nodes:folders:manage', input.parentId ?? null);
   const data = await service.createFolder(input, user.id);
   return c.json({ data }, 201);
 });
 
-nodesRoutes.openapi({ ...reorderNodeFoldersRoute, middleware: requireScope('nodes:folders:manage') }, async (c) => {
+nodesRoutes.openapi({ ...reorderNodeFoldersRoute, middleware: requireScopeBase('nodes:folders:manage') }, async (c) => {
   const service = container.resolve(NodeFolderService);
   const input = ReorderResourceFoldersSchema.parse(await c.req.json());
+  await assertFolderManageForFolders(
+    service,
+    c.get('effectiveScopes') ?? [],
+    'nodes:folders:manage',
+    input.items.map((item) => item.id)
+  );
   await service.reorderFolders(input);
   return c.json({ success: true });
 });
 
-nodesRoutes.openapi({ ...moveNodesToFolderRoute, middleware: requireScope('nodes:folders:manage') }, async (c) => {
+nodesRoutes.openapi({ ...moveNodesToFolderRoute, middleware: requireScopeBase('nodes:folders:manage') }, async (c) => {
   const service = container.resolve(NodeFolderService);
   const user = c.get('user')!;
   const input = MoveResourcesToFolderSchema.parse(await c.req.json());
   const scopes = c.get('effectiveScopes') ?? [];
+  await assertFolderManageForResources(service, scopes, 'nodes:folders:manage', input.ids, input.folderId);
   if (!input.ids.every((id) => hasScopeForResource(scopes, 'nodes:rename', id))) {
     throw new AppError(403, 'FORBIDDEN', 'Missing node rename access for one or more move sources');
   }
@@ -381,35 +404,58 @@ nodesRoutes.openapi({ ...moveNodesToFolderRoute, middleware: requireScope('nodes
   return c.json({ success: true });
 });
 
-nodesRoutes.openapi({ ...reorderNodesRoute, middleware: requireScope('nodes:folders:manage') }, async (c) => {
+nodesRoutes.openapi({ ...reorderNodesRoute, middleware: requireScopeBase('nodes:folders:manage') }, async (c) => {
   const service = container.resolve(NodeFolderService);
   const input = ReorderResourcesSchema.parse(await c.req.json());
+  await assertFolderManageForResources(
+    service,
+    c.get('effectiveScopes') ?? [],
+    'nodes:folders:manage',
+    input.items.map((item) => item.id),
+    undefined
+  );
   await service.reorderResources(input);
   return c.json({ success: true });
 });
 
-nodesRoutes.openapi({ ...updateNodeFolderRoute, middleware: requireScope('nodes:folders:manage') }, async (c) => {
+nodesRoutes.openapi({ ...updateNodeFolderRoute, middleware: requireScopeBase('nodes:folders:manage') }, async (c) => {
   const service = container.resolve(NodeFolderService);
   const user = c.get('user')!;
   const input = UpdateResourceFolderSchema.parse(await c.req.json());
+  await assertFolderManageForFolder(
+    service,
+    c.get('effectiveScopes') ?? [],
+    'nodes:folders:manage',
+    c.req.param('id')!
+  );
   const data = await service.updateFolder(c.req.param('id')!, input, user.id);
   return c.json({ data });
 });
 
-nodesRoutes.openapi({ ...moveNodeFolderRoute, middleware: requireScope('nodes:folders:manage') }, async (c) => {
+nodesRoutes.openapi({ ...moveNodeFolderRoute, middleware: requireScopeBase('nodes:folders:manage') }, async (c) => {
   const service = container.resolve(NodeFolderService);
   const user = c.get('user')!;
   const input = MoveResourceFolderSchema.parse(await c.req.json());
-  const data = await service.moveFolder(c.req.param('id')!, input, user.id, {
-    scopes: c.get('effectiveScopes') ?? [],
-    editScope: 'nodes:rename',
-  });
+  const scopes = c.get('effectiveScopes') ?? [];
+  const data = await service.moveFolder(
+    c.req.param('id')!,
+    input,
+    user.id,
+    { scopes, editScope: 'nodes:rename' },
+    { scopes, manageScope: 'nodes:folders:manage' }
+  );
   return c.json({ data });
 });
 
-nodesRoutes.openapi({ ...deleteNodeFolderRoute, middleware: requireScope('nodes:folders:manage') }, async (c) => {
+nodesRoutes.openapi({ ...deleteNodeFolderRoute, middleware: requireScopeBase('nodes:folders:manage') }, async (c) => {
   const service = container.resolve(NodeFolderService);
   const user = c.get('user')!;
+  await assertFolderManageForFolder(
+    service,
+    c.get('effectiveScopes') ?? [],
+    'nodes:folders:manage',
+    c.req.param('id')!
+  );
   await service.deleteFolder(c.req.param('id')!, user.id);
   return c.json({ success: true });
 });

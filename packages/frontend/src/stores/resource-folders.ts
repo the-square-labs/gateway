@@ -19,6 +19,8 @@ interface ResourceFolderState {
   ) => Promise<ResourceFolder>;
   renameFolder: (type: ResourceFolderType, id: string, name: string) => Promise<void>;
   deleteFolder: (type: ResourceFolderType, id: string) => Promise<void>;
+  /** Moves a folder with its subfolders and resources under `parentId` (null = top level). */
+  moveFolder: (type: ResourceFolderType, id: string, parentId: string | null) => Promise<void>;
   reorderFolders: (
     type: ResourceFolderType,
     items: { id: string; sortOrder: number }[]
@@ -207,6 +209,23 @@ export const useResourceFolderStore = create<ResourceFolderState>()((set, get) =
       await get().fetchFolders(type);
     },
 
+    moveFolder: async (type, id, parentId) => {
+      await api.moveResourceFolder(folderBasePath(type), id, parentId);
+      if (parentId) {
+        // Open the destination so the moved folder stays in sight.
+        set((state) => {
+          const next = new Set(state.savedExpandedFolderIdsByType[type]);
+          next.add(parentId);
+          saveExpandedFolderIds(type, next);
+          return {
+            expandedFolderIdsByType: { ...state.expandedFolderIdsByType, [type]: new Set(next) },
+            savedExpandedFolderIdsByType: { ...state.savedExpandedFolderIdsByType, [type]: next },
+          };
+        });
+      }
+      await get().fetchFolders(type);
+    },
+
     reorderFolders: async (type, items) => {
       const previous = get().foldersByType[type] ?? [];
       set((state) => ({
@@ -244,6 +263,41 @@ export const useResourceFolderStore = create<ResourceFolderState>()((set, get) =
     },
   };
 });
+
+/** Folder routes of each list (`PUT <path>/<id>/move`). Snapshot folders cannot move. */
+function folderBasePath(type: ResourceFolderType): string {
+  if (isSnapshotType(type)) throw new Error("Snapshot folders cannot be moved");
+  switch (type) {
+    case "node":
+      return "/nodes/folders";
+    case "domain":
+      return "/domains/folders";
+    case "ssl-certificate":
+      return "/ssl-certificates/folders";
+    case "pki-ca":
+      return "/cas/folders";
+    case "pki-certificate":
+      return "/certificates/folders";
+    case "pki-template":
+      return "/templates/folders";
+    case "nginx-template":
+      return "/nginx-templates/folders";
+    case "database":
+      return "/databases/folders";
+    case "storage":
+      return "/object-storage/folders";
+    case "logging-environment":
+      return "/logging/environment-folders";
+    case "logging-schema":
+      return "/logging/schema-folders";
+    case "admin-user":
+      return "/admin/user-folders";
+    case "admin-group":
+      return "/admin/groups/folders";
+    case "pages-project":
+      return "/pages/folders";
+  }
+}
 
 function listFolders(type: ResourceFolderType): Promise<ResourceFolderTreeNode[]> {
   if (isSnapshotType(type)) return api.getHostingSnapshotFolders(type.slice(17));

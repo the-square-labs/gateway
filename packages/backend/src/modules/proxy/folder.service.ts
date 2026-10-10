@@ -7,7 +7,12 @@ import { transactionWithScopeCleanup } from '@/lib/resource-scope-cleanup.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
-import { assertFolderMoveAccess, type FolderMoveAccess } from '@/modules/resource-folders/resource-folder.service.js';
+import {
+  assertFolderMoveAccess,
+  type FolderMoveAccess,
+  folderNameKey,
+} from '@/modules/resource-folders/resource-folder.service.js';
+import { assertFolderManage, type FolderManageAccess } from '@/modules/resource-folders/resource-folder-access.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type {
   CreateFolderInput,
@@ -192,7 +197,13 @@ export class FolderService {
   // Move folder to new parent
   // -----------------------------------------------------------------------
 
-  async moveFolder(id: string, input: MoveFolderInput, userId: string, access: FolderMoveAccess) {
+  async moveFolder(
+    id: string,
+    input: MoveFolderInput,
+    userId: string,
+    access: FolderMoveAccess,
+    manage?: FolderManageAccess
+  ) {
     const folder = await this.db.query.proxyHostFolders.findFirst({
       where: eq(proxyHostFolders.id, id),
     });
@@ -200,6 +211,14 @@ export class FolderService {
 
     // Same parent — no-op
     if (folder.parentId === input.parentId) return folder;
+    if (input.parentId === id) {
+      throw new AppError(400, 'CIRCULAR_REFERENCE', 'Cannot move folder into its own descendant');
+    }
+    // A folder-scoped manager must manage both the place the folder leaves and the place it goes.
+    if (manage) {
+      assertFolderManage(manage.scopes, manage.manageScope, folder.parentId);
+      assertFolderManage(manage.scopes, manage.manageScope, input.parentId);
+    }
 
     // Validate new parent
     let newDepth = 0;
@@ -216,6 +235,19 @@ export class FolderService {
       }
 
       newDepth = newParent.depth + 1;
+    }
+
+    const siblingNames = await this.db
+      .select({ id: proxyHostFolders.id, name: proxyHostFolders.name })
+      .from(proxyHostFolders)
+      .where(input.parentId ? eq(proxyHostFolders.parentId, input.parentId) : isNull(proxyHostFolders.parentId));
+    const nameKey = folderNameKey(folder.name);
+    if (siblingNames.some((sibling) => sibling.id !== id && folderNameKey(sibling.name) === nameKey)) {
+      throw new AppError(
+        409,
+        'FOLDER_NAME_CONFLICT',
+        `A folder named "${folder.name.trim()}" already exists in the destination`
+      );
     }
 
     // Check depth constraints for entire subtree
@@ -293,6 +325,29 @@ export class FolderService {
   // -----------------------------------------------------------------------
   // Delete
   // -----------------------------------------------------------------------
+
+  /** Parent of each folder (null: top level); 404 when one does not exist. */
+  async getFolderParentIds(ids: readonly string[]): Promise<Map<string, string | null>> {
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return new Map();
+    const rows = await this.db
+      .select({ id: proxyHostFolders.id, parentId: proxyHostFolders.parentId })
+      .from(proxyHostFolders)
+      .where(inArray(proxyHostFolders.id, unique));
+    if (rows.length !== unique.length) throw new AppError(404, 'FOLDER_NOT_FOUND', 'Folder not found');
+    return new Map(rows.map((row) => [row.id, row.parentId ?? null]));
+  }
+
+  /** Current folder of each Route (null: ungrouped). Unknown IDs are left out. */
+  async getResourceFolderIds(ids: readonly string[]): Promise<Map<string, string | null>> {
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) return new Map();
+    const rows = await this.db
+      .select({ id: proxyHosts.id, folderId: proxyHosts.folderId })
+      .from(proxyHosts)
+      .where(inArray(proxyHosts.id, unique));
+    return new Map(rows.map((row) => [row.id, row.folderId ?? null]));
+  }
 
   async deleteFolder(id: string, userId: string) {
     const folder = await this.db.query.proxyHostFolders.findFirst({

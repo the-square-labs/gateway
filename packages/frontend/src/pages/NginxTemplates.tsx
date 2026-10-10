@@ -21,6 +21,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
+import { useCanManageSomeFolders } from "@/hooks/use-folder-access";
 import { useRealtime } from "@/hooks/use-realtime";
 import { hasCreationDestination } from "@/lib/creation-folders";
 import { api } from "@/services/api";
@@ -144,7 +145,7 @@ export function NginxTemplates({
   const canManageTemplates = hasScope("proxy:templates:manage");
   // Creating needs proxy:templates:manage broadly or on a destination folder.
   const canCreateTemplates = hasCreationDestination(user?.scopes ?? [], "proxy:templates:manage");
-  const canManageFolders = hasScope("proxy:templates:folders:manage");
+  const canManageFolders = useCanManageSomeFolders("proxy:templates:folders:manage");
   // Mirrors the template routes: manage:<id> edits and deletes, clone reads the
   // source and creates a new template (broad manage).
   const templateAccess = (template: NginxTemplate) => {

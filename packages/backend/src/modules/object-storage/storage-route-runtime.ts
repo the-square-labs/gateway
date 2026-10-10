@@ -20,6 +20,12 @@ import {
   UpdateResourceFolderSchema,
 } from '@/modules/resource-folders/resource-folder.schemas.js';
 import {
+  assertFolderManage,
+  assertFolderManageForFolder,
+  assertFolderManageForFolders,
+  assertFolderManageForResources,
+} from '@/modules/resource-folders/resource-folder-access.js';
+import {
   createBucketRoute,
   createObjectStorageConnectionRoute,
   createObjectStorageFolderRoute,
@@ -125,5 +131,10 @@ export const storageRouteRuntime = {
   UpdateObjectStorageConnectionSchema,
   ObjectStorageService,
   ObjectStorageFolderService,
+  // Folder-scoped folder management: check the exact place a folder change touches.
+  assertFolderManage,
+  assertFolderManageForFolder,
+  assertFolderManageForFolders,
+  assertFolderManageForResources,
   ObjectStorageMonitoringService,
 };
