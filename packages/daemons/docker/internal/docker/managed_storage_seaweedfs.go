@@ -41,7 +41,7 @@ const (
 	// workflow publishes as ghcr.io/the-square-labs/gateway/seaweedfs-gateway,
 	// pinned here by digest. While it equals seaweedfsUpstreamImage the
 	// upstream image runs as before (mirror first, Docker Hub second).
-	seaweedfsImage = seaweedfsUpstreamImage
+	seaweedfsImage = "ghcr.io/the-square-labs/gateway/seaweedfs-gateway@sha256:5fe846bd9dd3355698bbc908daaa633b49239b350cb31c11ff8f6828cca91b44"
 
 	minimumSeaweedFSMemoryBytes = 512 * 1024 * 1024
 
