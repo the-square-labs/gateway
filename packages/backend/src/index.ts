@@ -386,15 +386,24 @@ async function main() {
         finalize: async (deadline) => {
           container.resolve(ObjectStorageMonitoringService).destroy();
           container.resolve(ObjectStorageService).shutdown();
+          const storageTunnelShutdown = container.resolve(ManagedStorageTunnelProxy).shutdown();
+          const databaseTunnelShutdown = container.resolve(ManagedDatabaseTunnelProxy).shutdown();
           const independentFinalizers = [
-            settleShutdownTask('managed_storage_tunnel', container.resolve(ManagedStorageTunnelProxy).shutdown()),
-            settleShutdownTask('managed_database_tunnel', container.resolve(ManagedDatabaseTunnelProxy).shutdown()),
+            settleShutdownTask('managed_storage_tunnel', storageTunnelShutdown),
+            settleShutdownTask('managed_database_tunnel', databaseTunnelShutdown),
             settleShutdownTask('auth_email_queue', container.resolve(AuthEmailQueueService).close()),
             settleShutdownTask(
               'relay_control_client',
               Promise.resolve().then(() => {
                 if (env.GATEWAY_RELAY_REQUIRED) container.resolve(RelayControlClient).close();
               })
+            ),
+            settleShutdownTask(
+              'relay_tunnel_worker',
+              // After the tunnel proxies let go of their endpoints: the worker's connections and streams end with it.
+              Promise.allSettled([storageTunnelShutdown, databaseTunnelShutdown]).then(() =>
+                env.GATEWAY_RELAY_REQUIRED ? container.resolve(RelayPolicyService).closeGatewayTunnels() : undefined
+              )
             ),
           ];
           const drainsSettled = await waitForShutdownTasks(

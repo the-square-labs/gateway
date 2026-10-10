@@ -363,6 +363,11 @@ export interface RelayControlClientOptions {
    */
   previousCertificatePath?: string;
   previousPrivateKeyPath?: string;
+  /**
+   * The client identity to present instead of the files: Gateway's tunnel worker presents the identity the main
+   * thread's client is on (until the relay confirmed a renewal that is the previous one, see previousCertificatePath).
+   */
+  identity?: ClientIdentity;
 }
 
 /** The relay refused the caller's client certificate, as opposed to being unreachable. */
@@ -376,7 +381,7 @@ function isClientIdentityRefusal(error: unknown): boolean {
   );
 }
 
-interface ClientIdentity {
+export interface ClientIdentity {
   privateKey: Buffer;
   certificate: Buffer;
 }
@@ -431,8 +436,19 @@ export class RelayControlClient {
   private pendingIdentityCommit?: string;
   /** Clients whose channel never left IDLE: their first call resolves the relay's address, so none is replaced. */
   private readonly unusedClients = new WeakSet<object>();
+  /** Gateway's tunnel worker follows the identity this client presents and its channel replacements. */
+  private readonly identityListeners = new Set<(identity: ClientIdentity) => void>();
+  private readonly reconnectListeners = new Set<() => void>();
 
   constructor(private readonly options: RelayControlClientOptions) {
+    if (options.identity) {
+      ({
+        admin: this.admin,
+        broker: this.broker,
+        identity: this.activeIdentity,
+      } = this.createClients(options.identity));
+      return;
+    }
     const previous = this.readPreviousIdentity();
     if (previous) {
       ({ admin: this.admin, broker: this.broker, identity: this.activeIdentity } = this.createClients(previous));
@@ -449,15 +465,18 @@ export class RelayControlClient {
     return { certificatePath: previousCertificatePath, privateKeyPath: previousPrivateKeyPath };
   }
 
-  private createClients(identity?: { certificatePath: string; privateKeyPath: string }): {
+  private createClients(identity?: { certificatePath: string; privateKeyPath: string } | ClientIdentity): {
     admin: any;
     broker: any;
     identity: ClientIdentity;
   } {
-    const material = {
-      privateKey: readFileSync(identity?.privateKeyPath ?? this.options.privateKeyPath),
-      certificate: readFileSync(identity?.certificatePath ?? this.options.certificatePath),
-    };
+    const material =
+      identity && 'certificate' in identity
+        ? { privateKey: identity.privateKey, certificate: identity.certificate }
+        : {
+            privateKey: readFileSync(identity?.privateKeyPath ?? this.options.privateKeyPath),
+            certificate: readFileSync(identity?.certificatePath ?? this.options.certificatePath),
+          };
     return {
       admin: this.createClient('RelayAdmin', material),
       broker: this.createClient('TunnelBroker', material),
@@ -523,7 +542,48 @@ export class RelayControlClient {
       current.close();
       replaced = true;
     }
+    for (const listener of this.reconnectListeners) {
+      try {
+        listener();
+      } catch {
+        // The tunnel worker replaces its own channel; a failed notice must not fail this one.
+      }
+    }
     return replaced;
+  }
+
+  /**
+   * The settings Gateway's tunnel worker builds its own client from: the local relay, the system CA and the client
+   * identity presented now (followed through onIdentityChange).
+   */
+  tunnelClientSettings(): { target: string; systemCaPath: string; identity: ClientIdentity } {
+    return { target: this.options.target, systemCaPath: this.options.systemCaPath, identity: this.activeIdentity };
+  }
+
+  /** Called with the client identity whenever this client moves to another one (a confirmed reload). */
+  onIdentityChange(listener: (identity: ClientIdentity) => void): () => void {
+    this.identityListeners.add(listener);
+    return () => this.identityListeners.delete(listener);
+  }
+
+  /** Called whenever reconnectIfDown ran (the local relay serves again, or its return watch fired). */
+  onReconnect(listener: () => void): () => void {
+    this.reconnectListeners.add(listener);
+    return () => this.reconnectListeners.delete(listener);
+  }
+
+  /**
+   * Tunnel worker: presents `identity` on new tunnels from now on (the main thread's client moved to it). The local
+   * broker channel is replaced; closing the old one ends no stream already running on it.
+   */
+  setTunnelIdentity(identity: ClientIdentity): void {
+    const previousBroker = this.broker;
+    const previousAdmin = this.admin;
+    this.activeIdentity = identity;
+    this.admin = this.createClient('RelayAdmin', identity);
+    this.broker = this.createClient('TunnelBroker', identity);
+    previousAdmin.close();
+    previousBroker.close();
   }
 
   /**
@@ -552,6 +612,13 @@ export class RelayControlClient {
     // Closing a channel ends no call already running on it.
     previousAdmin.close();
     previousBroker.close();
+    for (const listener of this.identityListeners) {
+      try {
+        listener(pending.identity);
+      } catch {
+        // The tunnel worker must not undo a reload the relay already confirmed.
+      }
+    }
     try {
       this.identityActivationListener?.({
         certificate: pending.identity.certificate,

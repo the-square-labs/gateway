@@ -13,6 +13,13 @@ import type { LocalRelayOutage } from './local-relay-outage.js';
 import { RelayPolicyService } from './relay-policy.service.js';
 
 const T0 = Date.UTC(2026, 9, 8, 14, 0);
+/** A candidate as an assignment carries it: its grant and the relay's identity (the tunnel worker opens the path). */
+const assigned = (candidate: GatewayRelayCandidate) => ({
+  ...candidate,
+  certificateIdentity: candidate.relayInstanceId,
+  certificateFingerprint: 'sha256:00',
+  grant: { keyId: 'grant', payload: Buffer.from('payload'), signature: Buffer.from('signature') },
+});
 
 // The stand's endpoints: `local:primary, nl:fallback, uk:fallback`, NL listed before UK.
 const local: GatewayRelayCandidate = {
@@ -111,7 +118,7 @@ describe("Gateway's own relayed streams choose relays by distance (O-1)", () => 
       }),
       openCandidateResumePath: vi.fn(async (candidate: GatewayRelayCandidate) => {
         opened.push(candidate.relayInstanceId);
-        return { relayId: candidate.relayInstanceId };
+        return { relayId: candidate.relayInstanceId, cancel: vi.fn() };
       }),
     };
     const service = new RelayPolicyService({} as never, {} as never, {} as never, relay as never);
@@ -121,7 +128,7 @@ describe("Gateway's own relayed streams choose relays by distance (O-1)", () => 
     const internals = service as any;
     internals.gatewayPaths().observe('relay-nl', 300);
     internals.gatewayPaths().observe('relay-uk', 60);
-    const path = await internals.openGatewayResumePath('route-1', { candidates: [local, nl, uk] }, null);
+    const path = await internals.openGatewayResumePath('route-1', { candidates: [local, nl, uk].map(assigned) }, null);
     expect(path.relayId).toBe('relay-uk');
     expect(opened).toEqual(['relay-uk']);
     internals.gatewayPaths().stop();
@@ -213,13 +220,17 @@ describe("Gateway's own relayed streams know every relay's distance after a quie
       }),
       openCandidateResumePath: vi.fn(async (candidate: GatewayRelayCandidate) => {
         opened.push(candidate.relayInstanceId);
-        return { relayId: candidate.relayInstanceId };
+        return { relayId: candidate.relayInstanceId, cancel: vi.fn() };
       }),
     };
     const service = new RelayPolicyService({} as never, {} as never, {} as never, relay as never);
     const t = paths(() => ({ since: Date.now() - 10_000, servingAgainAt: null, planned: false }), Date.now);
     (service as any).gatewayRelayPaths = t.instance;
-    const path = await (service as any).openGatewayResumePath('route-1', { candidates: [local, nl, uk] }, null);
+    const path = await (service as any).openGatewayResumePath(
+      'route-1',
+      { candidates: [local, nl, uk].map(assigned) },
+      null
+    );
     expect(path.relayId).toBe('relay-uk');
     expect(opened).toEqual(['relay-uk']);
     t.instance.stop();

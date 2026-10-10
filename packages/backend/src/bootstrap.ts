@@ -21,7 +21,8 @@ import {
   refreshGrpcServerCredentials,
   stageGrpcServerRelayTrust,
 } from '@/grpc/server.js';
-import { logger } from '@/lib/logger.js';
+import { RelayTunnelHost } from '@/grpc/tunnel-worker/host.js';
+import { createChildLogger, logger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { AccessListService } from '@/modules/access-lists/access-list.service.js';
 import { AdminUserFolderService } from '@/modules/admin/admin-user-folders.service.js';
@@ -692,6 +693,13 @@ export async function initializeContainer(): Promise<void> {
     });
     container.registerInstance(RelayControlClient, relayControlClient);
     relayPolicyService = new RelayPolicyService(db, cryptoService, generalSettingsService, relayControlClient);
+    // Gateway's own tunnels (database tools, storage browser, copy jobs) move their bytes in a worker thread.
+    const tunnelLogger = createChildLogger('RelayTunnelWorker');
+    relayPolicyService.setGatewayTunnels(
+      RelayTunnelHost.inWorker(relayControlClient, {
+        log: ({ level, message, meta }) => tunnelLogger[level](message, meta ?? {}),
+      })
+    );
     container.registerInstance(RelayPolicyService, relayPolicyService);
     await relayPolicyService.ensureInitialized();
   }

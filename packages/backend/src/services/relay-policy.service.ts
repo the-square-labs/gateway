@@ -25,7 +25,8 @@ import {
   type RelayPolicySnapshot,
 } from '@/grpc/relay-control.client.js';
 import { encodeRelayV1Message } from '@/grpc/relay-proto.js';
-import { type AttachablePath, ResumeSessionError, relayResumeRegistry } from '@/grpc/relay-resume.js';
+import { ResumeSessionError } from '@/grpc/relay-resume.js';
+import { RelayTunnelHost, type RemotePath } from '@/grpc/tunnel-worker/host.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { leaseLaneNodeIds } from '@/modules/docker/availability/lease/lease-relay-lanes.js';
@@ -131,6 +132,26 @@ const RELAY_ROUTE_RUNTIME_TIMEOUT_MS = 2_000;
 const HOLDS_ANY_ROUTE = '$[*] ? (@.routeId == $ids[*] && !exists(@.removedAtRevision))';
 
 const logger = createChildLogger('RelayPolicyService');
+
+/** What a loopback endpoint of Gateway's own tunnels leads to (see RelayPolicyService.gatewayTunnelEndpoint). */
+export type GatewayTunnelTarget =
+  | { kind: 'database'; managedDatabaseId: string; lane?: 'interactive' | 'monitoring' }
+  | { kind: 'storage'; clusterId: string };
+
+export interface GatewayTunnelEndpoint {
+  host: '127.0.0.1';
+  port: number;
+}
+
+/** The tunnel worker's connection for a tunnel closed while the tunnel opened. */
+function isGatewayConnectionGone(error: unknown): boolean {
+  return (error as { code?: unknown } | null)?.code === 'slot_gone';
+}
+
+function gatewayTunnelKey(target: GatewayTunnelTarget): string {
+  if (target.kind === 'storage') return `storage:${target.clusterId}`;
+  return target.lane ? `database:${target.managedDatabaseId}:${target.lane}` : `database:${target.managedDatabaseId}`;
+}
 
 export interface RelayGrantSyncOptions {
   /** Skip a daemon that recently got a bundle allowing exactly the same (see deliveredRecently). */
@@ -485,6 +506,17 @@ export class RelayPolicyService {
   ) => Promise<{ endpoints: Map<string, string>; routes: Map<string, string> }>;
   /** How Gateway's own relayed streams choose relays and return to the nearest (O-1); made on first use. */
   private gatewayRelayPaths?: GatewayRelayPaths;
+  /** The data plane of Gateway's own tunnels (the tunnel worker); set at start-up, made on this thread otherwise. */
+  private gatewayTunnelHost?: RelayTunnelHost;
+  /** Loopback endpoints in the tunnel worker the database drivers and the S3 client connect to. */
+  private readonly gatewayEndpoints = new Map<
+    string,
+    {
+      target: GatewayTunnelTarget;
+      fingerprint: () => string | undefined;
+      endpoint: Promise<GatewayTunnelEndpoint>;
+    }
+  >();
   private gatewayLocalRelay?: Pick<LocalRelayOutageSignal, 'latestOutage'>;
   /** The client certificate each Gateway route was opened with, to look its candidates up again. */
   private readonly gatewayRouteFingerprints = new Map<string, string>();
@@ -534,11 +566,117 @@ export class RelayPolicyService {
     this.gatewayRelayPaths?.assignmentsChanged();
   }
 
+  /**
+   * Hands Gateway's own tunnels to `host` (the tunnel worker). Called once at start-up, before any tunnel opens.
+   */
+  setGatewayTunnels(host: RelayTunnelHost): void {
+    this.gatewayTunnelHost = host;
+    this.wireGatewayTunnels(host);
+  }
+
+  private gatewayTunnels(): RelayTunnelHost {
+    if (!this.gatewayTunnelHost) {
+      this.gatewayTunnelHost = RelayTunnelHost.inThread(this.relay);
+      this.wireGatewayTunnels(this.gatewayTunnelHost);
+    }
+    return this.gatewayTunnelHost;
+  }
+
+  private wireGatewayTunnels(host: RelayTunnelHost): void {
+    host.onAccept((key, slotId) => this.acceptGatewayConnection(key, slotId));
+    // A restarted worker has none of the endpoints: they are created again on their next use.
+    host.onReset(() => this.gatewayEndpoints.clear());
+  }
+
+  /**
+   * A loopback endpoint (127.0.0.1, any port) for a managed database lane or storage cluster: every connection to it
+   * runs through a Gateway relay tunnel opened for that connection, in the tunnel worker, so its bytes never pass this
+   * thread. `fingerprint` names the client certificate Gateway presents at the time of each connection.
+   */
+  gatewayTunnelEndpoint(
+    target: GatewayTunnelTarget,
+    fingerprint: () => string | undefined
+  ): Promise<GatewayTunnelEndpoint> {
+    const key = gatewayTunnelKey(target);
+    const existing = this.gatewayEndpoints.get(key);
+    if (existing) {
+      existing.fingerprint = fingerprint;
+      return existing.endpoint;
+    }
+    const endpoint = this.gatewayTunnels()
+      .createEndpoint(key)
+      .then((port): GatewayTunnelEndpoint => ({ host: '127.0.0.1', port }))
+      .catch((error) => {
+        if (this.gatewayEndpoints.get(key)?.endpoint === endpoint) this.gatewayEndpoints.delete(key);
+        throw error;
+      });
+    const entry = { target, fingerprint, endpoint };
+    this.gatewayEndpoints.set(key, entry);
+    return entry.endpoint;
+  }
+
+  /** Closes the endpoint(s) of a managed database (every lane, unless one is named) or storage cluster. */
+  async disposeGatewayTunnelEndpoint(target: GatewayTunnelTarget): Promise<void> {
+    const key = gatewayTunnelKey(target);
+    const keys =
+      target.kind === 'database' && !target.lane
+        ? [...this.gatewayEndpoints.keys()].filter((candidate) => candidate.startsWith(`${key}:`))
+        : [key];
+    await Promise.all(
+      keys.map(async (endpointKey) => {
+        if (!this.gatewayEndpoints.delete(endpointKey)) return;
+        await this.gatewayTunnelHost?.disposeEndpoint(endpointKey);
+      })
+    );
+  }
+
+  /** Stops Gateway's tunnel worker (shutdown): endpoints close, connections and streams end. */
+  async closeGatewayTunnels(): Promise<void> {
+    this.gatewayEndpoints.clear();
+    await this.gatewayTunnelHost?.close();
+  }
+
+  /** A connection to one of the endpoints: open its tunnel, or end it. */
+  private acceptGatewayConnection(key: string, slotId: string): void {
+    const tunnels = this.gatewayTunnels();
+    const entry = this.gatewayEndpoints.get(key);
+    if (!entry) {
+      tunnels.failSlot(slotId, 'Gateway tunnel endpoint is closed');
+      return;
+    }
+    const { target } = entry;
+    const fingerprint = entry.fingerprint();
+    void (async () => {
+      if (!fingerprint) throw new Error('Gateway relay is unavailable');
+      const routeId =
+        target.kind === 'database'
+          ? await this.gatewayDatabaseRoute(target.managedDatabaseId, fingerprint)
+          : await this.gatewayStorageRoute(target.clusterId, fingerprint);
+      await this.openGatewayRouteTunnelInto(routeId, fingerprint, slotId);
+    })().catch((error) => {
+      tunnels.failSlot(slotId, errorMessage(error));
+      // The client went away while its tunnel opened: nothing failed.
+      if (isGatewayConnectionGone(error)) return;
+      // A failed open is a normal transient condition while a node reconnects; the connection just ends.
+      if (target.kind === 'storage') {
+        logger.warn('Managed storage tunnel failed', {
+          managedStorageId: target.clusterId,
+          error: errorMessage(error),
+        });
+      } else {
+        logger.debug('Managed database tunnel failed', {
+          managedDatabaseId: target.managedDatabaseId,
+          error: errorMessage(error),
+        });
+      }
+    });
+  }
+
   private gatewayPaths(): GatewayRelayPaths {
     if (!this.gatewayRelayPaths) {
       const topology = new RelayTopologyService(this.db);
       this.gatewayRelayPaths = new GatewayRelayPaths(
-        this.relay.resumeRegistry ?? relayResumeRegistry,
+        this.gatewayTunnels().streams,
         async (routeId) => {
           const fingerprint = this.gatewayRouteFingerprints.get(routeId);
           if (!fingerprint) return [];
@@ -565,7 +703,7 @@ export class RelayPolicyService {
   relayStreamReports(): RelayStreamReports {
     const reports = [...(this.managedLinkReports?.relayStreamReports?.() ?? [])];
     try {
-      const stats = this.relay.relayResumeStats?.();
+      const stats = this.gatewayTunnelHost?.relayResumeStats();
       if (stats) {
         reports.push({
           nodeId: GATEWAY_STREAM_REPORT_SOURCE,
@@ -585,7 +723,7 @@ export class RelayPolicyService {
   migrateGatewayStreams(relayInstanceId: string, drainDeadlineAt: Date | null): void {
     try {
       const deadline = drainDeadlineAt ? Number(candidateDrainDeadline(drainDeadlineAt) ?? 0) : 0;
-      this.relay.migrateResumableTunnels?.(relayInstanceId, deadline);
+      this.gatewayTunnelHost?.migrateResumableTunnels(relayInstanceId, deadline);
     } catch (error) {
       logger.warn("Moving Gateway's own streams off a draining relay failed", {
         relayInstanceId,
@@ -2211,7 +2349,14 @@ export class RelayPolicyService {
     return routeId;
   }
 
-  async openGatewayTunnel(managedDatabaseId: string, appCertificateFingerprint: string) {
+  /** A tunnel from Gateway to a managed database; its bytes cross from the tunnel worker (see gatewayTunnelEndpoint). */
+  async openGatewayTunnel(managedDatabaseId: string, appCertificateFingerprint: string): Promise<Duplex> {
+    const routeId = await this.gatewayDatabaseRoute(managedDatabaseId, appCertificateFingerprint);
+    return this.openGatewayRouteTunnel(routeId, appCertificateFingerprint);
+  }
+
+  /** The managed database's Gateway route, made on first use; throws while the database is not up. */
+  private async gatewayDatabaseRoute(managedDatabaseId: string, appCertificateFingerprint: string): Promise<string> {
     const [database] = await this.db
       .select({ nodeId: managedDatabaseInstances.nodeId, status: managedDatabaseInstances.status })
       .from(managedDatabaseInstances)
@@ -2228,23 +2373,45 @@ export class RelayPolicyService {
         database.nodeId,
         appCertificateFingerprint
       )) ?? (await this.ensureGatewayRoute(managedDatabaseId, database.nodeId, appCertificateFingerprint));
-    return this.openGatewayRouteTunnel(routeId, appCertificateFingerprint);
+    return routeId;
   }
 
   /**
-   * A tunnel from Gateway itself on its route. Resumable (RSv1) when the connect assignment carries stream_resume:
-   * the stream then moves to another relay (or the same one back) on drain, GOAWAY or path failure, reissuing the
-   * assignment for every new path. A target that turns out not to be resume-aware latches the route raw for a while.
+   * A tunnel from Gateway on its route for a reader on this thread (the managed tunnel proxies of a commercial module
+   * from before gatewayTunnelEndpoint): the tunnel runs in the tunnel worker, this end is a loopback connection to it.
    */
   private async openGatewayRouteTunnel(routeId: string, appCertificateFingerprint: string): Promise<Duplex> {
+    const tunnels = this.gatewayTunnels();
+    const slotId = await tunnels.createSlot();
+    try {
+      await this.openGatewayRouteTunnelInto(routeId, appCertificateFingerprint, slotId);
+    } catch (error) {
+      tunnels.failSlot(slotId, errorMessage(error));
+      throw error;
+    }
+    return tunnels.connectSlot(slotId);
+  }
+
+  /**
+   * A tunnel from Gateway itself on its route, for the connection in the tunnel worker's `slotId`. Resumable (RSv1)
+   * when the connect assignment carries stream_resume: the stream then moves to another relay (or the same one back)
+   * on drain, GOAWAY or path failure, reissuing the assignment for every new path. A target that turns out not to be
+   * resume-aware latches the route raw for a while.
+   */
+  private async openGatewayRouteTunnelInto(
+    routeId: string,
+    appCertificateFingerprint: string,
+    slotId: string
+  ): Promise<void> {
     this.gatewayRouteFingerprints.set(routeId, appCertificateFingerprint);
+    const tunnels = this.gatewayTunnels();
     const issue = () =>
       this.withAcknowledgedPolicy(() =>
         this.grantIssuer.issueGatewayConnectAssignment(routeId, appCertificateFingerprint)
       );
     const assignment = await issue();
     const resume = assignment.streamResume;
-    if (resume && !this.relay.isResumeLegacy(routeId, resume.keyId)) {
+    if (resume && !tunnels.isResumeLegacy(routeId, resume.keyId)) {
       let first: typeof assignment | null = assignment;
       const dial = async (avoidRelayId: string | null) => {
         const current = first ?? (await issue());
@@ -2254,7 +2421,8 @@ export class RelayPolicyService {
         return key ? { path, keyId: key.keyId, key: Buffer.from(key.key) } : { path };
       };
       try {
-        return await this.relay.openResumableTunnel(
+        await tunnels.bindResumable(
+          slotId,
           {
             routeId,
             keyId: resume.keyId,
@@ -2263,6 +2431,7 @@ export class RelayPolicyService {
           },
           dial
         );
+        return;
       } catch (error) {
         if (!(error instanceof ResumeSessionError && error.code === 'legacy_peer')) throw error;
         logger.warn('Gateway relay route target is not resume-aware; using raw streams', { routeId });
@@ -2274,43 +2443,50 @@ export class RelayPolicyService {
     let lastError: unknown;
     for (const candidate of activeCandidates) {
       try {
-        return this.relay.trackLegacyTunnel(
+        await tunnels.bindRaw(
+          slotId,
           candidate.local
-            ? await this.relay.openTunnel(candidate.grant)
-            : await this.relay.openCandidateTunnel(candidate),
-          candidate.relayInstanceId
+            ? { kind: 'local', grant: candidate.grant, relayId: candidate.relayInstanceId }
+            : { kind: 'candidate', candidate }
         );
+        return;
       } catch (error) {
+        if (isGatewayConnectionGone(error)) throw error;
         lastError = error;
       }
     }
-    if (!activeCandidates.length) return this.relay.trackLegacyTunnel(await this.relay.openTunnel(assignment.grant));
+    if (!activeCandidates.length) {
+      await tunnels.bindRaw(slotId, { kind: 'local', grant: assignment.grant, relayId: LEGACY_RELAY_PATH_ID });
+      return;
+    }
     throw lastError instanceof Error ? lastError : new Error('Relay pool is unavailable');
   }
 
   /**
    * One relay path of a resumable Gateway stream: active candidates first, then staging ones (registered on both
    * ends: when the only active relay drains or was force-disconnected the stream moves there instead of being cut),
-   * the relay it leaves last; among them reachable relays first, then by role and measured distance (O-1).
+   * the relay it leaves last; among them reachable relays first, then by role and measured distance (O-1). The path
+   * opens in the tunnel worker, which hands it to the stream.
    */
   private async openGatewayResumePath(
     routeId: string,
     assignment: Awaited<ReturnType<RelayGrantIssuerService['issueGatewayConnectAssignment']>>,
     avoidRelayId: string | null
-  ): Promise<AttachablePath> {
+  ): Promise<RemotePath> {
+    const tunnels = this.gatewayTunnels();
     const usable = assignment.candidates.filter(
       ({ assignmentState }) => assignmentState === 'active' || assignmentState === 'staging'
     );
     await this.gatewayPaths().measure(routeId, usable);
     const candidates = this.gatewayPaths().order(routeId, usable, avoidRelayId);
     // A pre-pool assignment has only the local relay: a recovering stream comes back to it.
-    if (!candidates.length) return this.relay.openLocalResumePath(assignment.grant, LEGACY_RELAY_PATH_ID);
+    if (!candidates.length) return tunnels.openLocalResumePath(assignment.grant, LEGACY_RELAY_PATH_ID);
     let lastError: unknown;
     for (const candidate of candidates) {
       try {
         return candidate.local
-          ? await this.relay.openLocalResumePath(candidate.grant, candidate.relayInstanceId)
-          : await this.relay.openCandidateResumePath(candidate);
+          ? await tunnels.openLocalResumePath(candidate.grant, candidate.relayInstanceId)
+          : await tunnels.openCandidateResumePath(candidate);
       } catch (error) {
         lastError = error;
       }
@@ -2331,12 +2507,11 @@ export class RelayPolicyService {
       (item) => item.relayInstanceId === relayInstanceId && item.assignmentGeneration === assignmentGeneration
     );
     if (!candidate) throw new Error('Gateway relay candidate grant is unavailable');
-    if (candidate.local) {
-      const tunnel = await this.relay.openTunnel(candidate.grant);
-      tunnel.destroy();
-      return;
-    }
-    await this.relay.probeCandidate(candidate);
+    await this.gatewayTunnels().probe(
+      candidate.local
+        ? { kind: 'local', grant: candidate.grant, relayId: candidate.relayInstanceId }
+        : { kind: 'candidate', candidate }
+    );
   }
 
   async ensureBackupRoute(
@@ -2487,7 +2662,14 @@ export class RelayPolicyService {
     return routeId;
   }
 
-  async openStorageGatewayTunnel(clusterId: string, appCertificateFingerprint: string) {
+  /** A tunnel from Gateway to a managed storage cluster; its bytes cross from the tunnel worker (see gatewayTunnelEndpoint). */
+  async openStorageGatewayTunnel(clusterId: string, appCertificateFingerprint: string): Promise<Duplex> {
+    const routeId = await this.gatewayStorageRoute(clusterId, appCertificateFingerprint);
+    return this.openGatewayRouteTunnel(routeId, appCertificateFingerprint);
+  }
+
+  /** The storage cluster's Gateway route, made on first use; throws while the cluster is not up. */
+  private async gatewayStorageRoute(clusterId: string, appCertificateFingerprint: string): Promise<string> {
     const [database] = await this.db
       .select({ nodeId: managedStorageClusters.nodeId, status: managedStorageClusters.status })
       .from(managedStorageClusters)
@@ -2504,7 +2686,7 @@ export class RelayPolicyService {
         database.nodeId,
         appCertificateFingerprint
       )) ?? (await this.ensureStorageGatewayRoute(clusterId, database.nodeId, appCertificateFingerprint));
-    return this.openGatewayRouteTunnel(routeId, appCertificateFingerprint);
+    return routeId;
   }
 
   async revokeOwner(

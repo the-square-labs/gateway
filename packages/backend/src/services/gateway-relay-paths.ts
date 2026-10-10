@@ -1,5 +1,5 @@
 import { connect } from 'node:net';
-import type { RelayResumeRegistry, ResumableRelayDuplex } from '@/grpc/relay-resume.js';
+import type { GatewayStream, GatewayStreamRegistry } from '@/grpc/tunnel-worker/host.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { LocalRelayOutageSignal } from './local-relay-outage.js';
 
@@ -196,7 +196,7 @@ export class GatewayRelayPaths {
   private readonly poolRelays?: () => Promise<GatewayRelayTarget[]>;
 
   constructor(
-    private readonly registry: Pick<RelayResumeRegistry, 'liveSessions' | 'schedule' | 'timers'>,
+    private readonly registry: GatewayStreamRegistry,
     /** A fresh assignment of a Gateway route (its candidates now). */
     private readonly fetchCandidates: (routeId: string) => Promise<GatewayRelayCandidate[]>,
     options: { now?: () => number; dial?: Dial; poolRelays?: () => Promise<GatewayRelayTarget[]> } = {}
@@ -366,7 +366,8 @@ export class GatewayRelayPaths {
    */
   async returnPass(random: () => number = Math.random): Promise<number> {
     const now = this.now();
-    const sessions = [...this.registry.liveSessions()];
+    // The streams live in the tunnel worker: a fresh list each pass.
+    const sessions = [...(await this.registry.liveSessions())];
     for (let index = sessions.length - 1; index > 0; index -= 1) {
       const other = Math.floor(random() * (index + 1));
       [sessions[index], sessions[other]] = [sessions[other]!, sessions[index]!];
@@ -390,7 +391,7 @@ export class GatewayRelayPaths {
    * them (a stream that moved to UK while the local relay drained had dialed {UK, NL}; the assignment that put the
    * local relay back was never looked at), so the stream stayed on the farther relay for hours (stand rc.7, F-3).
    */
-  private async nearerRelay(session: ResumableRelayDuplex, relayId: string): Promise<boolean> {
+  private async nearerRelay(session: GatewayStream, relayId: string): Promise<boolean> {
     const place = (candidate: GatewayRelayCandidate) => this.place(candidate);
     let route = this.routes.get(session.routeId);
     if (!route) return false;
