@@ -314,10 +314,14 @@ export function gatewayStreamReport(
   let moved = 0;
   let failed = 0;
   let cut = 0;
+  let laneMoves = 0;
   for (const [key, count] of Object.entries(stats.migrations ?? {})) {
-    if (key.endsWith(':ok')) moved += count;
-    else failed += count;
     if (key.endsWith(':resume_rejected') || key === 'path_failure:timeout') cut += count;
+    // A move off a connection the target replaced is housekeeping, counted apart like the daemons do.
+    if (key.startsWith('lane:')) {
+      if (key === 'lane:ok') laneMoves += count;
+    } else if (key.endsWith(':ok')) moved += count;
+    else failed += count;
   }
   const byRelay = new Map<string, { resumable: number; legacy: number }>();
   for (const [relay, counts] of Object.entries(stats.byRelay ?? {})) {
@@ -341,7 +345,7 @@ export function gatewayStreamReport(
     migrationStallP95Ms: stats.migrationStallMs.p95,
     resumeRefusedTotal: 0,
     laneRotationsTotal: 0,
-    laneMovesTotal: 0,
+    laneMovesTotal: laneMoves,
     byRelay: [...byRelay].map(([relayInstanceId, counts]) => ({ relayInstanceId, ...counts })),
   };
 }

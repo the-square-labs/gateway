@@ -415,13 +415,20 @@ describe("Gateway's own streams", () => {
         byRelay: { 'relay-1': { resumable: 2, legacy: 0 }, local: { resumable: 0, legacy: 1 } },
         suspended: 0,
         unackedBytes: 10,
-        migrations: { 'drain:ok': 3, 'goaway:ok': 1, 'path_failure:timeout': 1 },
+        migrations: { 'drain:ok': 3, 'goaway:ok': 1, 'path_failure:timeout': 1, 'lane:ok': 2, 'lane:no_relay': 1 },
         migrationStallMs: { p50: 4, p95: 9 },
         retransmittedBytes: 100,
       },
       'local-relay-id'
     );
-    expect(report).toMatchObject({ migrationsOkTotal: 4, cutTotal: 1, migrationStallP95Ms: 9 });
+    // Moves off a connection the target replaced are counted apart, like the daemons' lane moves.
+    expect(report).toMatchObject({
+      migrationsOkTotal: 4,
+      migrationsFailedTotal: 1,
+      laneMovesTotal: 2,
+      cutTotal: 1,
+      migrationStallP95Ms: 9,
+    });
     // Only refused resumes and unplanned moves out of time cut a live stream: a planned move that found no path or
     // no answer kept it, and "rejected" is a stream that ended meanwhile (stand rc.6 O-3).
     const failedMoves = gatewayStreamReport(
@@ -438,13 +445,14 @@ describe("Gateway's own streams", () => {
           'path_failure:timeout': 1,
           'path_failure:resume_rejected': 1,
           'path_failure:rejected': 1,
+          'lane:resume_rejected': 1,
         },
         migrationStallMs: { p50: 0, p95: 0 },
         retransmittedBytes: 0,
       },
       'local-relay-id'
     );
-    expect(failedMoves).toMatchObject({ migrationsOkTotal: 0, migrationsFailedTotal: 8, cutTotal: 3 });
+    expect(failedMoves).toMatchObject({ migrationsOkTotal: 0, migrationsFailedTotal: 8, cutTotal: 4 });
     expect(relaySessionSplit([{ nodeId: 'gateway', report }], 'local-relay-id')).toEqual({
       resumable: 0,
       legacy: 1,

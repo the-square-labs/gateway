@@ -1129,6 +1129,38 @@ describe('ResumableRelayDuplex', () => {
     expect(registry.snapshot().sessions.resumable).toBe(0);
   }, 30_000);
 
+  it('moves to a new path on the same relay when the target replaced its connection (lane)', async () => {
+    const key = Buffer.alloc(32, 5);
+    const target = echoTarget(key, 'v1');
+    const registry = new RelayResumeRegistry();
+    const avoided: Array<string | null> = [];
+    let dials = 0;
+    const duplex = await ResumableRelayDuplex.open({
+      routeId: 'route-echo',
+      keyId: 'v1',
+      key,
+      registry,
+      dial: async (avoid) => {
+        avoided.push(avoid);
+        dials++;
+        const pair = memoryPair('relay-0');
+        target.accept(pair.target);
+        return { path: pair.source };
+      },
+    });
+    const received = collect(duplex);
+    duplex.write(Buffer.from('before'));
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    await duplex.migrate('lane');
+    duplex.write(Buffer.from('after'));
+    duplex.end();
+    expect((await received).toString()).toBe('beforeafter');
+    expect(dials).toBe(2);
+    expect(avoided).toEqual([null, null]);
+    expect(duplex.relayId).toBe('relay-0');
+    expect(registry.snapshot().migrations['lane:ok']).toBe(1);
+  }, 30_000);
+
   it('spreads drain moves over at most a minute whatever the drain grace', () => {
     const delays: number[] = [];
     const timers: ResumeTimers = {

@@ -56,7 +56,8 @@ export const RstCode = {
   windowViolation: 10,
 } as const;
 
-export const MigrateReason = { drain: 1, goaway: 2 } as const;
+/** MIGRATE_REQ reasons. `lane`: the target replaced the connection under the path; open a new path on the same relay. */
+export const MigrateReason = { drain: 1, goaway: 2, lane: 3 } as const;
 
 /** A stream starts at 1 MiB, or at FALLBACK_WINDOW, then MIN_WINDOW, when the process budget is short. */
 export const INITIAL_WINDOW = 1024 * 1024;
@@ -1731,7 +1732,7 @@ export interface OpenedResumePath {
  */
 export type ResumeDialer = (avoidRelayId: string | null) => Promise<OpenedResumePath>;
 
-export type MigrationTrigger = 'drain' | 'goaway' | 'path_failure' | 'target_hint' | 'return';
+export type MigrationTrigger = 'drain' | 'goaway' | 'path_failure' | 'target_hint' | 'lane' | 'return';
 export type MigrationResult = 'ok' | 'no_relay' | 'rejected' | 'resume_rejected' | 'timeout';
 
 export interface RelayResumeStatsSnapshot {
@@ -1960,8 +1961,9 @@ export class ResumableRelayDuplex extends Duplex {
         },
         closed: (error) => this.onSessionClosed(error),
         suspended: () => this.requestRecover(),
-        migrateRequested: () => {
-          this.registry.schedule(() => this.migrate('target_hint'));
+        migrateRequested: (reason) => {
+          const trigger: MigrationTrigger = reason === MigrateReason.lane ? 'lane' : 'target_hint';
+          this.registry.schedule(() => this.migrate(trigger));
         },
       },
     });
@@ -2031,7 +2033,10 @@ export class ResumableRelayDuplex extends Duplex {
     });
   }
 
-  /** Planned move off the current relay; stays on it when no other path answers within the budget. */
+  /**
+   * Planned move off the current relay; stays on it when no other path answers within the budget. A `lane` move opens
+   * a new path on the best relay, the current one included.
+   */
   migrate(trigger: MigrationTrigger): Promise<void> {
     if (this.sessionClosed) return Promise.resolve();
     if (this.migration || !this.session.isOpen) {
@@ -2076,7 +2081,9 @@ export class ResumableRelayDuplex extends Duplex {
 
   private async runPlanned(trigger: MigrationTrigger): Promise<void> {
     const startedAt = this.timers.now();
-    const avoid = this.session.currentRelayId;
+    // A lane move opens a new path on the same relay (the target's connection under the path was replaced), so it
+    // avoids no relay; every other planned move leaves the current one.
+    const avoid = trigger === 'lane' ? null : this.session.currentRelayId;
     let opened: OpenedResumePath;
     try {
       opened = await withTimeout(
