@@ -36,6 +36,11 @@ import {
 } from './health-report.js';
 
 const logger = createChildLogger('GrpcControl');
+
+/** A remote relay's supervisor answers, but its relay worker does not listen (yet): it restarts. */
+export function isRelayWorkerRestarting(message: string): boolean {
+  return /code = Unavailable\b.*(connection refused|connect: )|\bECONNREFUSED\b/i.test(message);
+}
 /**
  * Command id the daemon treats as a terminal registration rejection. It stops
  * the tight reconnect loop for causes that a retry cannot fix.
@@ -850,9 +855,20 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                   // Gateway's records still say it holds the current one (N-7).
                   await deps.relayPolicy!.syncRemoteInstancePolicy(claimedNodeId, undefined, { force: true });
                 } catch (error) {
+                  const message = error instanceof Error ? error.message : String(error);
+                  // The supervisor reconnected before its relay worker listens again (the worker restarts during
+                  // its update): the worker keeps its policy, and the lease refresh or the lost-snapshot check
+                  // delivers a newer one (stand rc.10, O-2).
+                  if (isRelayWorkerRestarting(message)) {
+                    logger.info('Remote relay policy delivery after reconnect waits for its relay to restart', {
+                      nodeId: claimedNodeId,
+                      error: message,
+                    });
+                    return;
+                  }
                   logger.warn('Failed to synchronize remote relay policy after reconnect', {
                     nodeId: claimedNodeId,
-                    error: error instanceof Error ? error.message : String(error),
+                    error: message,
                   });
                 }
               });

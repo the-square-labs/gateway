@@ -55,6 +55,7 @@ import {
   samePlannedAssignments,
 } from './relay-topology.js';
 import type { RelayTopologyService } from './relay-topology.service.js';
+import { isShuttingDown } from './shutdown-state.js';
 
 type RelayInstanceRow = typeof relayInstances.$inferSelect;
 
@@ -272,7 +273,9 @@ export class RelayPoolService {
         const message = relayPoolErrorMessage(error);
         // The next pass retries it; the condition itself (a restarting relay, an unreachable node) is reported
         // where it lives.
-        if (isTransientRelayPoolError(error)) logger.debug('Relay pool reconciliation deferred', { error: message });
+        // Also a pass that a Gateway stop cut short: its database connections close under it (stand rc.10, O-2).
+        if (isTransientRelayPoolError(error) || isShuttingDown())
+          logger.debug('Relay pool reconciliation deferred', { error: message });
         else logger.warn('Relay pool reconciliation failed', { error: message });
       });
     }, 5_000);

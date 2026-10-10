@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import path from 'node:path';
 import { createChildLogger } from '@/lib/logger.js';
+import { isShuttingDown } from '@/services/shutdown-state.js';
 import type {
   SandboxRunnerDownloadArtifactParams,
   SandboxRunnerDownloadArtifactResult,
@@ -204,7 +205,9 @@ export class AISandboxRunnerService {
     child.stdout?.on('data', (chunk) => logger.debug('runner stdout', { output: chunk.toString('utf-8').trim() }));
     child.stderr?.on('data', (chunk) => logger.warn('runner stderr', { output: chunk.toString('utf-8').trim() }));
     child.once('exit', (code, signal) => {
-      logger.warn('Sandbox runner exited', { code, signal });
+      // Gateway's stop ends the runner with it: expected then (stand rc.10, O-2).
+      if (isShuttingDown()) logger.info('Sandbox runner stopped with Gateway', { code, signal });
+      else logger.warn('Sandbox runner exited', { code, signal });
       if (this.child === child) {
         this.child = null;
         this.statusValue = 'unavailable';
