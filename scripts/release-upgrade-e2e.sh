@@ -591,6 +591,22 @@ elif mode == 'expect':
     print('missing ' + ' '.join(missing) if missing else f'all {len(sys.argv) - 4} present')
     sys.exit(1 if missing else 0)
 PY
+  cat >"$WORK/py/journal-tag.py" <<'PY'
+# journal-tag.py "PID ...": journalctl -o json lines as `daemon: MESSAGE`, or `daemon(base): MESSAGE` for the given PIDs.
+import json, sys
+base = set(sys.argv[1].split())
+for line in sys.stdin:
+    try:
+        entry = json.loads(line)
+    except ValueError:
+        continue
+    message = entry.get('MESSAGE')
+    if isinstance(message, list):
+        message = bytes(message).decode('utf-8', 'replace')
+    if not isinstance(message, str):
+        continue
+    print(('daemon(base): ' if entry.get('_PID') in base else 'daemon: ') + message)
+PY
   cat >"$WORK/py/apthist.py" <<'PY'
 # apthist.py START_EPOCH MARKER_REGEX: packages installed by apt runs since START whose command line
 # matches MARKER (the installers this run started), without architecture suffixes.
@@ -1346,6 +1362,10 @@ LOG_ALLOW=(
   '"path":"/api/system/daemon-updates/[^"]*".*"status":409'
   # An unprivileged LXC host has no loop devices for disk-image volumes.
   'disk-image volume support unavailable.*loop-control'
+  # The base daemons' own warnings while they are replaced (old code; lines of base processes are tagged
+  # `daemon(base):` by check_logs, so the same warning from a candidate process still fails).
+  '^daemon\(base\): .*"msg":"relay endpoint registration disconnected".*endpoint policy was revoked'
+  '^daemon\(base\): .*"msg":"proxy secure-link streams failing".*resume rejected'
 )
 
 workload_script() {
@@ -1800,13 +1820,33 @@ check_folder_grant() {
   check "${label}: folder-limited manager refused at the top level" "HTTP ${code} $(short "$RESP" 160)" test "$code" = 403
 }
 
+# PIDs of daemon processes that run the base release: those that logged their start on BASE, and those that staged a
+# self-update (the process an update replaces; every update this run makes starts from the base).
+base_daemon_pids() {
+  journalctl -u docker-daemon -u nginx-daemon --no-pager -o json 2>/dev/null | python3 -c '
+import json, sys
+base, pids = sys.argv[1], set()
+for line in sys.stdin:
+    try:
+        entry = json.loads(line)
+    except ValueError:
+        continue
+    message = entry.get("MESSAGE")
+    if not isinstance(message, str):
+        continue
+    if ("\"msg\":\"starting " in message and ("\"version\":\"%s\"" % base) in message) or "\"msg\":\"starting self-update\"" in message:
+        pids.add(entry.get("_PID"))
+print(" ".join(sorted(p for p in pids if p)))' "$BASE"
+}
+
 # check_logs LABEL SINCE_EPOCH: warnings and errors of the app, the relay and the daemons since SINCE, against LOG_ALLOW.
 check_logs() {
   local label="$1" since="$2" out="$WORK/logs/warnings-${1// /-}.txt" bad
   {
     docker logs --since "$since" "$(service_id app)" 2>&1 | sed 's/^/app: /'
     docker logs --since "$since" "$(service_id relay)" 2>&1 | sed 's/^/relay: /'
-    journalctl -u docker-daemon -u nginx-daemon -u gateway-lease-watchdog --since "@${since}" --no-pager -o cat 2>/dev/null | sed 's/^/daemon: /'
+    journalctl -u docker-daemon -u nginx-daemon -u gateway-lease-watchdog --since "@${since}" --no-pager -o json 2>/dev/null |
+      python3 "$WORK/py/journal-tag.py" "$(base_daemon_pids)"
   } | grep -aiE '"level":"?(warn|warning|error|fatal|40|50|60)("|,)|level=(WARN|ERROR)' >"$out"
   bad="$(python3 - "$out" "${LOG_ALLOW[@]}" 2>"${out%.txt}-grouped.txt" <<'PY'
 import collections, json, re, sys
