@@ -544,6 +544,8 @@ export const realTimers: ResumeTimers = {
  */
 export interface ResumePathHandle {
   readonly relayId: string;
+  /** A path through the local relay, on Gateway's own host (its lane lost is a lane move, see attach). */
+  readonly local?: boolean;
   readonly maxFrameBytes: number;
   /** Writes one TunnelData payload; false asks the session to wait for pathDrained(). */
   send(frame: Buffer): boolean;
@@ -2036,7 +2038,12 @@ export class ResumableRelayDuplex extends Duplex {
       drained: () => this.session.pathDrained(path),
       laneLost: () => {
         if (this.session.currentRelayId === path.relayId) {
-          this.registry.schedule(() => this.migrate('goaway', path.relayId));
+          // The local relay runs on Gateway's host: a lost lane to it (its channel replaced at Gateway's start) is that
+          // connection, not the relay, so the stream opens a new path on the best relay, the local one included. Moved
+          // off it, two streams sat on the 60-ms relay for ~26 s after a Gateway restart until the return (stand
+          // rc.11, O-4). A local relay that is really going down does not open, and the next relay takes the stream.
+          const trigger = path.local ? 'lane' : 'goaway';
+          this.registry.schedule(() => this.migrate(trigger, path.relayId));
         }
       },
     });

@@ -181,7 +181,9 @@ class RelayResumePath implements AttachablePath {
     readonly maxFrameBytes: number,
     readonly relayId: string,
     private readonly channel: grpc.Channel | null,
-    private readonly dispose: () => void
+    private readonly dispose: () => void,
+    /** A path through the local relay, on Gateway's own host. */
+    readonly local = false
   ) {
     stream.on('data', (message: RelayTunnelMessage) => {
       if (message.data) {
@@ -797,7 +799,7 @@ export class RelayControlClient {
   openLocalResumePath(grant: SignedRelayGrant, relayId: string, timeoutMs = 5_000): Promise<AttachablePath> {
     const broker = this.broker;
     return this.openStreamWithBroker(broker, grant, timeoutMs, (stream, maxFrameBytes) => {
-      return new RelayResumePath(stream, maxFrameBytes, relayId, channelOf(broker), () => undefined);
+      return new RelayResumePath(stream, maxFrameBytes, relayId, channelOf(broker), () => undefined, true);
     });
   }
 
